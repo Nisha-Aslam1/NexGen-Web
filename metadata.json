@@ -1,0 +1,6 @@
+{
+  "name": "NexGen Council — Women Empowerment & Youth Leadership",
+  "description": "Official platform and management portal for NexGen Women Empowerment & Youth Leadership Council. Featuring programs, events, volunteer registration, news, and admin operations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

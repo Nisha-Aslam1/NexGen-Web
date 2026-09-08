@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  # NexGen Council Full-Stack Application
+  nexgen-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nexgen_council_app
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - MONGODB_URI=mongodb://mongodb:27017/nexgen_council
+      - SESSION_SECRET=${SESSION_SECRET:-nexgen_oracle_secure_production_secret_2026}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    volumes:
+      - nexgen_data:/app/data
+
+  # MongoDB Production Database
+  mongodb:
+    image: mongo:7.0
+    container_name: nexgen_mongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=nexgen_council
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  nexgen_data:
+    driver: local
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
