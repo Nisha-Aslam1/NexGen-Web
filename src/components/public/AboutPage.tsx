@@ -79,7 +79,7 @@ export const AboutPage: React.FC = () => {
           <div className="lg:col-span-6">
             <div className="relative rounded-3xl overflow-hidden shadow-xl border-4 border-white bg-slate-900 aspect-4/3">
               <img
-                src="https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=900&auto=format&fit=crop&q=80"
+                src="https://i.postimg.cc/R0vSQ8YZ/nextgen-logo.png"
                 alt="NexGen Council women leaders and educators collaborating during civic strategy session"
                 loading="lazy"
                 decoding="async"
