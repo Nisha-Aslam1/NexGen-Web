@@ -239,10 +239,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setToasts(prev => prev.filter(t => t.id !== id));
   };
 
-  const triggerRealtimeSync = async () => {
-    setIsSyncing(true);
+  const triggerRealtimeSync = async (forceFullRefresh: boolean | any = false) => {
+    const isExplicit = forceFullRefresh === true;
+    if (isExplicit) {
+      setIsSyncing(true);
+    }
     try {
-      await refreshData();
+      // Only re-fetch full public collections when explicitly requested by admin
+      if (isExplicit) {
+        await refreshData();
+      }
+      // Lightweight background badge counters
       if (currentUser) {
         const token = localStorage.getItem('ng_token');
         const headers: Record<string, string> = {};
@@ -263,18 +270,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } catch {
       // ignore
     } finally {
-      setIsSyncing(false);
+      if (isExplicit) {
+        setIsSyncing(false);
+      }
     }
   };
 
-  // Background Real-Time Poller (every 12 seconds when admin is active)
+  // Background Notification Badge Poller (quiet, non-destructive every 25 seconds)
   useEffect(() => {
     if (!currentUser) return;
-    triggerRealtimeSync();
+    triggerRealtimeSync(false);
 
     const interval = setInterval(() => {
-      triggerRealtimeSync();
-    }, 12000);
+      triggerRealtimeSync(false);
+    }, 25000);
 
     return () => clearInterval(interval);
   }, [currentUser]);

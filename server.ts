@@ -393,6 +393,26 @@ app.get('/api/volunteers', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'VIEWER'])
   res.json(volunteers);
 });
 
+app.post('/api/volunteers', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), (req, res) => {
+  const { fullName, email } = req.body;
+  if (!fullName || !email) {
+    return res.status(400).json({ error: 'Full name and email are required to register a volunteer.' });
+  }
+  const created = db.createVolunteer(req.body);
+  const user = (req as any).user;
+  db.logActivity({
+    userId: user.userId,
+    userName: user.name,
+    userRole: user.role,
+    action: 'VOLUNTEER_CREATED',
+    entityType: 'Volunteer',
+    entityId: created.id,
+    details: `Added new volunteer: ${created.fullName} (${created.assignedRole}).`,
+    ipAddress: req.ip || 'unknown'
+  });
+  res.status(201).json(created);
+});
+
 app.patch('/api/volunteers/:id', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), (req, res) => {
   const updated = db.updateVolunteer(req.params.id, req.body);
   if (!updated) return res.status(404).json({ error: 'Volunteer not found' });
@@ -406,8 +426,20 @@ app.put('/api/volunteers/:id', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), (req
 });
 
 app.delete('/api/volunteers/:id', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), (req, res) => {
-  db.deleteVolunteer(req.params.id);
-  res.json({ ok: true });
+  const vol = db.getVolunteers().find(v => v.id === req.params.id);
+  const success = db.deleteVolunteer(req.params.id);
+  const user = (req as any).user;
+  db.logActivity({
+    userId: user.userId,
+    userName: user.name,
+    userRole: user.role,
+    action: 'VOLUNTEER_DELETED',
+    entityType: 'Volunteer',
+    entityId: req.params.id,
+    details: `Removed volunteer ${vol?.fullName || req.params.id} (${vol?.assignedRole || 'Active Member'}) from active directory.`,
+    ipAddress: req.ip || 'unknown'
+  });
+  res.json({ ok: true, id: req.params.id, deleted: success });
 });
 
 // 5. Programs

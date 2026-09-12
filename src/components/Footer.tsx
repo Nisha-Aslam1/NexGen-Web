@@ -8,7 +8,8 @@ import {
   ShieldCheck,
   ArrowUpRight,
   Clock,
-  FileCheck
+  FileCheck,
+  Code2
 } from 'lucide-react';
 
 export const Footer: React.FC = () => {
@@ -257,12 +258,22 @@ export const Footer: React.FC = () => {
         </div>
 
         {/* Bottom Bar */}
-        <div className="pt-12 mt-12 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-400">
-          <p>
-            {settings?.footerCopyrightText ||
-              `© ${new Date().getFullYear()} ${settings?.organizationName || 'NexGen Women Empowerment & Youth Leadership Council'}. All rights reserved.`}
-          </p>
-          <div className="flex items-center gap-4 flex-wrap justify-center sm:justify-end">
+        <div className="pt-12 mt-12 border-t border-slate-800 flex flex-col md:flex-row items-center justify-between gap-4 text-xs text-slate-400">
+          <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-3 text-center sm:text-left">
+            <p>
+              {settings?.footerCopyrightText ||
+                `© ${new Date().getFullYear()} ${settings?.organizationName || 'NexGen Women Empowerment & Youth Leadership Council'}. All rights reserved.`}
+            </p>
+            <span className="hidden sm:inline text-slate-700">•</span>
+            {/* Developer Watermark Badge */}
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900/90 border border-slate-700/80 text-slate-300 shadow-xs">
+              <Code2 className="w-3.5 h-3.5 text-amber-400" />
+              <span className="text-slate-400 text-[11px]">Developed by</span>
+              <span className="font-bold text-amber-300 text-xs tracking-wide">Nisha Aslam</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4 flex-wrap justify-center md:justify-end">
             <span>{settings?.footerBadgeText || 'Non-Governmental Organization • Civic Leadership Initiative'}</span>
             <span>•</span>
             <button

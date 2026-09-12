@@ -9,7 +9,8 @@ import {
   Eye,
   EyeOff,
   AlertCircle,
-  Fingerprint
+  Fingerprint,
+  Code2
 } from 'lucide-react';
 
 export const AdminLogin: React.FC = () => {
@@ -146,8 +147,8 @@ export const AdminLogin: React.FC = () => {
           </button>
         </form>
 
-        {/* Back to Public Site */}
-        <div className="text-center pt-2 border-t border-slate-100">
+        {/* Back to Public Site & Developer Watermark */}
+        <div className="text-center pt-3 border-t border-slate-100 space-y-2.5">
           <button
             type="button"
             onClick={() => setActivePage('home')}
@@ -155,6 +156,12 @@ export const AdminLogin: React.FC = () => {
           >
             <ArrowLeft className="w-3.5 h-3.5" /> Return to Public Council Website
           </button>
+
+          <div className="pt-1 flex items-center justify-center gap-1.5 text-[11px] text-slate-400">
+            <Code2 className="w-3.5 h-3.5 text-amber-500" />
+            <span>Engineered &amp; Developed by</span>
+            <span className="font-bold text-slate-800">Nisha Aslam</span>
+          </div>
         </div>
       </div>
     </div>

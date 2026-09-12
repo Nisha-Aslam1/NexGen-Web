@@ -18,13 +18,17 @@ import {
   FileText,
   Share2,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Globe,
+  ExternalLink,
+  RotateCcw
 } from 'lucide-react';
 import { SiteSettings } from '../../types.ts';
 
 export const AdminSettings: React.FC = () => {
   const { settings, refreshData, addToast, currentUser } = useApp();
   const [formData, setFormData] = useState<SiteSettings | null>(null);
+  const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // Super Admin Credentials state
@@ -37,11 +41,26 @@ export const AdminSettings: React.FC = () => {
   const [credsSuccess, setCredsSuccess] = useState<string | null>(null);
   const [credsError, setCredsError] = useState<string | null>(null);
 
+  // Initialize formData ONCE when settings arrive, NEVER clobber user typing during background polling
   useEffect(() => {
-    if (settings) {
-      setFormData({ ...settings });
+    if (settings && !formData) {
+      setFormData({
+        ...settings,
+        siteUrl: settings.siteUrl || 'https://nexgencouncil.bond'
+      });
     }
-  }, [settings]);
+  }, [settings, formData]);
+
+  const handleDiscardChanges = () => {
+    if (settings) {
+      setFormData({
+        ...settings,
+        siteUrl: settings.siteUrl || 'https://nexgencouncil.bond'
+      });
+      setIsDirty(false);
+      addToast('Unsaved edits discarded. Loaded saved settings from server.', 'info');
+    }
+  };
 
   const fetchAdminCredsStatus = async () => {
     try {
@@ -79,7 +98,9 @@ export const AdminSettings: React.FC = () => {
       const updated = await res.json();
       if (!res.ok) throw new Error(updated.error || 'Failed to save settings');
 
-      addToast('Website settings and footer content updated successfully!', 'success');
+      setFormData(updated);
+      setIsDirty(false);
+      addToast('Website settings and domain configuration saved successfully!', 'success');
       await refreshData();
     } catch (err: any) {
       addToast(err.message || 'Error updating settings', 'error');
@@ -146,21 +167,139 @@ export const AdminSettings: React.FC = () => {
             Website Content &amp; Global Configuration
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Modify live branding statements, announcement banners, metrics counters, and contact channels.
+            Manage live branding, canonical domain URL (<code className="font-semibold text-slate-700">{formData.siteUrl || 'https://nexgencouncil.bond'}</code>), announcement banners, and contact channels.
           </p>
         </div>
 
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-indigo-950 text-white text-xs font-bold hover:bg-indigo-900 transition-colors shadow-md cursor-pointer self-start sm:self-auto disabled:opacity-50"
-        >
-          <Save className="w-4 h-4 text-amber-400" />
-          <span>{saving ? 'Saving Live Changes...' : 'Save & Publish Live'}</span>
-        </button>
+        <div className="flex items-center gap-2.5 self-start sm:self-auto flex-wrap">
+          {isDirty && (
+            <>
+              <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 text-[11px] font-bold flex items-center gap-1.5 border border-amber-300">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-700" />
+                <span>Unsaved Changes</span>
+              </span>
+              <button
+                type="button"
+                onClick={handleDiscardChanges}
+                disabled={saving}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
+                title="Discard your current edits and reload the saved configuration from the server"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+                <span>Discard</span>
+              </button>
+            </>
+          )}
+
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-indigo-950 text-white text-xs font-bold hover:bg-indigo-900 transition-colors shadow-md cursor-pointer disabled:opacity-50"
+          >
+            <Save className="w-4 h-4 text-amber-400" />
+            <span>{saving ? 'Saving Live Changes...' : 'Save & Publish Live'}</span>
+          </button>
+        </div>
       </div>
 
       <form onSubmit={handleSave} className="space-y-6 text-xs">
+        {/* Domain & SEO Configuration */}
+        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2">
+              <Globe className="w-4 h-4 text-emerald-600" />
+              <h3 className="font-serif font-bold text-base text-slate-900">Website Domain &amp; SEO Configuration</h3>
+            </div>
+            <a
+              href={formData.siteUrl || 'https://nexgencouncil.bond'}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[11px] font-semibold text-indigo-950 hover:text-indigo-800 flex items-center gap-1 bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-lg transition-colors"
+            >
+              <span>Visit nexgencouncil.bond</span>
+              <ExternalLink className="w-3 h-3 text-slate-500" />
+            </a>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">
+                Canonical Website Domain / URL
+              </label>
+              <input
+                type="url"
+                required
+                value={formData.siteUrl || 'https://nexgencouncil.bond'}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, siteUrl: e.target.value });
+                }}
+                placeholder="https://nexgencouncil.bond"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono text-xs focus:ring-2 focus:ring-indigo-300"
+              />
+              <span className="text-[11px] text-slate-400 mt-1 block">
+                Primary canonical URL for sitemaps, OpenGraph cards, search engines, and live shares.
+              </span>
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">
+                Google Site Verification Meta Token
+              </label>
+              <input
+                type="text"
+                value={formData.googleSiteVerification || ''}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, googleSiteVerification: e.target.value });
+                }}
+                placeholder="e.g. google-site-verification=abc123xyz"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono text-xs focus:ring-2 focus:ring-indigo-300"
+              />
+              <span className="text-[11px] text-slate-400 mt-1 block">
+                Required for Google Search Console domain ownership verification.
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">
+                Search Engine Meta Description
+              </label>
+              <textarea
+                rows={2}
+                value={formData.metaDescription || ''}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, metaDescription: e.target.value });
+                }}
+                placeholder="Concise description shown on Google search results..."
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-indigo-300"
+              />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">
+                Google Analytics Measurement ID (optional)
+              </label>
+              <input
+                type="text"
+                value={formData.googleAnalyticsId || ''}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, googleAnalyticsId: e.target.value });
+                }}
+                placeholder="G-XXXXXXXXXX"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono text-xs focus:ring-2 focus:ring-indigo-300"
+              />
+              <span className="text-[11px] text-slate-400 mt-1 block">
+                Tracks public visitors alongside the built-in server telemetry engine.
+              </span>
+            </div>
+          </div>
+        </div>
+
         {/* Announcement Banner */}
         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
@@ -607,9 +746,20 @@ export const AdminSettings: React.FC = () => {
                 type="text"
                 value={formData.footerCopyrightText || ''}
                 placeholder="© 2026 NexGen Women Empowerment & Youth Leadership Council. All rights reserved."
-                onChange={e => setFormData({ ...formData, footerCopyrightText: e.target.value })}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, footerCopyrightText: e.target.value });
+                }}
                 className="w-full px-3 py-2 rounded-xl border border-slate-300"
               />
+            </div>
+
+            <div className="sm:col-span-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
+              <span>Platform Developer Watermark:</span>
+              <span className="font-semibold text-slate-800 flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200">
+                <span className="text-slate-500">Developed by</span>
+                <strong className="text-indigo-950">Nisha Aslam</strong>
+              </span>
             </div>
           </div>
         </div>

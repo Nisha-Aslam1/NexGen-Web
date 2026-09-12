@@ -24,6 +24,8 @@ export const AdminVolunteers: React.FC = () => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
   const [editingVolunteer, setEditingVolunteer] = useState<Volunteer | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<Volunteer | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchVolunteers = async () => {
     setLoading(true);
@@ -60,6 +62,30 @@ export const AdminVolunteers: React.FC = () => {
       setEditingVolunteer(null);
     } catch (err: any) {
       addToast(err.message || 'Error updating volunteer', 'error');
+    }
+  };
+
+  const confirmDeleteVolunteer = async () => {
+    if (!deleteCandidate) return;
+    setDeleting(true);
+    try {
+      const res = await authFetch(`/api/volunteers/${deleteCandidate.id}`, {
+        method: 'DELETE'
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Volunteer deletion failed');
+      }
+      setVolunteers(prev => prev.filter(v => v.id !== deleteCandidate.id));
+      addToast(`Volunteer record for ${deleteCandidate.fullName} deleted successfully.`, 'info');
+      if (editingVolunteer?.id === deleteCandidate.id) {
+        setEditingVolunteer(null);
+      }
+      setDeleteCandidate(null);
+    } catch (err: any) {
+      addToast(err.message || 'Error deleting volunteer', 'error');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -188,13 +214,22 @@ export const AdminVolunteers: React.FC = () => {
                     </td>
 
                     <td className="py-3.5 px-4 text-right">
-                      <button
-                        onClick={() => setEditingVolunteer(vol)}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-950 hover:bg-slate-100 transition-colors cursor-pointer"
-                        title="Edit Volunteer Details"
-                      >
-                        <Edit2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => setEditingVolunteer(vol)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-950 hover:bg-slate-100 transition-colors cursor-pointer"
+                          title="Edit Volunteer Details"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setDeleteCandidate(vol)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                          title="Delete Volunteer Record"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -267,22 +302,73 @@ export const AdminVolunteers: React.FC = () => {
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setEditingVolunteer(null)}
-                  className="px-4 py-2 rounded-xl border border-slate-300 text-slate-600 text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+                  onClick={() => {
+                    const candidate = editingVolunteer;
+                    setEditingVolunteer(null);
+                    setDeleteCandidate(candidate);
+                  }}
+                  className="px-3.5 py-2 rounded-xl text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
-                  Cancel
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Volunteer</span>
                 </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 bg-indigo-950 text-white rounded-xl text-xs font-bold hover:bg-indigo-900 transition-colors shadow-xs cursor-pointer"
-                >
-                  Save Changes
-                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingVolunteer(null)}
+                    className="px-4 py-2 rounded-xl border border-slate-300 text-slate-600 text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 bg-indigo-950 text-white rounded-xl text-xs font-bold hover:bg-indigo-900 transition-colors shadow-xs cursor-pointer"
+                  >
+                    Save Changes
+                  </button>
+                </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Volunteer Confirmation Modal */}
+      {deleteCandidate && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 space-y-4 shadow-2xl animate-in zoom-in-95">
+            <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div className="text-center space-y-1.5">
+              <h4 className="font-serif font-bold text-lg text-slate-900">Delete Volunteer Record?</h4>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Are you sure you want to delete the record for <strong>{deleteCandidate.fullName}</strong> ({deleteCandidate.assignedRole}, {deleteCandidate.city} Chapter)? This will remove them from the active volunteer directory.
+              </p>
+            </div>
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteCandidate(null)}
+                disabled={deleting}
+                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50 cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteVolunteer}
+                disabled={deleting}
+                className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-colors cursor-pointer shadow-sm disabled:opacity-50 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{deleting ? 'Deleting...' : 'Yes, Delete Volunteer'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

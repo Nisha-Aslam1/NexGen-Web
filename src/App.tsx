@@ -72,8 +72,10 @@ const AppContent: React.FC = () => {
             </button>
           </div>
           <AdminLogin />
-          <div className="py-4 text-center text-xs text-slate-500 border-t border-slate-800">
-            &copy; {new Date().getFullYear()} NexGen Organization Management System. All rights reserved.
+          <div className="py-4 px-4 text-center text-xs text-slate-400 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-center gap-2">
+            <span>&copy; {new Date().getFullYear()} NexGen Organization Management System. All rights reserved.</span>
+            <span className="hidden sm:inline text-slate-600">•</span>
+            <span className="text-amber-400 font-semibold">Developed by Nisha Aslam</span>
           </div>
         </div>
       );
@@ -119,6 +121,16 @@ const AppContent: React.FC = () => {
       </main>
 
       <Footer />
+
+      {/* Floating Developer Watermark across public pages */}
+      <div
+        className="fixed bottom-4 left-4 z-30 hidden sm:flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-950/85 hover:bg-slate-950 backdrop-blur-md text-white border border-slate-700/80 shadow-xl text-[11px] font-medium transition-all group select-none pointer-events-auto cursor-default"
+        title="Platform Architecture & Full-Stack Development by Nisha Aslam"
+      >
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span className="text-slate-400 group-hover:text-slate-300 transition-colors">Developed by</span>
+        <span className="font-bold text-amber-300 group-hover:text-amber-200 transition-colors">Nisha Aslam</span>
+      </div>
     </div>
   );
 };

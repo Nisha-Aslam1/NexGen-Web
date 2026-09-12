@@ -193,7 +193,11 @@ const defaultSettings: WebsiteSettings = {
   footerOfficeHours: 'Monday - Friday: 9:00 AM - 6:00 PM (PKT / UTC+5)',
   registrationNumber: 'Registered Civil Society & Non-Profit Initiative #092-2024',
   footerCopyrightText: '© 2026 NexGen Women Empowerment & Youth Leadership Council. All rights reserved.',
-  footerBadgeText: 'Non-Governmental Organization • Civic Leadership Initiative'
+  footerBadgeText: 'Non-Governmental Organization • Civic Leadership Initiative',
+  siteUrl: 'https://nexgencouncil.bond',
+  metaDescription: 'NexGen Women Empowerment & Youth Leadership Council is an international civil society organization dedicated to accelerating female leadership, youth civic engagement, and socio-economic advancement.',
+  googleSiteVerification: '',
+  googleAnalyticsId: ''
 };
 
 function getSeedData(): DatabaseSchema {
@@ -986,6 +990,26 @@ class Database {
     return list;
   }
 
+  createVolunteer(data: Partial<Volunteer> & { fullName: string; email: string }) {
+    const newVol: Volunteer = {
+      id: 'vol_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+      applicationId: data.applicationId || '',
+      fullName: data.fullName,
+      email: data.email,
+      phone: data.phone || '',
+      city: data.city || 'National Secretariat',
+      assignedRole: data.assignedRole || 'Youth Leadership Volunteer',
+      joinedDate: data.joinedDate || new Date().toISOString(),
+      hoursContributed: data.hoursContributed || 0,
+      status: data.status || 'Active',
+      skills: data.skills || ['Community Outreach']
+    };
+    this.data.volunteers.unshift(newVol);
+    this.save();
+    mongoUpsert('volunteers', newVol.id, newVol).catch(() => {});
+    return newVol;
+  }
+
   updateVolunteer(id: string, updates: Partial<Volunteer>) {
     const idx = this.data.volunteers.findIndex(v => v.id === id);
     if (idx === -1) return null;
@@ -996,9 +1020,11 @@ class Database {
   }
 
   deleteVolunteer(id: string) {
+    const initialLen = this.data.volunteers.length;
     this.data.volunteers = this.data.volunteers.filter(v => v.id !== id);
     this.save();
     mongoDelete('volunteers', id).catch(() => {});
+    return this.data.volunteers.length < initialLen;
   }
 
   // --- Programs ---
@@ -1217,14 +1243,15 @@ class Database {
 
   // --- Settings ---
   getSettings() {
-    return { ...defaultSettings, ...this.data.settings };
+    const siteUrl = this.data.settings?.siteUrl || process.env.SITE_URL || 'https://nexgencouncil.bond';
+    return { ...defaultSettings, siteUrl, ...this.data.settings };
   }
 
   updateSettings(updates: Partial<WebsiteSettings>) {
-    this.data.settings = { ...this.data.settings, ...updates };
+    this.data.settings = { ...defaultSettings, ...this.data.settings, ...updates };
     this.save();
     mongoUpsert('settings', 'global_settings', this.data.settings).catch(() => {});
-    return this.data.settings;
+    return this.getSettings();
   }
 
   // --- Activity Logs ---

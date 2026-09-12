@@ -23,7 +23,8 @@ import {
   Plus,
   Database,
   RefreshCw,
-  Radio
+  Radio,
+  Code2
 } from 'lucide-react';
 
 export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -165,7 +166,7 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
         </nav>
 
         {/* User Footer Profile */}
-        <div className="p-4 mt-auto border-t border-slate-800">
+        <div className="p-4 mt-auto border-t border-slate-800 space-y-3">
           <div className="flex items-center gap-3 px-2">
             <div className="w-8 h-8 rounded-full bg-slate-700 overflow-hidden flex items-center justify-center text-white text-xs font-bold shrink-0">
               {currentUser?.avatar ? (
@@ -190,6 +191,15 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
             >
               <LogOut className="w-4 h-4" />
             </button>
+          </div>
+
+          {/* Developer Watermark in Sidebar */}
+          <div className="px-3 py-2 rounded-xl bg-slate-950/70 border border-slate-800 text-center">
+            <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-400">
+              <Code2 className="w-3.5 h-3.5 text-amber-400" />
+              <span>Developed by</span>
+              <span className="font-bold text-amber-300">Nisha Aslam</span>
+            </div>
           </div>
         </div>
       </aside>
@@ -232,7 +242,7 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
             </div>
 
             <button
-              onClick={triggerRealtimeSync}
+              onClick={() => triggerRealtimeSync(true)}
               disabled={isSyncing}
               title="Force sync data across server and MongoDB"
               className="flex items-center gap-1.5 text-xs text-slate-700 hover:text-blue-600 bg-slate-100 hover:bg-slate-200 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer font-medium disabled:opacity-50"
@@ -273,8 +283,18 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
         </header>
 
         {/* Scrollable Dashboard Body */}
-        <div className="flex-1 p-4 sm:p-8 overflow-y-auto">
-          <div className="max-w-7xl mx-auto">{children}</div>
+        <div className="flex-1 p-4 sm:p-8 overflow-y-auto flex flex-col justify-between">
+          <div className="max-w-7xl mx-auto w-full">{children}</div>
+
+          {/* Admin Workspace Footer & Developer Watermark */}
+          <footer className="max-w-7xl mx-auto w-full mt-12 pt-6 pb-2 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
+            <p>© {new Date().getFullYear()} NexGen Council Administrative Console. All rights reserved.</p>
+            <div className="inline-flex items-center gap-1.5 font-medium text-slate-600 bg-white px-3 py-1.5 rounded-full border border-slate-200 shadow-2xs">
+              <Code2 className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Platform Developed by</span>
+              <span className="font-bold text-slate-900">Nisha Aslam</span>
+            </div>
+          </footer>
         </div>
       </main>
     </div>

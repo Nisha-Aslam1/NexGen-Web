@@ -154,7 +154,11 @@ export async function initMongo(targetUri?: string): Promise<boolean> {
   } catch (err: any) {
     isConnected = false;
     connectionError = err.message || 'Connection failed';
-    console.warn('[MongoDB] MongoDB Connection failed:', err.message);
+    if (currentMongoUri.includes('127.0.0.1') || currentMongoUri.includes('localhost')) {
+      console.log('[Database] Local persistent database active (data/persistent_db.json). MongoDB ready to connect when remote MONGODB_URI (e.g. MongoDB Atlas) is configured.');
+    } else {
+      console.warn('[MongoDB] MongoDB Connection note:', err.message);
+    }
     return false;
   }
 }
