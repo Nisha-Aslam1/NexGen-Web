@@ -15,7 +15,10 @@ import {
   getCurrentMongoUri,
   recordAnalyticsEvent,
   recordVisitorHeartbeat,
-  getRealtimeInsights
+  getRealtimeInsights,
+  mongoSaveMedia,
+  mongoGetMedia,
+  mongoRestoreAllMediaToDisk
 } from './server/mongo.ts';
 import {
   getSiteBaseUrl,
@@ -778,8 +781,8 @@ app.get('/api/activity-logs', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'CONTEN
   res.json(db.getActivityLogs(limit));
 });
 
-// 14. Real-time Image & Visual Asset Uploader (Stores to public/uploads and returns static URL)
-app.post('/api/upload', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER']), (req, res) => {
+// 14. Real-time Image & Visual Asset Uploader (Multi-tier persistence: public/uploads, data/uploads, and MongoDB media collection)
+app.post('/api/upload', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER']), async (req, res) => {
   const { dataUrl, filename, image } = req.body;
   const payload = dataUrl || image;
   if (!payload) {
@@ -787,9 +790,13 @@ app.post('/api/upload', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANA
   }
 
   try {
-    const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
-    if (!fs.existsSync(uploadsDir)) {
-      fs.mkdirSync(uploadsDir, { recursive: true });
+    const publicUploadsDir = path.join(process.cwd(), 'public', 'uploads');
+    const persistentUploadsDir = path.join(process.cwd(), 'data', 'uploads');
+    if (!fs.existsSync(publicUploadsDir)) {
+      fs.mkdirSync(publicUploadsDir, { recursive: true });
+    }
+    if (!fs.existsSync(persistentUploadsDir)) {
+      fs.mkdirSync(persistentUploadsDir, { recursive: true });
     }
 
     // Check if base64 data URL
@@ -797,12 +804,29 @@ app.post('/api/upload', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANA
       const matches = payload.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
       if (matches) {
         const ext = matches[1].replace('jpeg', 'jpg').replace('+xml', '');
+        const mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
         const base64Data = matches[2];
         const rawName = (filename || 'upload').replace(/[^a-zA-Z0-9_-]/g, '_');
         const finalName = `${Date.now()}_${rawName.slice(0, 30)}.${ext}`;
-        const filePath = path.join(uploadsDir, finalName);
+        const publicFilePath = path.join(publicUploadsDir, finalName);
+        const persistentFilePath = path.join(persistentUploadsDir, finalName);
+        const buffer = Buffer.from(base64Data, 'base64');
 
-        fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+        // 1. Write to public/uploads for direct instant static web serving
+        fs.writeFileSync(publicFilePath, buffer);
+
+        // 2. Write to data/uploads for local disk persistence
+        try {
+          fs.writeFileSync(persistentFilePath, buffer);
+        } catch (e) {
+          console.warn('[Storage] Could not write to data/uploads backup:', e);
+        }
+
+        // 3. Persist to MongoDB media collection (permanent database storage surviving any git pull/wipe)
+        mongoSaveMedia(finalName, payload, mimeType, buffer.length).catch(mErr => {
+          console.warn('[MongoDB] Background media persistence notice:', mErr?.message);
+        });
+
         const publicUrl = `/uploads/${finalName}`;
 
         return res.json({
@@ -975,12 +999,78 @@ app.post('/api/system/admin-credentials', requireAuth(['SUPER_ADMIN']), (req, re
 // ----------------------------------------------------
 
 async function startServer() {
-  // Ensure public/uploads directory is mounted
-  const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
+  // Ensure public/uploads and data/uploads directories exist
+  const publicUploadsDir = path.join(process.cwd(), 'public', 'uploads');
+  const persistentUploadsDir = path.join(process.cwd(), 'data', 'uploads');
+  if (!fs.existsSync(publicUploadsDir)) {
+    fs.mkdirSync(publicUploadsDir, { recursive: true });
   }
-  app.use('/uploads', express.static(uploadsDir));
+  if (!fs.existsSync(persistentUploadsDir)) {
+    fs.mkdirSync(persistentUploadsDir, { recursive: true });
+  }
+
+  // Restore any persisted images from data/uploads to public/uploads on startup
+  try {
+    const backupFiles = fs.readdirSync(persistentUploadsDir);
+    for (const file of backupFiles) {
+      const srcPath = path.join(persistentUploadsDir, file);
+      const destPath = path.join(publicUploadsDir, file);
+      if (!fs.existsSync(destPath) && fs.statSync(srcPath).isFile()) {
+        fs.copyFileSync(srcPath, destPath);
+      }
+    }
+  } catch (syncErr) {
+    console.warn('[Storage] Uploads sync error on startup:', syncErr);
+  }
+
+  // Resilient /uploads/:filename serving handler with auto-restoration from data/uploads and MongoDB
+  app.get('/uploads/:filename', async (req, res, next) => {
+    const rawFilename = req.params.filename;
+    // Sanitize filename to prevent directory traversal
+    const safeFilename = path.basename(rawFilename);
+    const publicPath = path.join(publicUploadsDir, safeFilename);
+
+    // 1. Direct file on disk
+    if (fs.existsSync(publicPath)) {
+      return res.sendFile(publicPath);
+    }
+
+    // 2. Check local data/uploads backup
+    const backupPath = path.join(persistentUploadsDir, safeFilename);
+    if (fs.existsSync(backupPath)) {
+      try {
+        fs.copyFileSync(backupPath, publicPath);
+        return res.sendFile(publicPath);
+      } catch {
+        return res.sendFile(backupPath);
+      }
+    }
+
+    // 3. Check MongoDB 'media' collection if file was lost due to git pull/wipe
+    try {
+      const mediaDoc = await mongoGetMedia(safeFilename);
+      if (mediaDoc && mediaDoc.dataUrl) {
+        const matches = mediaDoc.dataUrl.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
+        if (matches) {
+          const buffer = Buffer.from(matches[2], 'base64');
+          // Cache restored file to disk so future requests are instant
+          try {
+            fs.writeFileSync(publicPath, buffer);
+            fs.writeFileSync(backupPath, buffer);
+          } catch {}
+          res.setHeader('Content-Type', mediaDoc.mimeType || 'image/jpeg');
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          return res.send(buffer);
+        }
+      }
+    } catch (mErr: any) {
+      console.warn('[Storage] MongoDB media retrieval error:', mErr?.message);
+    }
+
+    return res.status(404).send('Image not found');
+  });
+
+  app.use('/uploads', express.static(publicUploadsDir));
 
   // 1. Robots.txt Route
   app.get('/robots.txt', (req, res) => {
@@ -1062,6 +1152,11 @@ async function startServer() {
       if (mongoConnected) {
         await db.initFromMongo();
         console.log('[MongoDB] Schema verified and hydrated from live MongoDB.');
+        // Restore all uploaded media from MongoDB to local disk cache
+        const restored = await mongoRestoreAllMediaToDisk([publicUploadsDir, persistentUploadsDir]);
+        if (restored > 0) {
+          console.log(`[Storage] Successfully restored ${restored} media assets from MongoDB to local storage.`);
+        }
       }
     }).catch((mErr) => {
       console.warn('[MongoDB] Init warning:', mErr?.message || mErr);

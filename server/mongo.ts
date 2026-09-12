@@ -344,6 +344,93 @@ export async function mongoDelete(collectionName: string, id: string) {
 }
 
 /**
+ * Save an uploaded media/image file into MongoDB 'media' collection
+ * so it permanently survives git pulls, server rebuilds, and fresh deployments.
+ */
+export async function mongoSaveMedia(filename: string, dataUrl: string, mimeType: string, size?: number) {
+  if (!isMongoConnected() || !dbInstance) return null;
+  try {
+    const col = dbInstance.collection('media');
+    await col.updateOne(
+      { filename },
+      {
+        $set: {
+          filename,
+          dataUrl,
+          mimeType,
+          size: size || dataUrl.length,
+          uploadedAt: new Date().toISOString()
+        }
+      },
+      { upsert: true }
+    );
+    return true;
+  } catch (err: any) {
+    console.error('[MongoDB] Failed to persist media file:', err.message);
+    return false;
+  }
+}
+
+/**
+ * Retrieve media/image file from MongoDB by filename
+ */
+export async function mongoGetMedia(filename: string): Promise<{ dataUrl: string; mimeType: string } | null> {
+  if (!isMongoConnected() || !dbInstance) return null;
+  try {
+    const col = dbInstance.collection('media');
+    const doc = await col.findOne({ filename });
+    if (doc && doc.dataUrl) {
+      return {
+        dataUrl: doc.dataUrl,
+        mimeType: doc.mimeType || 'image/jpeg'
+      };
+    }
+  } catch (err: any) {
+    console.error('[MongoDB] Failed to retrieve media file:', err.message);
+  }
+  return null;
+}
+
+/**
+ * Restore all media documents from MongoDB to public/uploads & data/uploads on server startup
+ */
+export async function mongoRestoreAllMediaToDisk(targetDirs: string[]): Promise<number> {
+  if (!isMongoConnected() || !dbInstance) return 0;
+  try {
+    for (const d of targetDirs) {
+      if (!fs.existsSync(d)) {
+        fs.mkdirSync(d, { recursive: true });
+      }
+    }
+
+    const col = dbInstance.collection('media');
+    const cursor = col.find({});
+    let count = 0;
+
+    while (await cursor.hasNext()) {
+      const doc = await cursor.next();
+      if (doc && doc.filename && doc.dataUrl) {
+        const matches = doc.dataUrl.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
+        if (matches) {
+          const buffer = Buffer.from(matches[2], 'base64');
+          for (const d of targetDirs) {
+            const dest = path.join(d, doc.filename);
+            if (!fs.existsSync(dest)) {
+              fs.writeFileSync(dest, buffer);
+            }
+          }
+          count++;
+        }
+      }
+    }
+    return count;
+  } catch (err: any) {
+    console.warn('[MongoDB] Error restoring media to disk:', err.message);
+    return 0;
+  }
+}
+
+/**
  * Real-time collection cleaner (e.g. for clearing demo mock records)
  */
 export async function mongoClearCollections(collectionNames: string[]) {
