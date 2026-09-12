@@ -3,7 +3,6 @@ import { useApp, ActivePage } from '../context/AppContext.tsx';
 import {
   Menu,
   X,
-  ShieldCheck,
   ChevronRight,
   UserCheck,
   Search,
@@ -12,7 +11,7 @@ import {
 } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
-  const { activePage, setActivePage, currentUser, settings } = useApp();
+  const { activePage, setActivePage, settings } = useApp();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
@@ -137,38 +136,6 @@ export const Navbar: React.FC = () => {
               <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" />
               <span>Join as Volunteer</span>
             </button>
-
-            {/* Admin Portal Button */}
-            <button
-              onClick={() => navigateTo('admin')}
-              className={`h-8.5 px-2.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap shrink-0 shadow-2xs ${
-                currentUser
-                  ? 'bg-slate-900 hover:bg-slate-800 text-white'
-                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200/80'
-              }`}
-              title={currentUser ? `Logged in as ${currentUser.name}` : 'Staff & Administration Login'}
-            >
-              {currentUser ? (
-                <>
-                  {currentUser.avatar ? (
-                    <img
-                      src={currentUser.avatar}
-                      alt={currentUser.name}
-                      className="w-4.5 h-4.5 rounded-full object-cover ring-1 ring-white/30 shrink-0"
-                    />
-                  ) : (
-                    <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
-                  )}
-                  <span>Admin</span>
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" title="Active session"></span>
-                </>
-              ) : (
-                <>
-                  <ShieldCheck className="w-3.5 h-3.5 text-indigo-700 shrink-0" />
-                  <span>Admin</span>
-                </>
-              )}
-            </button>
           </div>
 
           {/* Mobile Right Controls */}
@@ -226,14 +193,6 @@ export const Navbar: React.FC = () => {
             >
               <Sparkles className="w-3.5 h-3.5 text-amber-300" />
               <span>Become a Volunteer</span>
-            </button>
-
-            <button
-              onClick={() => navigateTo('admin')}
-              className="flex items-center justify-center gap-2 w-full py-2.5 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-xl transition-colors shadow-2xs cursor-pointer"
-            >
-              <ShieldCheck className="w-4 h-4 text-amber-400" />
-              <span>{currentUser ? `Admin Workspace (${currentUser.name})` : 'Admin & Staff Portal Login'}</span>
             </button>
           </div>
         </div>

@@ -51,13 +51,22 @@ interface Toast {
   message: string;
 }
 
-export function parsePathname(pathname: string): {
+export function parsePathname(pathname: string, hash?: string): {
   page: ActivePage;
   programSlug?: string;
   eventSlug?: string;
   newsSlug?: string;
 } {
-  const clean = pathname.split('?')[0].replace(/\/$/, '') || '/';
+  let clean = pathname.split('?')[0].replace(/\/$/, '').toLowerCase() || '/';
+
+  // Support hash routing fallback for admin direct links (e.g. /#admin or /#/admin)
+  if ((clean === '/' || clean === '') && hash) {
+    const cleanHash = hash.replace(/^#\/?/, '/').split('?')[0].replace(/\/$/, '').toLowerCase();
+    if (cleanHash === '/admin' || cleanHash.startsWith('/admin/') || cleanHash === '/admin-login' || cleanHash === '/login') {
+      clean = cleanHash;
+    }
+  }
+
   if (clean === '/' || clean === '/home') return { page: 'home' };
   if (clean === '/about' || clean === '/about-us') return { page: 'about' };
   if (clean === '/programs') return { page: 'programs' };
@@ -148,7 +157,9 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const initialNav = typeof window !== 'undefined' ? parsePathname(window.location.pathname) : { page: 'home' as ActivePage };
+  const initialNav = typeof window !== 'undefined'
+    ? parsePathname(window.location.pathname, window.location.hash)
+    : { page: 'home' as ActivePage };
   const [activePage, setActivePageState] = useState<ActivePage>(initialNav.page);
   const [adminTab, setAdminTab] = useState<AdminTab>('dashboard');
   const [selectedProgramSlug, setSelectedProgramSlug] = useState<string | null>(initialNav.programSlug || null);
@@ -159,10 +170,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem('ng_token'));
   const [isLoadingAuth, setIsLoadingAuth] = useState<boolean>(true);
 
-  // Synchronize browser history / popstate
+  // Synchronize browser history / popstate / hashchange
   useEffect(() => {
     const handlePopState = () => {
-      const parsed = parsePathname(window.location.pathname);
+      const parsed = parsePathname(window.location.pathname, window.location.hash);
       setActivePageState(parsed.page);
       setSelectedProgramSlug(parsed.programSlug || null);
       setSelectedEventSlug(parsed.eventSlug || null);
@@ -170,7 +181,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
 
     window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
+    window.addEventListener('hashchange', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('hashchange', handlePopState);
+    };
   }, []);
 
   const setActivePage = (page: ActivePage, slug?: string | null) => {

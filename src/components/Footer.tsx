@@ -5,7 +5,6 @@ import {
   Phone,
   MapPin,
   Heart,
-  ShieldCheck,
   ArrowUpRight,
   Clock,
   FileCheck,
@@ -13,7 +12,7 @@ import {
 } from 'lucide-react';
 
 export const Footer: React.FC = () => {
-  const { setActivePage, settings, currentUser } = useApp();
+  const { setActivePage, settings } = useApp();
 
   return (
     <footer className="bg-slate-950 text-slate-300 border-t border-slate-800">
@@ -244,15 +243,6 @@ export const Footer: React.FC = () => {
                   Partner With Us
                 </button>
               </li>
-              <li className="pt-2">
-                <button
-                  onClick={() => { setActivePage(currentUser ? 'admin' : 'admin-login'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-slate-300 hover:text-white transition-colors border border-slate-800 cursor-pointer"
-                >
-                  <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Admin Management</span>
-                </button>
-              </li>
             </ul>
           </div>
         </div>
@@ -275,13 +265,6 @@ export const Footer: React.FC = () => {
 
           <div className="flex items-center gap-4 flex-wrap justify-center md:justify-end">
             <span>{settings?.footerBadgeText || 'Non-Governmental Organization • Civic Leadership Initiative'}</span>
-            <span>•</span>
-            <button
-              onClick={() => { setActivePage(currentUser ? 'admin' : 'admin-login'); }}
-              className="text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-            >
-              Council Staff Login
-            </button>
           </div>
         </div>
       </div>
