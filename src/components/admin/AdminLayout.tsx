@@ -24,7 +24,8 @@ import {
   Database,
   RefreshCw,
   Radio,
-  Code2
+  Code2,
+  Video
 } from 'lucide-react';
 
 export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -44,6 +45,7 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const navManagement: { tab: AdminTab; label: string; icon: React.ElementType; badge?: number }[] = [
     { tab: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { tab: 'meetings', label: 'Video Meetings', icon: Video },
     { tab: 'analytics', label: 'Live Analytics', icon: Radio },
     { tab: 'applications', label: 'Applications', icon: FileCheck2, badge: pendingApplicationsCount },
     { tab: 'volunteers', label: 'Volunteers', icon: Users },

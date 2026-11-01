@@ -21,7 +21,9 @@ import {
   AlertCircle,
   Globe,
   ExternalLink,
-  RotateCcw
+  RotateCcw,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { SiteSettings } from '../../types.ts';
 
@@ -522,38 +524,143 @@ export const AdminSettings: React.FC = () => {
 
         {/* Contact Channels */}
         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
-          <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-            <Mail className="w-4 h-4 text-indigo-950" />
-            <h3 className="font-serif font-bold text-base text-slate-900">Public Contact Secretariat</h3>
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2">
+              <Mail className="w-4 h-4 text-indigo-950" />
+              <h3 className="font-serif font-bold text-base text-slate-900">Public Contact Secretariat</h3>
+            </div>
+            <span className="text-[11px] text-slate-500">
+              Each contact item can be toggled ON or OFF for the public site and footer
+            </span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Public Contact Email</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold text-slate-700">Public Contact Email</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDirty(true);
+                    setFormData({
+                      ...formData,
+                      showContactEmail: formData.showContactEmail === false ? true : false
+                    });
+                  }}
+                  className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                    formData.showContactEmail !== false
+                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                  }`}
+                  title="Toggle visibility on website"
+                >
+                  {formData.showContactEmail !== false ? (
+                    <>
+                      <Eye className="w-3 h-3 text-emerald-600" />
+                      <span>ON (Visible)</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="w-3 h-3 text-slate-400" />
+                      <span>OFF (Hidden)</span>
+                    </>
+                  )}
+                </button>
+              </div>
               <input
                 type="email"
                 value={formData.contactEmail}
-                onChange={e => setFormData({ ...formData, contactEmail: e.target.value })}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, contactEmail: e.target.value });
+                }}
                 className="w-full px-3 py-2 rounded-xl border border-slate-300"
               />
             </div>
+
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Helpline Phone Number</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold text-slate-700">Helpline Phone Number</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDirty(true);
+                    setFormData({
+                      ...formData,
+                      showContactPhone: formData.showContactPhone === false ? true : false
+                    });
+                  }}
+                  className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                    formData.showContactPhone !== false
+                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                  }`}
+                  title="Toggle visibility on website"
+                >
+                  {formData.showContactPhone !== false ? (
+                    <>
+                      <Eye className="w-3 h-3 text-emerald-600" />
+                      <span>ON (Visible)</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="w-3 h-3 text-slate-400" />
+                      <span>OFF (Hidden)</span>
+                    </>
+                  )}
+                </button>
+              </div>
               <input
                 type="text"
                 value={formData.contactPhone}
-                onChange={e => setFormData({ ...formData, contactPhone: e.target.value })}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, contactPhone: e.target.value });
+                }}
                 className="w-full px-3 py-2 rounded-xl border border-slate-300"
               />
             </div>
           </div>
 
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Physical Office / Secretariat Address</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block font-semibold text-slate-700">Physical Office / Secretariat Address</label>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDirty(true);
+                  setFormData({
+                    ...formData,
+                    showOfficeAddress: formData.showOfficeAddress === false ? true : false
+                  });
+                }}
+                className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                  formData.showOfficeAddress !== false
+                    ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                    : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                }`}
+                title="Toggle visibility on website"
+              >
+                {formData.showOfficeAddress !== false ? (
+                  <>
+                    <Eye className="w-3 h-3 text-emerald-600" />
+                    <span>ON (Visible)</span>
+                  </>
+                ) : (
+                  <>
+                    <EyeOff className="w-3 h-3 text-slate-400" />
+                    <span>OFF (Hidden)</span>
+                  </>
+                )}
+              </button>
+            </div>
             <input
               type="text"
               value={formData.officeAddress}
-              onChange={e => setFormData({ ...formData, officeAddress: e.target.value })}
+              onChange={e => {
+                setIsDirty(true);
+                setFormData({ ...formData, officeAddress: e.target.value });
+              }}
               className="w-full px-3 py-2 rounded-xl border border-slate-300"
             />
           </div>
@@ -697,12 +804,45 @@ export const AdminSettings: React.FC = () => {
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Operating / Secretariat Hours</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold text-slate-700">Operating / Secretariat Hours</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDirty(true);
+                    setFormData({
+                      ...formData,
+                      showOfficeHours: formData.showOfficeHours === false ? true : false
+                    });
+                  }}
+                  className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                    formData.showOfficeHours !== false
+                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                  }`}
+                  title="Toggle visibility on website"
+                >
+                  {formData.showOfficeHours !== false ? (
+                    <>
+                      <Eye className="w-3 h-3 text-emerald-600" />
+                      <span>ON (Visible)</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="w-3 h-3 text-slate-400" />
+                      <span>OFF (Hidden)</span>
+                    </>
+                  )}
+                </button>
+              </div>
               <input
                 type="text"
                 value={formData.footerOfficeHours || ''}
                 placeholder="Monday - Friday: 9:00 AM - 6:00 PM (PKT / UTC+5)"
-                onChange={e => setFormData({ ...formData, footerOfficeHours: e.target.value })}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, footerOfficeHours: e.target.value });
+                }}
                 className="w-full px-3 py-2 rounded-xl border border-slate-300"
               />
             </div>
@@ -713,18 +853,54 @@ export const AdminSettings: React.FC = () => {
                 rows={2}
                 value={formData.footerDescription || ''}
                 placeholder="Cultivating the next generation of visionary female leaders..."
-                onChange={e => setFormData({ ...formData, footerDescription: e.target.value })}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, footerDescription: e.target.value });
+                }}
                 className="w-full px-3 py-2 rounded-xl border border-slate-300"
               />
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Registration / NGO License Number</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold text-slate-700">Registration / NGO License Number</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDirty(true);
+                    setFormData({
+                      ...formData,
+                      showRegistrationNumber: formData.showRegistrationNumber === false ? true : false
+                    });
+                  }}
+                  className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                    formData.showRegistrationNumber !== false
+                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                  }`}
+                  title="Toggle visibility on website"
+                >
+                  {formData.showRegistrationNumber !== false ? (
+                    <>
+                      <Eye className="w-3 h-3 text-emerald-600" />
+                      <span>ON (Visible)</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="w-3 h-3 text-slate-400" />
+                      <span>OFF (Hidden)</span>
+                    </>
+                  )}
+                </button>
+              </div>
               <input
                 type="text"
                 value={formData.registrationNumber || ''}
                 placeholder="Registered Civil Society & Non-Profit Initiative #092-2024"
-                onChange={e => setFormData({ ...formData, registrationNumber: e.target.value })}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, registrationNumber: e.target.value });
+                }}
                 className="w-full px-3 py-2 rounded-xl border border-slate-300"
               />
             </div>

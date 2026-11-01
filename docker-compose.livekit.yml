@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  # NexGen Web Application (Existing Service)
+  nexgen-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nexgen-web-app
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - MONGODB_URI=mongodb://mongodb:27017/nexgen_council
+      - LIVEKIT_URL=http://livekit-server:7880
+      - LIVEKIT_API_KEY=devkey
+      - LIVEKIT_API_SECRET=secret_key_nexgen_livekit_2026
+      - LIVEKIT_PUBLIC_URL=wss://livekit.nexgencouncil.bond
+    ports:
+      - "3000:3000"
+    depends_on:
+      - mongodb
+      - livekit-server
+    networks:
+      - nexgen-network
+
+  # MongoDB 7.0 (Existing Database - Internal Network Only)
+  mongodb:
+    image: mongo:7.0
+    container_name: nexgen-mongodb
+    restart: always
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - nexgen-network
+
+  # LiveKit Server (Self-Hosted ARM64 Compatible)
+  livekit-server:
+    image: livekit/livekit-server:v1.8.0
+    container_name: nexgen-livekit
+    restart: always
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml
+    ports:
+      - "7880:7880" # HTTP API & WebSocket
+      - "7881:7881" # WebRTC TCP
+      - "50000-60000:50000-60000/udp" # WebRTC UDP Media Ports
+    networks:
+      - nexgen-network
+
+networks:
+  nexgen-network:
+    driver: bridge
+
+volumes:
+  mongo_data:
+    driver: local

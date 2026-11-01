@@ -27,6 +27,8 @@ export type ActivePage =
   | 'contact'
   | 'admin-login'
   | 'admin'
+  | 'room'
+  | 'meetings'
   | '404';
 
 export type AdminTab =
@@ -43,7 +45,8 @@ export type AdminTab =
   | 'settings'
   | 'users'
   | 'activity'
-  | 'database';
+  | 'database'
+  | 'meetings';
 
 interface Toast {
   id: string;
@@ -56,6 +59,7 @@ export function parsePathname(pathname: string, hash?: string): {
   programSlug?: string;
   eventSlug?: string;
   newsSlug?: string;
+  meetingCode?: string;
 } {
   let clean = pathname.split('?')[0].replace(/\/$/, '').toLowerCase() || '/';
 
@@ -63,6 +67,8 @@ export function parsePathname(pathname: string, hash?: string): {
   if ((clean === '/' || clean === '') && hash) {
     const cleanHash = hash.replace(/^#\/?/, '/').split('?')[0].replace(/\/$/, '').toLowerCase();
     if (cleanHash === '/admin' || cleanHash.startsWith('/admin/') || cleanHash === '/admin-login' || cleanHash === '/login') {
+      clean = cleanHash;
+    } else if (cleanHash.startsWith('/room/') || cleanHash.startsWith('/meet/')) {
       clean = cleanHash;
     }
   }
@@ -88,6 +94,13 @@ export function parsePathname(pathname: string, hash?: string): {
   if (clean === '/contact' || clean === '/contact-us') return { page: 'contact' };
   if (clean === '/admin-login' || clean === '/login') return { page: 'admin-login' };
   if (clean === '/admin' || clean.startsWith('/admin/')) return { page: 'admin' };
+  if (clean === '/meetings' || clean === '/meet') return { page: 'meetings' };
+  if (clean.startsWith('/room/')) {
+    return { page: 'room', meetingCode: clean.replace('/room/', '') };
+  }
+  if (clean.startsWith('/meet/')) {
+    return { page: 'room', meetingCode: clean.replace('/meet/', '') };
+  }
   return { page: '404' };
 }
 
@@ -95,7 +108,8 @@ export function getPathForPage(
   page: ActivePage,
   programSlug?: string | null,
   eventSlug?: string | null,
-  newsSlug?: string | null
+  newsSlug?: string | null,
+  meetingCode?: string | null
 ): string {
   if (page === 'home') return '/';
   if (page === 'about') return '/about';
@@ -109,6 +123,8 @@ export function getPathForPage(
   if (page === 'contact') return '/contact';
   if (page === 'admin-login') return '/admin-login';
   if (page === 'admin') return '/admin';
+  if (page === 'meetings') return '/meetings';
+  if (page === 'room') return meetingCode ? `/room/${meetingCode}` : '/meetings';
   return '/404';
 }
 
@@ -124,6 +140,8 @@ interface AppContextType {
   setSelectedEventSlug: (slug: string | null) => void;
   selectedNewsSlug: string | null;
   setSelectedNewsSlug: (slug: string | null) => void;
+  selectedMeetingCode: string | null;
+  setSelectedMeetingCode: (code: string | null) => void;
 
   // Auth
   currentUser: User | null;
@@ -165,6 +183,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [selectedProgramSlug, setSelectedProgramSlug] = useState<string | null>(initialNav.programSlug || null);
   const [selectedEventSlug, setSelectedEventSlug] = useState<string | null>(initialNav.eventSlug || null);
   const [selectedNewsSlug, setSelectedNewsSlug] = useState<string | null>(initialNav.newsSlug || null);
+  const [selectedMeetingCode, setSelectedMeetingCode] = useState<string | null>(initialNav.meetingCode || null);
 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem('ng_token'));
@@ -178,6 +197,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setSelectedProgramSlug(parsed.programSlug || null);
       setSelectedEventSlug(parsed.eventSlug || null);
       setSelectedNewsSlug(parsed.newsSlug || null);
+      setSelectedMeetingCode(parsed.meetingCode || null);
     };
 
     window.addEventListener('popstate', handlePopState);
@@ -194,33 +214,45 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     let pSlug = selectedProgramSlug;
     let eSlug = selectedEventSlug;
     let nSlug = selectedNewsSlug;
+    let mCode = selectedMeetingCode;
 
     if (page === 'programs') {
       pSlug = slug !== undefined ? slug : null;
       setSelectedProgramSlug(pSlug);
       setSelectedEventSlug(null);
       setSelectedNewsSlug(null);
+      setSelectedMeetingCode(null);
     } else if (page === 'events') {
       eSlug = slug !== undefined ? slug : null;
       setSelectedEventSlug(eSlug);
       setSelectedProgramSlug(null);
       setSelectedNewsSlug(null);
+      setSelectedMeetingCode(null);
     } else if (page === 'news') {
       nSlug = slug !== undefined ? slug : null;
       setSelectedNewsSlug(nSlug);
       setSelectedProgramSlug(null);
       setSelectedEventSlug(null);
+      setSelectedMeetingCode(null);
+    } else if (page === 'room') {
+      mCode = slug !== undefined ? slug : null;
+      setSelectedMeetingCode(mCode);
+      setSelectedProgramSlug(null);
+      setSelectedEventSlug(null);
+      setSelectedNewsSlug(null);
     } else {
       setSelectedProgramSlug(null);
       setSelectedEventSlug(null);
       setSelectedNewsSlug(null);
+      setSelectedMeetingCode(null);
       pSlug = null;
       eSlug = null;
       nSlug = null;
+      mCode = null;
     }
 
     if (typeof window !== 'undefined') {
-      const targetUrl = getPathForPage(page, pSlug, eSlug, nSlug);
+      const targetUrl = getPathForPage(page, pSlug, eSlug, nSlug, mCode);
       if (window.location.pathname !== targetUrl) {
         window.history.pushState(null, '', targetUrl);
       }
@@ -408,6 +440,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setSelectedEventSlug,
         selectedNewsSlug,
         setSelectedNewsSlug,
+        selectedMeetingCode,
+        setSelectedMeetingCode,
         currentUser,
         authToken,
         login,

@@ -54,7 +54,7 @@ export const Footer: React.FC = () => {
 
       {/* Main Footer Links */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-10">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10">
           {/* Brand Info */}
           <div className="lg:col-span-2 space-y-4">
             <div className="flex items-center gap-3">
@@ -85,27 +85,33 @@ export const Footer: React.FC = () => {
             </p>
 
             <div className="pt-2 text-xs text-slate-400 space-y-2">
-              <div className="flex items-start gap-2.5">
-                <MapPin className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                <span>{settings?.officeAddress || 'Global Leadership Secretariat'}</span>
-              </div>
-              <div className="flex items-center gap-2.5">
-                <Mail className="w-4 h-4 text-amber-400 shrink-0" />
-                <a href={`mailto:${settings?.contactEmail || 'contact@nexgencouncil.org'}`} className="hover:text-white transition-colors">
-                  {settings?.contactEmail || 'contact@nexgencouncil.org'}
-                </a>
-              </div>
-              <div className="flex items-center gap-2.5">
-                <Phone className="w-4 h-4 text-amber-400 shrink-0" />
-                <span>{settings?.contactPhone || '+1 (800) 482-9380'}</span>
-              </div>
-              {settings?.footerOfficeHours && (
+              {settings?.showOfficeAddress !== false && (
+                <div className="flex items-start gap-2.5">
+                  <MapPin className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <span>{settings?.officeAddress || 'Executive Secretariat, 100 Leadership Plaza, Suite 400, Global District'}</span>
+                </div>
+              )}
+              {settings?.showContactEmail !== false && (
+                <div className="flex items-center gap-2.5">
+                  <Mail className="w-4 h-4 text-amber-400 shrink-0" />
+                  <a href={`mailto:${settings?.contactEmail || 'contact@nexgencouncil.org'}`} className="hover:text-white transition-colors">
+                    {settings?.contactEmail || 'contact@nexgencouncil.org'}
+                  </a>
+                </div>
+              )}
+              {settings?.showContactPhone !== false && (
+                <div className="flex items-center gap-2.5">
+                  <Phone className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>{settings?.contactPhone || '+1 (800) 482-9380'}</span>
+                </div>
+              )}
+              {settings?.showOfficeHours !== false && settings?.footerOfficeHours && (
                 <div className="flex items-center gap-2.5 text-slate-400">
                   <Clock className="w-4 h-4 text-amber-400 shrink-0" />
                   <span>{settings.footerOfficeHours}</span>
                 </div>
               )}
-              {settings?.registrationNumber && (
+              {settings?.showRegistrationNumber !== false && settings?.registrationNumber && (
                 <div className="flex items-center gap-2.5 text-emerald-400 font-medium">
                   <FileCheck className="w-4 h-4 text-emerald-400 shrink-0" />
                   <span>{settings.registrationNumber}</span>
@@ -163,55 +169,6 @@ export const Footer: React.FC = () => {
             </ul>
           </div>
 
-          {/* Programs & Impact */}
-          <div>
-            <h5 className="text-xs font-semibold text-slate-200 uppercase tracking-wider mb-4">
-              Key Initiatives
-            </h5>
-            <ul className="space-y-2.5 text-sm">
-              <li>
-                <button
-                  onClick={() => { setActivePage('programs'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                  className="text-slate-400 hover:text-white transition-colors cursor-pointer flex items-center gap-1 group"
-                >
-                  <span>30-Day Leadership Series</span>
-                  <ArrowUpRight className="w-3 h-3 text-slate-500 group-hover:text-amber-400 transition-colors" />
-                </button>
-              </li>
-              <li>
-                <button
-                  onClick={() => { setActivePage('programs'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                  className="text-slate-400 hover:text-white transition-colors cursor-pointer"
-                >
-                  Women in Tech Fellowship
-                </button>
-              </li>
-              <li>
-                <button
-                  onClick={() => { setActivePage('programs'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                  className="text-slate-400 hover:text-white transition-colors cursor-pointer"
-                >
-                  Grassroots Micro-Grants
-                </button>
-              </li>
-              <li>
-                <button
-                  onClick={() => { setActivePage('programs'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                  className="text-slate-400 hover:text-white transition-colors cursor-pointer"
-                >
-                  Youth Parliamentary Forum
-                </button>
-              </li>
-              <li>
-                <button
-                  onClick={() => { setActivePage('gallery'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                  className="text-slate-400 hover:text-white transition-colors cursor-pointer"
-                >
-                  Photo & Summit Gallery
-                </button>
-              </li>
-            </ul>
-          </div>
 
           {/* Participation & Portal */}
           <div>

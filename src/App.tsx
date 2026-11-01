@@ -34,6 +34,8 @@ import { AdminUsers } from './components/admin/AdminUsers.tsx';
 import { AdminActivityLogs } from './components/admin/AdminActivityLogs.tsx';
 import { AdminDatabase } from './components/admin/AdminDatabase.tsx';
 import { AdminAnalytics } from './components/admin/AdminAnalytics.tsx';
+import { AdminMeetings } from './components/admin/AdminMeetings.tsx';
+import { MeetingRoomWrapper } from './components/meetings/MeetingRoomWrapper.tsx';
 import { initAnalyticsHeartbeat, trackPageView } from './lib/analytics.ts';
 
 const AppContent: React.FC = () => {
@@ -50,6 +52,11 @@ const AppContent: React.FC = () => {
     trackPageView(activePage === 'admin' ? `admin/${adminTab}` : activePage);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [activePage, adminTab]);
+
+  // If in Room or Meetings view
+  if (activePage === 'room' || activePage === 'meetings') {
+    return <MeetingRoomWrapper />;
+  }
 
   // If in Admin section or Admin Login
   if (activePage === 'admin' || activePage === 'admin-login') {
@@ -84,6 +91,7 @@ const AppContent: React.FC = () => {
     return (
       <AdminLayout>
         {adminTab === 'dashboard' && <AdminDashboard />}
+        {adminTab === 'meetings' && <AdminMeetings />}
         {adminTab === 'analytics' && <AdminAnalytics />}
         {adminTab === 'applications' && <AdminApplications />}
         {adminTab === 'volunteers' && <AdminVolunteers />}

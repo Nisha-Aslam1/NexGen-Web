@@ -14,29 +14,43 @@ export const GalleryPage: React.FC = () => {
   const { gallery, settings } = useApp();
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-
-  useDocumentSEO({
-    title: `Community & Event Gallery | ${settings?.organizationName || 'NexGen Council'}`,
-    description:
-      'Explore photos and media highlights from NexGen Council youth leadership conventions, skills workshops, and women empowerment outreach cohorts.',
-    canonicalPath: '/gallery',
-    ogType: 'website',
-    ogImage: '/banner.png',
-    jsonLd: [
-      {
-        '@context': 'https://schema.org',
-        '@type': 'ImageGallery',
-        name: 'NexGen Council Civic & Youth Initiatives Gallery',
-        description: 'Photo archive of workshops, ceremonies, conferences, and community engagement programs.'
-      }
-    ]
-  });
-
   const categories = ['All', 'Workshops', 'Summits', 'Technology', 'Outreach', 'Ceremonies'];
 
   const filteredItems = gallery.filter(item =>
     selectedCategory === 'All' ? true : item.category.toLowerCase().includes(selectedCategory.toLowerCase())
   );
+
+  const orgName = settings?.organizationName || 'NexGen Women Empowerment & Youth Leadership Council';
+
+  const imageLdObjects = filteredItems.map(item => ({
+    '@type': 'ImageObject',
+    name: item.title,
+    caption: item.caption || item.category,
+    contentUrl: item.imageUrl,
+    url: item.imageUrl,
+    description: item.caption || `${item.title} - ${item.category} NexGen Council initiative photo`,
+    creditText: orgName,
+    copyrightNotice: `© ${new Date().getFullYear()} ${orgName}`
+  }));
+
+  useDocumentSEO({
+    title: `Field Photos & Media Gallery | ${orgName}`,
+    description:
+      'Explore photos and archival visual highlights from NexGen Council youth leadership conventions, skills workshops, and women empowerment outreach cohorts.',
+    canonicalPath: '/gallery',
+    ogType: 'website',
+    ogImage: filteredItems.length > 0 ? filteredItems[0].imageUrl : '/banner.png',
+    jsonLd: [
+      {
+        '@context': 'https://schema.org',
+        '@type': 'ImageGallery',
+        name: `${orgName} Civic & Youth Initiatives Photo Gallery`,
+        description: 'Photo archive of workshops, ceremonies, conferences, and community engagement programs.',
+        url: window.location.origin + '/gallery',
+        image: imageLdObjects
+      }
+    ]
+  });
 
   const openLightbox = (index: number) => {
     setLightboxIndex(index);
@@ -101,11 +115,15 @@ export const GalleryPage: React.FC = () => {
             <div
               key={item.id}
               onClick={() => openLightbox(idx)}
+              itemScope
+              itemType="https://schema.org/ImageObject"
               className="group relative rounded-3xl overflow-hidden bg-slate-900 aspect-4/3 cursor-pointer shadow-xs hover:shadow-xl transition-all"
             >
               <img
                 src={item.imageUrl}
-                alt={`${item.title} - ${item.category} activity`}
+                alt={`${item.title} - ${item.category} photo | ${orgName}`}
+                title={`${item.title} (${item.category})`}
+                itemProp="contentUrl"
                 loading="lazy"
                 decoding="async"
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
@@ -116,8 +134,8 @@ export const GalleryPage: React.FC = () => {
                 <span className="text-[10px] uppercase font-bold tracking-wider text-amber-400 block mb-1">
                   {item.category}
                 </span>
-                <h4 className="font-serif font-bold text-sm leading-snug">{item.title}</h4>
-                {item.caption && <p className="text-xs text-slate-300 mt-0.5 line-clamp-1">{item.caption}</p>}
+                <h4 itemProp="name" className="font-serif font-bold text-sm leading-snug">{item.title}</h4>
+                {item.caption && <p itemProp="caption" className="text-xs text-slate-300 mt-0.5 line-clamp-1">{item.caption}</p>}
               </div>
 
               <div className="absolute top-4 right-4 p-2 rounded-full bg-white/20 text-white backdrop-blur-xs opacity-0 group-hover:opacity-100 transition-opacity">

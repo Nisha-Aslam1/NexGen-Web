@@ -115,39 +115,57 @@ export const ContactPage: React.FC = () => {
               </p>
 
               <div className="space-y-4 pt-2 text-xs sm:text-sm text-slate-300">
-                <div className="flex items-start gap-3">
-                  <MapPin className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                  <div>
-                    <strong className="text-white block">Physical Secretariat</strong>
-                    <span>{settings?.officeAddress || 'Global Leadership Secretariat'}</span>
+                {settings?.showOfficeAddress !== false && (
+                  <div className="flex items-start gap-3">
+                    <MapPin className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="text-white block">Physical Secretariat</strong>
+                      <span>{settings?.officeAddress || 'Executive Secretariat, 100 Leadership Plaza, Suite 400, Global District'}</span>
+                    </div>
                   </div>
-                </div>
+                )}
 
-                <div className="flex items-start gap-3">
-                  <Mail className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                  <div>
-                    <strong className="text-white block">Official Inquiries</strong>
-                    <a href={`mailto:${settings?.contactEmail || 'contact@nexgencouncil.org'}`} className="hover:text-amber-300 transition-colors">
-                      {settings?.contactEmail || 'contact@nexgencouncil.org'}
-                    </a>
+                {settings?.showContactEmail !== false && (
+                  <div className="flex items-start gap-3">
+                    <Mail className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="text-white block">Official Inquiries</strong>
+                      <a href={`mailto:${settings?.contactEmail || 'contact@nexgencouncil.org'}`} className="hover:text-amber-300 transition-colors">
+                        {settings?.contactEmail || 'contact@nexgencouncil.org'}
+                      </a>
+                    </div>
                   </div>
-                </div>
+                )}
 
-                <div className="flex items-start gap-3">
-                  <Phone className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                  <div>
-                    <strong className="text-white block">Telephone Helpline</strong>
-                    <span>{settings?.contactPhone || '+1 (800) 482-9380'}</span>
+                {settings?.showContactPhone !== false && (
+                  <div className="flex items-start gap-3">
+                    <Phone className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="text-white block">Telephone Helpline</strong>
+                      <span>{settings?.contactPhone || '+1 (800) 482-9380'}</span>
+                    </div>
                   </div>
-                </div>
+                )}
 
-                <div className="flex items-start gap-3">
-                  <Clock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                  <div>
-                    <strong className="text-white block">Operating Hours</strong>
-                    <span>Monday – Friday: 9:00 AM – 5:30 PM (UTC+5)</span>
+                {settings?.showOfficeHours !== false && (
+                  <div className="flex items-start gap-3">
+                    <Clock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="text-white block">Operating Hours</strong>
+                      <span>{settings?.footerOfficeHours || 'Monday - Friday: 9:00 AM - 6:00 PM (PKT / UTC+5)'}</span>
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {settings?.showRegistrationNumber !== false && settings?.registrationNumber && (
+                  <div className="flex items-start gap-3">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="text-white block">Legal Status</strong>
+                      <span>{settings.registrationNumber}</span>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 

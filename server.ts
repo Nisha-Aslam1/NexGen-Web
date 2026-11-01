@@ -28,12 +28,22 @@ import {
   injectSeoIntoHtml
 } from './server/seo.ts';
 
+import { meetingsRouter } from './server/meetings.ts';
+
 const app = express();
 const PORT = 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'nexgen_council_secure_session_secret_2026';
 
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+
+// Populate optional auth session on req.user for all API routes
+app.use((req, res, next) => {
+  (req as any).user = getSession(req);
+  next();
+});
+
+app.use('/api', meetingsRouter);
 
 // Helper: Simple Cookie and Auth Token Parser
 function parseCookies(cookieHeader?: string): Record<string, string> {

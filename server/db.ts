@@ -13,7 +13,12 @@ import {
   ContactMessage,
   WebsiteSettings,
   ActivityLog,
-  DashboardStats
+  DashboardStats,
+  Meeting,
+  MeetingParticipant,
+  MeetingMessage,
+  MeetingAttendance,
+  AdmissionStatus
 } from '../src/types.ts';
 import { syncSchemaToMongo, loadOrSeedMongo, mongoUpsert, mongoDelete, mongoClearCollections, isMongoConnected } from './mongo.ts';
 
@@ -134,6 +139,9 @@ export interface DatabaseSchema {
   contacts: ContactMessage[];
   settings: WebsiteSettings;
   activityLogs: ActivityLog[];
+  meetings?: Meeting[];
+  meetingParticipants?: MeetingParticipant[];
+  meetingMessages?: MeetingMessage[];
 }
 
 function hashPassword(password: string, salt?: string): { hash: string; salt: string } {
@@ -194,6 +202,12 @@ const defaultSettings: WebsiteSettings = {
   registrationNumber: 'Registered Civil Society & Non-Profit Initiative #092-2024',
   footerCopyrightText: '© 2026 NexGen Women Empowerment & Youth Leadership Council. All rights reserved.',
   footerBadgeText: 'Non-Governmental Organization • Civic Leadership Initiative',
+  // Contact & Legal Visibility On/Off Toggles (Enabled by default, can be toggled in Admin Panel)
+  showOfficeAddress: true,
+  showContactEmail: true,
+  showContactPhone: true,
+  showOfficeHours: true,
+  showRegistrationNumber: true,
   siteUrl: 'https://nexgencouncil.bond',
   metaDescription: 'NexGen Women Empowerment & Youth Leadership Council is an international civil society organization dedicated to accelerating female leadership, youth civic engagement, and socio-economic advancement.',
   googleSiteVerification: '',
@@ -543,12 +557,21 @@ function getSeedData(): DatabaseSchema {
     ],
     contacts: [],
     settings: defaultSettings,
-    activityLogs: []
+    activityLogs: [],
+    meetings: [],
+    meetingParticipants: [],
+    meetingMessages: []
   };
 }
 
 class Database {
   private data: DatabaseSchema;
+
+  private ensureMeetingArrays() {
+    if (!this.data.meetings) this.data.meetings = [];
+    if (!this.data.meetingParticipants) this.data.meetingParticipants = [];
+    if (!this.data.meetingMessages) this.data.meetingMessages = [];
+  }
 
   constructor() {
     // If a persistent snapshot exists on disk, load it so restarts/rebuilds keep user modifications
@@ -563,6 +586,7 @@ class Database {
     } else {
       this.data = getSeedData();
     }
+    this.ensureMeetingArrays();
     // Always initialize Super Admin credentials from .env / config immediately
     this.syncSuperAdminFromEnv();
   }
@@ -1334,6 +1358,233 @@ class Database {
       monthlyApplications,
       interestDistribution
     };
+  }
+
+  // ----------------------------------------------------
+  // LIVEKIT MEETINGS ENGINE
+  // ----------------------------------------------------
+
+  getMeetings(statusFilter?: string, search?: string): Meeting[] {
+    this.ensureMeetingArrays();
+    let list = [...(this.data.meetings || [])];
+
+    if (statusFilter && statusFilter !== 'All') {
+      list = list.filter(m => m.status === statusFilter);
+    }
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase();
+      list = list.filter(m =>
+        m.title.toLowerCase().includes(q) ||
+        m.meetingCode.toLowerCase().includes(q) ||
+        m.hostName.toLowerCase().includes(q) ||
+        (m.description && m.description.toLowerCase().includes(q))
+      );
+    }
+
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  getMeetingById(id: string): Meeting | null {
+    this.ensureMeetingArrays();
+    return this.data.meetings?.find(m => m.id === id || m.meetingCode === id || m.roomName === id) || null;
+  }
+
+  getMeetingByCode(code: string): Meeting | null {
+    this.ensureMeetingArrays();
+    const clean = code.trim().toLowerCase();
+    return this.data.meetings?.find(m => m.meetingCode.toLowerCase() === clean || m.roomName.toLowerCase() === clean || m.id === clean) || null;
+  }
+
+  createMeeting(meetingData: {
+    title: string;
+    description?: string;
+    hostId: string;
+    hostName: string;
+    scheduledStart?: string;
+    scheduledEnd?: string;
+    password?: string;
+    waitingRoomEnabled?: boolean;
+    screenShareEnabled?: boolean;
+    maxParticipants?: number;
+    status?: Meeting['status'];
+  }): Meeting {
+    this.ensureMeetingArrays();
+    const now = new Date().toISOString();
+    const randCodePart1 = Math.random().toString(36).substring(2, 6);
+    const randCodePart2 = Math.random().toString(36).substring(2, 6);
+    const meetingCode = `nex-${randCodePart1}-${randCodePart2}`;
+    const roomName = `room_${meetingCode}`;
+
+    let passwordHash: string | undefined = undefined;
+    let hasPassword = false;
+    if (meetingData.password && meetingData.password.trim()) {
+      const hp = hashPassword(meetingData.password.trim());
+      passwordHash = hp.hash + ':' + hp.salt;
+      hasPassword = true;
+    }
+
+    const newMeeting: Meeting = {
+      id: `mtg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      meetingCode,
+      roomName,
+      title: meetingData.title.trim(),
+      description: meetingData.description?.trim() || '',
+      hostId: meetingData.hostId,
+      hostName: meetingData.hostName,
+      scheduledStart: meetingData.scheduledStart || now,
+      scheduledEnd: meetingData.scheduledEnd,
+      status: meetingData.status || 'Scheduled',
+      passwordHash,
+      hasPassword,
+      waitingRoomEnabled: meetingData.waitingRoomEnabled !== undefined ? meetingData.waitingRoomEnabled : true,
+      screenShareEnabled: meetingData.screenShareEnabled !== undefined ? meetingData.screenShareEnabled : true,
+      maxParticipants: meetingData.maxParticipants && meetingData.maxParticipants > 0 ? meetingData.maxParticipants : 50,
+      isLocked: false,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    this.data.meetings!.unshift(newMeeting);
+    this.save();
+    mongoUpsert('meetings', newMeeting.id, newMeeting).catch(() => {});
+    return newMeeting;
+  }
+
+  updateMeeting(id: string, updates: Partial<Meeting> & { password?: string }): Meeting | null {
+    this.ensureMeetingArrays();
+    const index = this.data.meetings!.findIndex(m => m.id === id || m.meetingCode === id);
+    if (index === -1) return null;
+
+    const current = this.data.meetings![index];
+    let passwordHash = current.passwordHash;
+    let hasPassword = current.hasPassword;
+
+    if (updates.password !== undefined) {
+      if (updates.password && updates.password.trim()) {
+        const hp = hashPassword(updates.password.trim());
+        passwordHash = hp.hash + ':' + hp.salt;
+        hasPassword = true;
+      } else {
+        passwordHash = undefined;
+        hasPassword = false;
+      }
+    }
+
+    const { password, ...restUpdates } = updates;
+    const updated: Meeting = {
+      ...current,
+      ...restUpdates,
+      passwordHash,
+      hasPassword,
+      updatedAt: new Date().toISOString()
+    };
+
+    this.data.meetings![index] = updated;
+    this.save();
+    mongoUpsert('meetings', updated.id, updated).catch(() => {});
+    return updated;
+  }
+
+  verifyMeetingPassword(meeting: Meeting, passwordAttempt: string): boolean {
+    if (!meeting.hasPassword || !meeting.passwordHash) return true;
+    const parts = meeting.passwordHash.split(':');
+    if (parts.length !== 2) return false;
+    return verifyPassword(passwordAttempt, parts[0], parts[1]);
+  }
+
+  deleteMeeting(id: string): boolean {
+    this.ensureMeetingArrays();
+    const initLen = this.data.meetings!.length;
+    this.data.meetings = this.data.meetings!.filter(m => m.id !== id && m.meetingCode !== id);
+    this.save();
+    mongoDelete('meetings', id).catch(() => {});
+    return this.data.meetings!.length < initLen;
+  }
+
+  // --- Meeting Participants ---
+  getMeetingParticipants(meetingId: string): MeetingParticipant[] {
+    this.ensureMeetingArrays();
+    return (this.data.meetingParticipants || []).filter(p => p.meetingId === meetingId);
+  }
+
+  upsertMeetingParticipant(meetingId: string, participantData: {
+    userId?: string;
+    displayName: string;
+    role?: MeetingParticipant['role'];
+    admissionStatus?: AdmissionStatus;
+    connectionStatus?: MeetingParticipant['connectionStatus'];
+    identity?: string;
+  }): MeetingParticipant {
+    this.ensureMeetingArrays();
+    const now = new Date().toISOString();
+    let participant = this.data.meetingParticipants!.find(
+      p => p.meetingId === meetingId && ((p.userId && p.userId === participantData.userId) || p.identity === participantData.identity)
+    );
+
+    if (participant) {
+      if (participantData.displayName) participant.displayName = participantData.displayName;
+      if (participantData.admissionStatus) participant.admissionStatus = participantData.admissionStatus;
+      if (participantData.connectionStatus) participant.connectionStatus = participantData.connectionStatus;
+      if (participantData.role) participant.role = participantData.role;
+      if (participantData.identity) participant.identity = participantData.identity;
+      participant.joinedAt = participant.joinedAt || now;
+    } else {
+      participant = {
+        id: `mpt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        meetingId,
+        userId: participantData.userId,
+        displayName: participantData.displayName,
+        role: participantData.role || 'participant',
+        joinedAt: now,
+        admissionStatus: participantData.admissionStatus || 'waiting',
+        connectionStatus: participantData.connectionStatus || 'waiting',
+        identity: participantData.identity || `user_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`
+      };
+      this.data.meetingParticipants!.push(participant);
+    }
+
+    this.save();
+    mongoUpsert('meeting_participants', participant.id, participant).catch(() => {});
+    return participant;
+  }
+
+  updateParticipantAdmission(meetingId: string, participantId: string, status: AdmissionStatus): MeetingParticipant | null {
+    this.ensureMeetingArrays();
+    const p = this.data.meetingParticipants!.find(
+      item => item.meetingId === meetingId && (item.id === participantId || item.userId === participantId || item.identity === participantId)
+    );
+    if (!p) return null;
+
+    p.admissionStatus = status;
+    p.connectionStatus = status === 'admitted' ? 'connected' : 'disconnected';
+    this.save();
+    mongoUpsert('meeting_participants', p.id, p).catch(() => {});
+    return p;
+  }
+
+  // --- Meeting Messages ---
+  getMeetingMessages(meetingId: string): MeetingMessage[] {
+    this.ensureMeetingArrays();
+    return (this.data.meetingMessages || [])
+      .filter(m => m.meetingId === meetingId)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }
+
+  addMeetingMessage(meetingId: string, senderId: string, senderName: string, message: string): MeetingMessage {
+    this.ensureMeetingArrays();
+    const newMsg: MeetingMessage = {
+      id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      meetingId,
+      senderId,
+      senderName,
+      message: message.trim(),
+      createdAt: new Date().toISOString()
+    };
+
+    this.data.meetingMessages!.push(newMsg);
+    this.save();
+    mongoUpsert('meeting_messages', newMsg.id, newMsg).catch(() => {});
+    return newMsg;
   }
 }
 

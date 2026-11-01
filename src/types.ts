@@ -143,6 +143,7 @@ export interface GalleryItem {
   imageUrl: string;
   date: string;
   displayOrder: number;
+  caption?: string;
 }
 
 export interface ContactMessage {
@@ -206,6 +207,12 @@ export interface WebsiteSettings {
   registrationNumber?: string;
   footerCopyrightText?: string;
   footerBadgeText?: string;
+  // Contact & Legal Visibility On/Off Toggles
+  showOfficeAddress?: boolean;
+  showContactEmail?: boolean;
+  showContactPhone?: boolean;
+  showOfficeHours?: boolean;
+  showRegistrationNumber?: boolean;
   // SEO & Verification
   siteUrl?: string;
   metaDescription?: string;
@@ -244,3 +251,69 @@ export interface DashboardStats {
   monthlyApplications: { month: string; count: number }[];
   interestDistribution: { name: string; count: number }[];
 }
+
+// ----------------------------------------------------
+// LIVEKIT VIDEO MEETINGS DATA MODELS
+// ----------------------------------------------------
+
+export type MeetingStatus = 'Scheduled' | 'Active' | 'Ended' | 'Cancelled';
+export type ParticipantRole = 'host' | 'co-host' | 'participant';
+export type AdmissionStatus = 'waiting' | 'admitted' | 'rejected';
+export type ConnectionStatus = 'connected' | 'disconnected' | 'waiting';
+
+export interface Meeting {
+  id: string;
+  meetingCode: string;
+  roomName: string;
+  title: string;
+  description?: string;
+  hostId: string;
+  hostName: string;
+  scheduledStart?: string;
+  scheduledEnd?: string;
+  actualStart?: string;
+  actualEnd?: string;
+  status: MeetingStatus;
+  passwordHash?: string;
+  hasPassword?: boolean;
+  waitingRoomEnabled: boolean;
+  screenShareEnabled: boolean;
+  maxParticipants: number;
+  isLocked: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MeetingParticipant {
+  id: string;
+  meetingId: string;
+  userId?: string;
+  displayName: string;
+  role: ParticipantRole;
+  joinedAt?: string;
+  leftAt?: string;
+  admissionStatus: AdmissionStatus;
+  connectionStatus: ConnectionStatus;
+  identity?: string;
+}
+
+export interface MeetingMessage {
+  id: string;
+  meetingId: string;
+  senderId: string;
+  senderName: string;
+  message: string;
+  createdAt: string;
+}
+
+export interface MeetingAttendance {
+  id: string;
+  meetingId: string;
+  participantId: string;
+  displayName: string;
+  role: ParticipantRole;
+  joinedAt: string;
+  leftAt?: string;
+  durationSeconds?: number;
+}
+
