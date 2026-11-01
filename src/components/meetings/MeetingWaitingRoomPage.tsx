@@ -6,7 +6,17 @@ interface WaitingRoomProps {
   participantId: string;
   identity: string;
   displayName: string;
-  onAdmitted: (data: { token?: string; livekitUrl?: string; meeting: any; role: string; identity: string; displayName: string }) => void;
+  onAdmitted: (data: {
+    meeting: any;
+    role: string;
+    identity: string;
+    displayName: string;
+    jaasToken?: string | null;
+    jaasAppId?: string;
+    jaasRoomName?: string;
+    jaasDomain?: string;
+    jaasError?: string;
+  }) => void;
   onLeave: () => void;
 }
 
@@ -30,20 +40,23 @@ export const MeetingWaitingRoomPage: React.FC<WaitingRoomProps> = ({
         );
         if (res.ok) {
           const data = await res.json();
-          if (data.admissionStatus === 'admitted' && data.token) {
+          if (data.admissionStatus === 'admitted') {
             setStatus('admitted');
-            clearInterval(interval);
+            if (interval) clearInterval(interval);
             onAdmitted({
-              token: data.token,
-              livekitUrl: data.livekitUrl,
-              meeting: data.meeting,
-              role: data.role,
-              identity: data.identity,
-              displayName: data.displayName
+              meeting: data.meeting || meeting,
+              role: data.role || 'participant',
+              identity: data.identity || identity,
+              displayName: data.displayName || displayName,
+              jaasToken: data.jaasToken,
+              jaasAppId: data.jaasAppId,
+              jaasRoomName: data.jaasRoomName,
+              jaasDomain: data.jaasDomain,
+              jaasError: data.jaasError
             });
           } else if (data.admissionStatus === 'rejected') {
             setStatus('rejected');
-            clearInterval(interval);
+            if (interval) clearInterval(interval);
           }
         }
       } catch (err) {
@@ -57,7 +70,7 @@ export const MeetingWaitingRoomPage: React.FC<WaitingRoomProps> = ({
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [meeting.id, participantId, identity, onAdmitted]);
+  }, [meeting, participantId, identity, displayName, onAdmitted]);
 
   if (status === 'rejected') {
     return (

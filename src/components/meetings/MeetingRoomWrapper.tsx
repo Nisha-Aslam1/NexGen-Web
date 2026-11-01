@@ -10,17 +10,23 @@ interface MeetingRoomWrapperProps {
 }
 
 export const MeetingRoomWrapper: React.FC<MeetingRoomWrapperProps> = ({ meetingCode: propCode }) => {
-  const { selectedMeetingCode, setActivePage } = useApp();
+  const { selectedMeetingCode } = useApp();
   const code = propCode || selectedMeetingCode || 'nex-demo';
 
   const [step, setStep] = useState<'join' | 'waiting' | 'room' | 'ended'>('join');
 
-  // Meeting Session State
+  // Meeting Session & JaaS State
   const [meeting, setMeeting] = useState<any>(null);
   const [role, setRole] = useState<string>('participant');
   const [participantId, setParticipantId] = useState<string>('');
   const [identity, setIdentity] = useState<string>('');
   const [displayName, setDisplayName] = useState<string>('');
+
+  const [jaasToken, setJaasToken] = useState<string | null>(null);
+  const [jaasAppId, setJaasAppId] = useState<string>('');
+  const [jaasRoomName, setJaasRoomName] = useState<string>('');
+  const [jaasDomain, setJaasDomain] = useState<string>('8x8.vc');
+  const [jaasError, setJaasError] = useState<string | undefined>(undefined);
 
   const handleWaiting = (data: { meeting: any; participantId: string; identity: string; displayName: string }) => {
     setMeeting(data.meeting);
@@ -30,11 +36,26 @@ export const MeetingRoomWrapper: React.FC<MeetingRoomWrapperProps> = ({ meetingC
     setStep('waiting');
   };
 
-  const handleAdmitted = (data: { token?: string; livekitUrl?: string; meeting: any; role: string; identity: string; displayName: string }) => {
+  const handleAdmitted = (data: {
+    meeting: any;
+    role: string;
+    identity: string;
+    displayName: string;
+    jaasToken?: string | null;
+    jaasAppId?: string;
+    jaasRoomName?: string;
+    jaasDomain?: string;
+    jaasError?: string;
+  }) => {
     setMeeting(data.meeting);
     setRole(data.role);
     setIdentity(data.identity);
     setDisplayName(data.displayName);
+    if (data.jaasToken !== undefined) setJaasToken(data.jaasToken);
+    if (data.jaasAppId) setJaasAppId(data.jaasAppId);
+    if (data.jaasRoomName) setJaasRoomName(data.jaasRoomName);
+    if (data.jaasDomain) setJaasDomain(data.jaasDomain);
+    if (data.jaasError) setJaasError(data.jaasError);
     setStep('room');
   };
 
@@ -62,6 +83,11 @@ export const MeetingRoomWrapper: React.FC<MeetingRoomWrapperProps> = ({ meetingC
   if (step === 'room') {
     return (
       <LiveMeetingRoom
+        jaasToken={jaasToken}
+        jaasAppId={jaasAppId}
+        jaasRoomName={jaasRoomName}
+        jaasDomain={jaasDomain}
+        jaasError={jaasError}
         meeting={meeting}
         role={role}
         identity={identity}

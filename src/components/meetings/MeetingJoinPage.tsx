@@ -8,16 +8,24 @@ import {
   ShieldAlert,
   Lock,
   UserCheck,
-  Sparkles,
   ArrowRight,
   RefreshCw,
-  Sliders,
   LogOut
 } from 'lucide-react';
 
 interface MeetingJoinPageProps {
   meetingCode: string;
-  onAdmitted: (data: { token?: string; livekitUrl?: string; meeting: any; role: string; identity: string; displayName: string }) => void;
+  onAdmitted: (data: {
+    meeting: any;
+    role: string;
+    identity: string;
+    displayName: string;
+    jaasToken?: string | null;
+    jaasAppId?: string;
+    jaasRoomName?: string;
+    jaasDomain?: string;
+    jaasError?: string;
+  }) => void;
   onWaiting: (data: { meeting: any; participantId: string; identity: string; displayName: string }) => void;
 }
 
@@ -133,7 +141,7 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
         throw new Error(data.error || 'Failed to join meeting');
       }
 
-      // Stop local preview before handing control to LiveKit
+      // Stop local preview before entering room
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach(t => t.stop());
       }
@@ -145,14 +153,17 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
           identity: data.identity,
           displayName: data.displayName
         });
-      } else if (data.token) {
+      } else {
         onAdmitted({
-          token: data.token,
-          livekitUrl: data.livekitUrl,
           meeting: data.meeting,
           role: data.role,
           identity: data.identity,
-          displayName: data.displayName
+          displayName: data.displayName,
+          jaasToken: data.jaasToken,
+          jaasAppId: data.jaasAppId,
+          jaasRoomName: data.jaasRoomName,
+          jaasDomain: data.jaasDomain,
+          jaasError: data.jaasError
         });
       }
     } catch (err: any) {
@@ -200,7 +211,7 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
           <img src="/logo.png" alt="NexGen Council" className="h-10 w-10 object-contain" />
           <div>
             <span className="font-serif font-bold text-white text-base block leading-none">NexGen Council Meetings</span>
-            <span className="text-[10px] text-amber-400 uppercase tracking-widest font-semibold">NexGen Video Conference Platform</span>
+            <span className="text-[10px] text-amber-400 uppercase tracking-widest font-semibold">JaaS Encrypted Video Platform</span>
           </div>
         </div>
 
@@ -372,7 +383,7 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
 
       {/* Watermark Footer */}
       <footer className="p-4 text-center text-xs text-slate-500 border-t border-slate-900">
-        NexGen Encrypted Video Infrastructure • Developed by Nisha Aslam
+        NexGen Council JaaS Video Platform
       </footer>
     </div>
   );
