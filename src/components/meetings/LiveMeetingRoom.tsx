@@ -12,8 +12,9 @@ import {
   AlertCircle,
   PhoneOff,
   Video,
-  Key,
-  Info
+  Info,
+  RefreshCw,
+  Eye
 } from 'lucide-react';
 
 interface LiveMeetingRoomProps {
@@ -129,51 +130,64 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
     return () => clearInterval(interval);
   }, [meeting.id]);
 
-  // Initialize Jitsi External API iframe
+  // Initialize Jitsi External API iframe safely
   useEffect(() => {
     let isMounted = true;
+    let safetyTimer: any = null;
 
-    const loadJitsiScriptAndInit = async () => {
+    const cleanDomain = (jaasDomain || '8x8.vc').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    
+    // Resolve App ID: use passed jaasAppId or extract from roomName or fallback
+    const appId = jaasAppId || 
+      (jaasRoomName && jaasRoomName.includes('/') ? jaasRoomName.split('/')[0] : '') || 
+      'vpaas-magic-cookie-4fc8c8b3a1ce4204b19297c14ce33c02';
+
+    // Official 8x8 JaaS External API script URL MUST include the App ID
+    const scriptUrl = appId
+      ? `https://${cleanDomain}/${appId}/external_api.js`
+      : `https://${cleanDomain}/external_api.js`;
+
+    const loadScript = (): Promise<void> => {
+      return new Promise((resolve, reject) => {
+        if ((window as any).JitsiMeetExternalAPI) {
+          resolve();
+          return;
+        }
+        const existingScript = document.querySelector(`script[src="${scriptUrl}"]`);
+        if (existingScript) {
+          existingScript.addEventListener('load', () => resolve());
+          existingScript.addEventListener('error', () => reject(new Error(`Failed to load JaaS script from ${scriptUrl}`)));
+          return;
+        }
+        const script = document.createElement('script');
+        script.src = scriptUrl;
+        script.async = true;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error(`Failed to load 8x8 JaaS External API script from ${scriptUrl}`));
+        document.body.appendChild(script);
+      });
+    };
+
+    const loadJitsiAndInit = async () => {
       setJitsiLoading(true);
       setLoadError(null);
-
-      // Load 8x8.vc External API script dynamically
-      const scriptUrl = `https://${jaasDomain}/external_api.js`;
-
-      const loadScript = (): Promise<void> => {
-        return new Promise((resolve, reject) => {
-          if ((window as any).JitsiMeetExternalAPI) {
-            resolve();
-            return;
-          }
-          const existingScript = document.querySelector(`script[src="${scriptUrl}"]`);
-          if (existingScript) {
-            existingScript.addEventListener('load', () => resolve());
-            existingScript.addEventListener('error', () => reject(new Error('Failed to load Jitsi API script')));
-            return;
-          }
-          const script = document.createElement('script');
-          script.src = scriptUrl;
-          script.async = true;
-          script.onload = () => resolve();
-          script.onerror = () => reject(new Error(`Failed to load JaaS External API script from ${scriptUrl}`));
-          document.body.appendChild(script);
-        });
-      };
 
       try {
         await loadScript();
 
         if (!isMounted || !jitsiContainerRef.current) return;
 
-        // Clean up any existing Jitsi instance
+        // Clean up any existing Jitsi instance to avoid duplicates (e.g. in React StrictMode)
         if (jitsiApiRef.current) {
-          jitsiApiRef.current.dispose();
+          try { jitsiApiRef.current.dispose(); } catch {}
           jitsiApiRef.current = null;
         }
 
-        const domain = jaasDomain || '8x8.vc';
-        const targetRoomName = jaasRoomName || (jaasAppId ? `${jaasAppId}/${meeting.meetingCode}` : meeting.meetingCode);
+        // Clear container DOM node before creating iframe
+        jitsiContainerRef.current.innerHTML = '';
+
+        const rawCode = meeting?.meetingCode || initialMeeting?.meetingCode || 'nex-demo';
+        const targetRoomName = jaasRoomName || (appId ? `${appId}/${rawCode}` : rawCode);
 
         const options: any = {
           roomName: targetRoomName,
@@ -182,7 +196,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
           height: '100%',
           parentNode: jitsiContainerRef.current,
           userInfo: {
-            displayName: displayName
+            displayName: displayName || 'Participant'
           },
           configOverwrite: {
             startWithAudioMuted: false,
@@ -206,54 +220,73 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
           }
         };
 
-        const api = new (window as any).JitsiMeetExternalAPI(domain, options);
+        // Instantiate Jitsi API with exact domain string "8x8.vc"
+        const api = new (window as any).JitsiMeetExternalAPI('8x8.vc', options);
         jitsiApiRef.current = api;
 
-        // Attach Jitsi Event Listeners
-        api.addEventListener('videoConferenceJoined', () => {
+        const dismissOverlay = () => {
           if (isMounted) {
             setJitsiLoading(false);
             setJitsiConnected(true);
           }
+        };
+
+        // Event Listeners for Overlay Dismissal
+        api.addEventListener('videoConferenceJoined', dismissOverlay);
+        api.addEventListener('conferenceJoined', dismissOverlay);
+        api.addEventListener('readyToClose', () => { if (isMounted) onLeave(); });
+        api.addEventListener('videoConferenceLeft', () => { if (isMounted) onLeave(); });
+
+        // Listen for iframe load event
+        const iframe = jitsiContainerRef.current.querySelector('iframe');
+        if (iframe) {
+          iframe.addEventListener('load', () => {
+            setTimeout(dismissOverlay, 1200);
+          });
+        }
+
+        // Safety fallback timer: Ensure loading overlay is hidden after 3.5s so iframe is interactive
+        safetyTimer = setTimeout(() => {
+          dismissOverlay();
+        }, 3500);
+
+        // Error Listeners
+        api.addEventListener('errorOccurred', (err: any) => {
+          console.error('[JaaS Error Event]:', err);
+          if (isMounted && err?.fatal) {
+            setLoadError(err.message || 'A video conference error occurred.');
+            setJitsiLoading(false);
+          }
         });
 
-        api.addEventListener('videoConferenceLeft', () => {
-          onLeave();
+        api.addEventListener('cameraError', (err: any) => {
+          console.warn('[JaaS Camera Warning]:', err);
         });
 
-        api.addEventListener('readyToClose', () => {
-          onLeave();
-        });
-
-        api.addEventListener('participantJoined', (participant: any) => {
-          console.log('[JaaS] Remote participant joined:', participant);
-        });
-
-        api.addEventListener('participantLeft', (participant: any) => {
-          console.log('[JaaS] Remote participant left:', participant);
+        api.addEventListener('micError', (err: any) => {
+          console.warn('[JaaS Mic Warning]:', err);
         });
 
       } catch (err: any) {
-        console.error('[JaaS] Initialization Error:', err);
+        console.error('[JaaS Initialization Error]:', err);
         if (isMounted) {
-          setLoadError(err.message || 'Failed to initialize Jitsi video container');
+          setLoadError(err.message || 'Failed to load 8x8 JaaS video container.');
           setJitsiLoading(false);
         }
       }
     };
 
-    loadJitsiScriptAndInit();
+    loadJitsiAndInit();
 
     return () => {
       isMounted = false;
+      if (safetyTimer) clearTimeout(safetyTimer);
       if (jitsiApiRef.current) {
-        try {
-          jitsiApiRef.current.dispose();
-        } catch {}
+        try { jitsiApiRef.current.dispose(); } catch {}
         jitsiApiRef.current = null;
       }
     };
-  }, [jaasToken, jaasAppId, jaasRoomName, jaasDomain, meeting.meetingCode, displayName]);
+  }, [jaasToken, jaasAppId, jaasRoomName, jaasDomain, meeting?.meetingCode, displayName]);
 
   // Host Action: Admit Waiting Participant
   const handleAdmitParticipant = async (pId: string, admitAll = false) => {
@@ -440,64 +473,91 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
           </button>
 
-          {isHost && (
+          {isHost ? (
             <button
               onClick={handleEndMeeting}
               className="px-3 py-1.5 rounded-xl bg-rose-600/20 border border-rose-500/40 hover:bg-rose-600 text-rose-300 hover:text-white text-xs font-bold transition-all cursor-pointer"
             >
               End for All
             </button>
+          ) : (
+            <button
+              onClick={onLeave}
+              className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
+            >
+              <PhoneOff className="w-3.5 h-3.5" />
+              <span>Leave</span>
+            </button>
           )}
         </div>
       </header>
 
-      {/* JaaS Credentials Configuration Missing Notice Banner (if applicable) */}
+      {/* JaaS Credentials Notice Banner (if error reported by server) */}
       {jaasError && (
         <div className="bg-amber-500/15 border-b border-amber-500/30 px-6 py-2.5 text-xs text-amber-200 flex items-center justify-between z-20">
           <div className="flex items-center gap-2">
             <Info className="w-4 h-4 text-amber-400 shrink-0" />
             <span>
-              <strong>JaaS Production Key Notice:</strong> {jaasError}
+              <strong>JaaS Private Key Notice:</strong> {jaasError}
             </span>
           </div>
           <span className="text-[10px] bg-amber-500/20 px-2 py-0.5 rounded font-mono text-amber-300">
-            JAAS_APP_ID required
+            JAAS_APP_ID
           </span>
         </div>
       )}
 
       {/* Main Video & Sidebar Container */}
       <main className="flex-1 relative flex overflow-hidden">
-        {/* Video Frame */}
-        <div className="flex-1 relative bg-slate-950 flex flex-col items-center justify-center">
+        {/* Video Frame Container */}
+        <div className="flex-1 relative bg-slate-950 flex flex-col items-center justify-center min-h-0 w-full h-full">
+          {/* Connecting Overlay with Automatic Hiding & Manual Dismissal */}
           {jitsiLoading && (
-            <div className="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center z-10 p-6 text-center space-y-4">
+            <div className="absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center z-10 p-6 text-center space-y-4 backdrop-blur-xs">
               <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
               <h2 className="text-lg font-serif font-bold text-white">Connecting to Jitsi Video Conference...</h2>
               <p className="text-xs text-slate-400 max-w-sm">
                 Authenticating encrypted WebRTC media session on <strong>8x8.vc</strong>
               </p>
+              <button
+                type="button"
+                onClick={() => setJitsiLoading(false)}
+                className="mt-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold border border-slate-700 transition-colors cursor-pointer flex items-center gap-1.5"
+              >
+                <Eye className="w-3.5 h-3.5" />
+                <span>Show Video Stream</span>
+              </button>
             </div>
           )}
 
+          {/* Connection / Load Error Modal */}
           {loadError && (
-            <div className="absolute inset-0 bg-slate-950 flex items-center justify-center z-10 p-6">
+            <div className="absolute inset-0 bg-slate-950/95 flex items-center justify-center z-20 p-6 backdrop-blur-xs">
               <div className="max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center space-y-4 shadow-2xl">
                 <AlertCircle className="w-10 h-10 text-rose-500 mx-auto" />
-                <h3 className="text-lg font-bold text-white">Connection Error</h3>
+                <h3 className="text-lg font-bold text-white">Conference Error</h3>
                 <p className="text-xs text-slate-400">{loadError}</p>
-                <button
-                  onClick={onLeave}
-                  className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-xl text-xs"
-                >
-                  Return to Portal
-                </button>
+                <div className="flex items-center justify-center gap-3 pt-2">
+                  <button
+                    onClick={() => window.location.reload()}
+                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl text-xs transition-colors cursor-pointer flex items-center gap-1.5"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Retry Connection</span>
+                  </button>
+                  <button
+                    onClick={onLeave}
+                    className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl text-xs transition-colors cursor-pointer"
+                  >
+                    Exit Room
+                  </button>
+                </div>
               </div>
             </div>
           )}
 
-          {/* Jitsi External API Container */}
-          <div ref={jitsiContainerRef} className="w-full h-full min-h-0 border-0" />
+          {/* Jitsi External API Container Node */}
+          <div ref={jitsiContainerRef} className="w-full h-full min-h-0 flex-1 relative bg-slate-950 border-0 overflow-hidden" />
         </div>
 
         {/* Right Drawer Panel (Participants / Chat / Waiting Room) */}

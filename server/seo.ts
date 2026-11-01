@@ -451,6 +451,18 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
     };
   }
 
+  // Handle Meeting Room / Conferencing (/room/:code)
+  if (cleanPath.startsWith('/room/') || cleanPath === '/room') {
+    return {
+      title: `Live Video Conference Room | ${orgName}`,
+      description: 'Secure interactive video meeting room on NexGen Council platform.',
+      canonicalUrl: `${siteUrl}${cleanPath}`,
+      ogType: 'website',
+      ogImage: defaultLogo,
+      noindex: true
+    };
+  }
+
   // Handle Admin & Protected Routes (NOINDEX)
   if (cleanPath === '/admin' || cleanPath.startsWith('/admin/') || cleanPath === '/admin-login' || cleanPath === '/login') {
     return {
