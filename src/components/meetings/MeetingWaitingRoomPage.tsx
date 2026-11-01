@@ -6,7 +6,7 @@ interface WaitingRoomProps {
   participantId: string;
   identity: string;
   displayName: string;
-  onAdmitted: (data: { token: string; livekitUrl: string; meeting: any; role: string; identity: string; displayName: string }) => void;
+  onAdmitted: (data: { token?: string; livekitUrl?: string; meeting: any; role: string; identity: string; displayName: string }) => void;
   onLeave: () => void;
 }
 

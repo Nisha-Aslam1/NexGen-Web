@@ -1,6 +1,5 @@
 import express, { Request, Response } from 'express';
 import { db } from './db.ts';
-import { generateLiveKitAccessToken, getRoomServiceClient, getLiveKitCredentials } from './livekit.ts';
 import { Meeting } from '../src/types.ts';
 
 export const meetingsRouter = express.Router();
@@ -139,8 +138,8 @@ meetingsRouter.delete('/meetings/:id', (req: Request, res: Response) => {
   });
 });
 
-// 6. POST /api/meetings/:code/join - Join meeting request (Public / Auth)
-meetingsRouter.post('/meetings/:code/join', async (req: Request, res: Response) => {
+// 6. POST /api/meetings/:code/join - Join meeting request
+meetingsRouter.post('/meetings/:code/join', (req: Request, res: Response) => {
   const code = req.params.code;
   const meeting = db.getMeetingByCode(code);
 
@@ -186,7 +185,6 @@ meetingsRouter.post('/meetings/:code/join', async (req: Request, res: Response) 
 
   // Waiting Room Logic
   if (meeting.waitingRoomEnabled && !isHost) {
-    // Check existing participant record
     const existingP = db.getMeetingParticipants(meeting.id).find(p => p.identity === identity || (user?.userId && p.userId === user.userId));
     
     if (!existingP || existingP.admissionStatus === 'waiting') {
@@ -213,7 +211,7 @@ meetingsRouter.post('/meetings/:code/join', async (req: Request, res: Response) 
     }
   }
 
-  // Admitted / Is Host / No Waiting Room -> Upsert Admitted Record & Issue Token
+  // Admitted / Is Host / No Waiting Room -> Upsert Admitted Record
   const pRecord = db.upsertMeetingParticipant(meeting.id, {
     userId: user?.userId,
     displayName: finalDisplayName,
@@ -223,21 +221,7 @@ meetingsRouter.post('/meetings/:code/join', async (req: Request, res: Response) 
     identity
   });
 
-  const livekitToken = await generateLiveKitAccessToken({
-    roomName: meeting.roomName,
-    participantName: finalDisplayName,
-    participantIdentity: identity,
-    isHost,
-    canPublish: true,
-    canSubscribe: true,
-    canPublishData: true
-  });
-
-  const { publicUrl } = getLiveKitCredentials();
-
   res.json({
-    token: livekitToken,
-    livekitUrl: publicUrl,
     meeting: toPublicMeeting(meeting),
     role: isHost ? 'host' : 'participant',
     participantId: pRecord.id,
@@ -316,7 +300,7 @@ meetingsRouter.post('/meetings/:id/reject', (req: Request, res: Response) => {
 });
 
 // 10. GET /api/meetings/:id/admission-status - Participant waiting room status polling
-meetingsRouter.get('/meetings/:id/admission-status', async (req: Request, res: Response) => {
+meetingsRouter.get('/meetings/:id/admission-status', (req: Request, res: Response) => {
   const id = req.params.id;
   const meeting = db.getMeetingById(id);
   if (!meeting) {
@@ -335,22 +319,8 @@ meetingsRouter.get('/meetings/:id/admission-status', async (req: Request, res: R
   }
 
   if (p.admissionStatus === 'admitted') {
-    const livekitToken = await generateLiveKitAccessToken({
-      roomName: meeting.roomName,
-      participantName: p.displayName,
-      participantIdentity: p.identity || p.id,
-      isHost: p.role === 'host',
-      canPublish: true,
-      canSubscribe: true,
-      canPublishData: true
-    });
-
-    const { publicUrl } = getLiveKitCredentials();
-
     return res.json({
       admissionStatus: 'admitted',
-      token: livekitToken,
-      livekitUrl: publicUrl,
       meeting: toPublicMeeting(meeting),
       role: p.role,
       displayName: p.displayName,
@@ -382,28 +352,17 @@ meetingsRouter.post('/meetings/:id/unlock', (req: Request, res: Response) => {
 });
 
 // 13. POST /api/meetings/:id/end - Host end meeting for all
-meetingsRouter.post('/meetings/:id/end', async (req: Request, res: Response) => {
+meetingsRouter.post('/meetings/:id/end', (req: Request, res: Response) => {
   const id = req.params.id;
   const meeting = db.getMeetingById(id);
   if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
 
   db.updateMeeting(meeting.id, { status: 'Ended', actualEnd: new Date().toISOString() });
-
-  // Delete room on LiveKit server
-  const roomService = getRoomServiceClient();
-  if (roomService) {
-    try {
-      await roomService.deleteRoom(meeting.roomName);
-    } catch (err: any) {
-      console.warn('[LiveKit] Delete room warning:', err.message);
-    }
-  }
-
   res.json({ message: 'Meeting ended for everyone' });
 });
 
 // 14. POST /api/meetings/:id/kick - Host remove participant
-meetingsRouter.post('/meetings/:id/kick', async (req: Request, res: Response) => {
+meetingsRouter.post('/meetings/:id/kick', (req: Request, res: Response) => {
   const id = req.params.id;
   const meeting = db.getMeetingById(id);
   if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
@@ -413,42 +372,11 @@ meetingsRouter.post('/meetings/:id/kick', async (req: Request, res: Response) =>
     return res.status(400).json({ error: 'Participant identity is required' });
   }
 
-  const roomService = getRoomServiceClient();
-  if (roomService) {
-    try {
-      await roomService.removeParticipant(meeting.roomName, participantIdentity);
-    } catch (err: any) {
-      console.warn('[LiveKit] Kick participant notice:', err.message);
-    }
-  }
-
+  db.updateParticipantAdmission(meeting.id, participantIdentity, 'rejected');
   res.json({ message: 'Participant removed from room' });
 });
 
-// 15. POST /api/meetings/:id/mute - Host mute participant track
-meetingsRouter.post('/meetings/:id/mute', async (req: Request, res: Response) => {
-  const id = req.params.id;
-  const meeting = db.getMeetingById(id);
-  if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
-
-  const { participantIdentity, trackSid, muted } = req.body;
-  if (!participantIdentity || !trackSid) {
-    return res.status(400).json({ error: 'participantIdentity and trackSid required' });
-  }
-
-  const roomService = getRoomServiceClient();
-  if (roomService) {
-    try {
-      await roomService.mutePublishedTrack(meeting.roomName, participantIdentity, trackSid, muted ?? true);
-    } catch (err: any) {
-      console.warn('[LiveKit] Mute track notice:', err.message);
-    }
-  }
-
-  res.json({ message: 'Track mute status updated' });
-});
-
-// 16. GET /api/meetings/:id/participants - Get meeting attendance & participants
+// 15. GET /api/meetings/:id/participants - Get meeting attendance & participants
 meetingsRouter.get('/meetings/:id/participants', (req: Request, res: Response) => {
   const id = req.params.id;
   const meeting = db.getMeetingById(id);
@@ -458,7 +386,7 @@ meetingsRouter.get('/meetings/:id/participants', (req: Request, res: Response) =
   res.json({ participants });
 });
 
-// 17. GET /api/meetings/:id/messages - Get meeting chat messages
+// 16. GET /api/meetings/:id/messages - Get meeting chat messages
 meetingsRouter.get('/meetings/:id/messages', (req: Request, res: Response) => {
   const id = req.params.id;
   const meeting = db.getMeetingById(id);
@@ -468,7 +396,7 @@ meetingsRouter.get('/meetings/:id/messages', (req: Request, res: Response) => {
   res.json({ messages });
 });
 
-// 18. POST /api/meetings/:id/messages - Save chat message to MongoDB
+// 17. POST /api/meetings/:id/messages - Save chat message to MongoDB
 meetingsRouter.post('/meetings/:id/messages', (req: Request, res: Response) => {
   const id = req.params.id;
   const meeting = db.getMeetingById(id);

@@ -17,8 +17,6 @@ export const MeetingRoomWrapper: React.FC<MeetingRoomWrapperProps> = ({ meetingC
 
   // Meeting Session State
   const [meeting, setMeeting] = useState<any>(null);
-  const [livekitToken, setLivekitToken] = useState<string>('');
-  const [livekitUrl, setLivekitUrl] = useState<string>('');
   const [role, setRole] = useState<string>('participant');
   const [participantId, setParticipantId] = useState<string>('');
   const [identity, setIdentity] = useState<string>('');
@@ -32,9 +30,7 @@ export const MeetingRoomWrapper: React.FC<MeetingRoomWrapperProps> = ({ meetingC
     setStep('waiting');
   };
 
-  const handleAdmitted = (data: { token: string; livekitUrl: string; meeting: any; role: string; identity: string; displayName: string }) => {
-    setLivekitToken(data.token);
-    setLivekitUrl(data.livekitUrl);
+  const handleAdmitted = (data: { token?: string; livekitUrl?: string; meeting: any; role: string; identity: string; displayName: string }) => {
     setMeeting(data.meeting);
     setRole(data.role);
     setIdentity(data.identity);
@@ -66,8 +62,6 @@ export const MeetingRoomWrapper: React.FC<MeetingRoomWrapperProps> = ({ meetingC
   if (step === 'room') {
     return (
       <LiveMeetingRoom
-        token={livekitToken}
-        livekitUrl={livekitUrl}
         meeting={meeting}
         role={role}
         identity={identity}

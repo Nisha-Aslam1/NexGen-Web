@@ -17,7 +17,7 @@ import {
 
 interface MeetingJoinPageProps {
   meetingCode: string;
-  onAdmitted: (data: { token: string; livekitUrl: string; meeting: any; role: string; identity: string; displayName: string }) => void;
+  onAdmitted: (data: { token?: string; livekitUrl?: string; meeting: any; role: string; identity: string; displayName: string }) => void;
   onWaiting: (data: { meeting: any; participantId: string; identity: string; displayName: string }) => void;
 }
 
@@ -200,7 +200,7 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
           <img src="/logo.png" alt="NexGen Council" className="h-10 w-10 object-contain" />
           <div>
             <span className="font-serif font-bold text-white text-base block leading-none">NexGen Council Meetings</span>
-            <span className="text-[10px] text-amber-400 uppercase tracking-widest font-semibold">LiveKit Conference Platform</span>
+            <span className="text-[10px] text-amber-400 uppercase tracking-widest font-semibold">NexGen Video Conference Platform</span>
           </div>
         </div>
 

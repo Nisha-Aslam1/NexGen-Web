@@ -1,16 +1,4 @@
 import React, { useEffect, useState, useRef } from 'react';
-import {
-  Room,
-  RoomEvent,
-  Track,
-  VideoPresets,
-  LocalVideoTrack,
-  LocalAudioTrack,
-  RemoteTrackPublication,
-  RemoteParticipant,
-  Participant,
-  DataPacket_Kind
-} from 'livekit-client';
 import { useApp } from '../../context/AppContext.tsx';
 import {
   Mic,
@@ -29,17 +17,11 @@ import {
   Check,
   X,
   Send,
-  MoreVertical,
-  Volume2,
   UserX,
-  UserCheck,
-  AlertCircle,
-  Copy
+  AlertCircle
 } from 'lucide-react';
 
 interface LiveMeetingRoomProps {
-  token: string;
-  livekitUrl: string;
   meeting: any;
   role: string;
   identity: string;
@@ -48,8 +30,6 @@ interface LiveMeetingRoomProps {
 }
 
 export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
-  token,
-  livekitUrl,
   meeting: initialMeeting,
   role,
   identity,
@@ -59,20 +39,31 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
   const { addToast, authToken } = useApp();
 
   const [meeting, setMeeting] = useState(initialMeeting);
-  const [room, setRoom] = useState<Room | null>(null);
-  const [isConnecting, setIsConnecting] = useState(true);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [isConnecting, setIsConnecting] = useState(false);
 
   // Audio & Video State
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [screenSharing, setScreenSharing] = useState(false);
 
-  // Participants & Tracks State
-  const [participants, setParticipants] = useState<Participant[]>([]);
-  const [activeSpeakerId, setActiveSpeakerId] = useState<string | null>(null);
+  // Media Stream
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const screenShareRef = useRef<HTMLVideoElement | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
 
-  // Drawer / UI State
+  // Participants State
+  const [participants, setParticipants] = useState<any[]>([
+    {
+      id: identity,
+      displayName,
+      role,
+      joinedAt: new Date().toISOString(),
+      isLocal: true
+    }
+  ]);
+
+  // UI State
   const [activeDrawer, setActiveDrawer] = useState<'participants' | 'chat' | 'security' | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [meetingSeconds, setMeetingSeconds] = useState(0);
@@ -90,7 +81,48 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
 
   const isHost = role === 'host' || meeting.hostId === identity;
 
-  // Timer counter
+  // Initialize camera and mic
+  useEffect(() => {
+    let mounted = true;
+
+    const startLocalMedia = async () => {
+      try {
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach(t => t.stop());
+        }
+
+        if (!camOn && !micOn) {
+          if (localVideoRef.current) localVideoRef.current.srcObject = null;
+          return;
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: camOn,
+          audio: micOn
+        });
+
+        if (mounted) {
+          mediaStreamRef.current = stream;
+          if (localVideoRef.current) {
+            localVideoRef.current.srcObject = stream;
+          }
+        }
+      } catch (err: any) {
+        console.warn('Local media access warning:', err);
+      }
+    };
+
+    startLocalMedia();
+
+    return () => {
+      mounted = false;
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(t => t.stop());
+      }
+    };
+  }, [camOn, micOn]);
+
+  // Meeting timer
   useEffect(() => {
     const timer = setInterval(() => {
       setMeetingSeconds(prev => prev + 1);
@@ -109,26 +141,47 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  // Poll Waiting Room (for Host)
+  // Poll Participants & Waiting Room
   useEffect(() => {
-    if (!isHost) return;
-
-    const fetchWaiting = async () => {
+    const fetchParticipantsAndWaiting = async () => {
       try {
-        const res = await fetch(`/api/meetings/${meeting.id}/waiting-room`);
-        if (res.ok) {
-          const data = await res.json();
-          setWaitingParticipants(data.waiting || []);
+        const [pRes, wRes] = await Promise.all([
+          fetch(`/api/meetings/${meeting.id}/participants`),
+          isHost ? fetch(`/api/meetings/${meeting.id}/waiting-room`) : Promise.resolve(null)
+        ]);
+
+        if (pRes.ok) {
+          const pData = await pRes.json();
+          const remoteList = pData.participants || [];
+          
+          // Ensure local user is represented
+          const hasLocal = remoteList.some((p: any) => p.userId === identity || p.displayName === displayName);
+          const fullList = [...remoteList];
+          if (!hasLocal) {
+            fullList.unshift({
+              id: identity,
+              displayName,
+              role,
+              joinedAt: new Date().toISOString(),
+              isLocal: true
+            });
+          }
+          setParticipants(fullList);
+        }
+
+        if (wRes && wRes.ok) {
+          const wData = await wRes.json();
+          setWaitingParticipants(wData.waiting || []);
         }
       } catch {}
     };
 
-    fetchWaiting();
-    const interval = setInterval(fetchWaiting, 3000);
+    fetchParticipantsAndWaiting();
+    const interval = setInterval(fetchParticipantsAndWaiting, 3000);
     return () => clearInterval(interval);
-  }, [meeting.id, isHost]);
+  }, [meeting.id, isHost, identity, displayName, role]);
 
-  // Fetch Chat History from MongoDB
+  // Fetch Chat History
   const fetchChatHistory = async () => {
     try {
       const res = await fetch(`/api/meetings/${meeting.id}/messages`);
@@ -141,131 +194,53 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
 
   useEffect(() => {
     fetchChatHistory();
+    const interval = setInterval(fetchChatHistory, 3000);
+    return () => clearInterval(interval);
   }, [meeting.id]);
 
-  // Initialize LiveKit Room
-  useEffect(() => {
-    let newRoom: Room | null = null;
-
-    const connectToLiveKit = async () => {
-      setIsConnecting(true);
-      setConnectionError(null);
-
-      try {
-        newRoom = new Room({
-          adaptiveStream: true,
-          dynacast: true,
-          videoCaptureDefaults: {
-            resolution: VideoPresets.h720.resolution
-          }
-        });
-
-        // Event listeners
-        newRoom.on(RoomEvent.Connected, () => {
-          setIsConnecting(false);
-          updateParticipants(newRoom!);
-        });
-
-        newRoom.on(RoomEvent.ParticipantConnected, () => {
-          updateParticipants(newRoom!);
-        });
-
-        newRoom.on(RoomEvent.ParticipantDisconnected, (p) => {
-          updateParticipants(newRoom!);
-          addToast(`${p.name || p.identity} left the room`, 'info');
-        });
-
-        newRoom.on(RoomEvent.TrackSubscribed, () => {
-          updateParticipants(newRoom!);
-        });
-
-        newRoom.on(RoomEvent.TrackUnsubscribed, () => {
-          updateParticipants(newRoom!);
-        });
-
-        newRoom.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
-          if (speakers.length > 0) {
-            setActiveSpeakerId(speakers[0].identity);
-          } else {
-            setActiveSpeakerId(null);
-          }
-        });
-
-        newRoom.on(RoomEvent.DataReceived, (payload, participant) => {
-          try {
-            const str = new TextDecoder().decode(payload);
-            const data = JSON.parse(str);
-            if (data.type === 'chat') {
-              setChatMessages(prev => [...prev, data.message]);
-              if (activeDrawer !== 'chat') {
-                setUnreadChatCount(prev => prev + 1);
-              }
-            }
-          } catch {}
-        });
-
-        newRoom.on(RoomEvent.Disconnected, () => {
-          onLeave();
-        });
-
-        // Connect
-        const wsUrl = livekitUrl.startsWith('ws') ? livekitUrl : `wss://${livekitUrl.replace(/^https?:\/\//, '')}`;
-        await newRoom.connect(wsUrl, token);
-
-        // Publish local camera and mic
-        await newRoom.localParticipant.enableCameraAndMicrophone();
-
-        setRoom(newRoom);
-        updateParticipants(newRoom);
-      } catch (err: any) {
-        console.error('LiveKit connection error:', err);
-        setConnectionError(err.message || 'Failed to connect to LiveKit server');
-        setIsConnecting(false);
-      }
-    };
-
-    connectToLiveKit();
-
-    return () => {
-      if (newRoom) {
-        newRoom.disconnect();
-      }
-    };
-  }, [token, livekitUrl]);
-
-  const updateParticipants = (r: Room) => {
-    const all = Array.from(r.remoteParticipants.values()) as Participant[];
-    if (r.localParticipant) {
-      all.unshift(r.localParticipant);
-    }
-    setParticipants(all);
-  };
-
   // Toggle Mic
-  const toggleMic = async () => {
-    if (!room) return;
-    const newState = !micOn;
-    await room.localParticipant.setMicrophoneEnabled(newState);
-    setMicOn(newState);
+  const toggleMic = () => {
+    if (mediaStreamRef.current) {
+      const audioTracks = mediaStreamRef.current.getAudioTracks();
+      audioTracks.forEach(t => (t.enabled = !micOn));
+    }
+    setMicOn(!micOn);
   };
 
   // Toggle Camera
-  const toggleCam = async () => {
-    if (!room) return;
-    const newState = !camOn;
-    await room.localParticipant.setCameraEnabled(newState);
-    setCamOn(newState);
+  const toggleCam = () => {
+    if (mediaStreamRef.current) {
+      const videoTracks = mediaStreamRef.current.getVideoTracks();
+      videoTracks.forEach(t => (t.enabled = !camOn));
+    }
+    setCamOn(!camOn);
   };
 
   // Toggle Screen Share
   const toggleScreenShare = async () => {
-    if (!room) return;
+    if (screenSharing) {
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach(t => t.stop());
+        screenStreamRef.current = null;
+      }
+      setScreenSharing(false);
+      return;
+    }
+
     try {
-      const newState = !screenSharing;
-      await room.localParticipant.setScreenShareEnabled(newState);
-      setScreenSharing(newState);
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      screenStreamRef.current = stream;
+      setScreenSharing(true);
+
+      stream.getVideoTracks()[0].onended = () => {
+        setScreenSharing(false);
+      };
+
+      if (screenShareRef.current) {
+        screenShareRef.current.srcObject = stream;
+      }
     } catch (err: any) {
-      addToast(err.message || 'Screen sharing failed', 'error');
+      addToast(err.message || 'Screen sharing cancelled', 'info');
     }
   };
 
@@ -283,7 +258,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
 
       if (res.ok) {
         addToast(admitAll ? 'Admitted all waiting participants' : 'Participant admitted', 'success');
-        setWaitingParticipants(prev => admitAll ? [] : prev.filter(w => w.id !== pId));
+        setWaitingParticipants(prev => (admitAll ? [] : prev.filter(w => w.id !== pId)));
       }
     } catch (err) {
       addToast('Error admitting participant', 'error');
@@ -330,7 +305,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
     }
   };
 
-  // Send Real-Time Chat Message
+  // Send Chat Message
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
@@ -338,30 +313,8 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
     const messageText = chatInput.trim();
     setChatInput('');
 
-    const newMsgObj = {
-      id: `msg_${Date.now()}`,
-      senderId: identity,
-      senderName: displayName,
-      message: messageText,
-      createdAt: new Date().toISOString()
-    };
-
-    // Broadcast via LiveKit Data Message
-    if (room) {
-      const payload = new TextEncoder().encode(
-        JSON.stringify({
-          type: 'chat',
-          message: newMsgObj
-        })
-      );
-      try {
-        await room.localParticipant.publishData(payload, DataPacket_Kind.RELIABLE);
-      } catch {}
-    }
-
-    // Save to MongoDB
     try {
-      await fetch(`/api/meetings/${meeting.id}/messages`, {
+      const res = await fetch(`/api/meetings/${meeting.id}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -370,9 +323,13 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
           senderId: identity
         })
       });
-    } catch {}
 
-    setChatMessages(prev => [...prev, newMsgObj]);
+      if (res.ok) {
+        fetchChatHistory();
+      }
+    } catch (err) {
+      addToast('Error sending message', 'error');
+    }
   };
 
   useEffect(() => {
@@ -394,36 +351,6 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
     }
   };
 
-  if (isConnecting) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center">
-        <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <h2 className="text-xl font-serif font-bold">Joining LiveKit Meeting Room...</h2>
-        <p className="text-xs text-slate-400 mt-1">Establishing encrypted WebRTC media connection</p>
-      </div>
-    );
-  }
-
-  if (connectionError) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center space-y-5 shadow-2xl">
-          <div className="w-16 h-16 rounded-2xl bg-rose-500/10 text-rose-400 flex items-center justify-center mx-auto border border-rose-500/20">
-            <AlertCircle className="w-8 h-8" />
-          </div>
-          <h2 className="text-2xl font-serif font-bold text-white">Connection Error</h2>
-          <p className="text-slate-400 text-xs">{connectionError}</p>
-          <button
-            onClick={onLeave}
-            className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm rounded-xl transition-colors cursor-pointer"
-          >
-            Back to Meeting Portal
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div
       ref={containerRef}
@@ -432,7 +359,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
       {/* Top Header Bar */}
       <header className="h-16 px-6 bg-slate-950/90 border-b border-slate-800/80 flex items-center justify-between z-20 backdrop-blur-md">
         <div className="flex items-center gap-3">
-          <img src="/logo.png" alt="NexGen" className="h-8 w-8 object-contain" />
+          <img src="/logo.png" alt="NexGen Council" className="h-8 w-8 object-contain" />
           <div>
             <h1 className="text-sm sm:text-base font-serif font-bold text-white leading-tight truncate max-w-xs sm:max-w-md">
               {meeting.title}
@@ -440,7 +367,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
               <span className="text-amber-400">{formatTime(meetingSeconds)}</span>
               <span>•</span>
-              <span className="text-slate-300">{participants.length} connected</span>
+              <span className="text-slate-300">{participants.length} in meeting</span>
             </div>
           </div>
         </div>
@@ -470,17 +397,53 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
       {/* Main Video Grid Area */}
       <main className="flex-1 relative flex overflow-hidden p-4">
         <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 items-center justify-center max-w-7xl mx-auto w-full auto-rows-fr">
-          {participants.map((p) => (
-            <ParticipantTile
-              key={p.identity}
-              participant={p}
-              isLocal={p === room?.localParticipant}
-              isSpeaking={p.identity === activeSpeakerId}
-            />
-          ))}
+          {/* Local User Video Tile */}
+          <div className="relative w-full h-full bg-slate-900 rounded-3xl overflow-hidden border border-slate-800 shadow-xl flex items-center justify-center aspect-video">
+            {camOn ? (
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full h-full object-cover transform -scale-x-100"
+              />
+            ) : (
+              <div className="w-20 h-20 rounded-full bg-slate-800 border-2 border-amber-400 flex items-center justify-center text-amber-300 text-2xl font-bold shadow-lg">
+                {displayName.slice(0, 2).toUpperCase()}
+              </div>
+            )}
+
+            <div className="absolute bottom-3 left-3 bg-slate-950/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-800 text-xs font-semibold text-white flex items-center gap-2">
+              <span>{displayName} (You)</span>
+              {micOn ? (
+                <Mic className="w-3.5 h-3.5 text-emerald-400" />
+              ) : (
+                <MicOff className="w-3.5 h-3.5 text-rose-400" />
+              )}
+            </div>
+          </div>
+
+          {/* Remote Participants Tiles */}
+          {participants
+            .filter((p) => p.displayName !== displayName)
+            .map((p, idx) => (
+              <div
+                key={p.id || idx}
+                className="relative w-full h-full bg-slate-900 rounded-3xl overflow-hidden border border-slate-800 shadow-xl flex items-center justify-center aspect-video"
+              >
+                <div className="w-20 h-20 rounded-full bg-slate-800 border-2 border-indigo-500/40 flex items-center justify-center text-indigo-300 text-2xl font-bold shadow-lg">
+                  {p.displayName ? p.displayName.slice(0, 2).toUpperCase() : 'PT'}
+                </div>
+
+                <div className="absolute bottom-3 left-3 bg-slate-950/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-800 text-xs font-semibold text-white flex items-center gap-2">
+                  <span>{p.displayName || 'Participant'}</span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                </div>
+              </div>
+            ))}
         </div>
 
-        {/* Right Drawer Panel (Participants / Chat) */}
+        {/* Right Drawer Panel */}
         {activeDrawer && (
           <aside className="w-80 sm:w-96 bg-slate-900 border-l border-slate-800 flex flex-col h-full z-30 shadow-2xl transition-all">
             {/* Drawer Header */}
@@ -489,13 +452,13 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                 {activeDrawer === 'participants' && (
                   <>
                     <Users className="w-4 h-4 text-blue-400" />
-                    <span>Meeting Participants ({participants.length})</span>
+                    <span>Meeting Roster ({participants.length})</span>
                   </>
                 )}
                 {activeDrawer === 'chat' && (
                   <>
                     <MessageSquare className="w-4 h-4 text-indigo-400" />
-                    <span>In-Meeting Chat</span>
+                    <span>In-Meeting Discussion</span>
                   </>
                 )}
               </div>
@@ -526,9 +489,14 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                     </div>
 
                     <div className="space-y-2">
-                      {waitingParticipants.map(wp => (
-                        <div key={wp.id} className="flex items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-xs">
-                          <span className="font-semibold text-white truncate max-w-[130px]">{wp.displayName}</span>
+                      {waitingParticipants.map((wp) => (
+                        <div
+                          key={wp.id}
+                          className="flex items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-xs"
+                        >
+                          <span className="font-semibold text-white truncate max-w-[130px]">
+                            {wp.displayName}
+                          </span>
                           <div className="flex items-center gap-1.5">
                             <button
                               onClick={() => handleAdmitParticipant(wp.id)}
@@ -551,25 +519,32 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
 
                 {/* Active Connected List */}
                 <div className="space-y-2">
-                  <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Connected ({participants.length})</div>
-                  {participants.map(p => (
-                    <div key={p.identity} className="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800/80 text-xs">
+                  <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                    Connected ({participants.length})
+                  </div>
+                  {participants.map((p, idx) => (
+                    <div
+                      key={p.id || idx}
+                      className="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800/80 text-xs"
+                    >
                       <div className="flex items-center gap-2.5">
                         <div className="w-8 h-8 rounded-full bg-slate-800 text-amber-300 font-bold flex items-center justify-center text-xs border border-slate-700">
-                          {p.name ? p.name.slice(0, 2).toUpperCase() : 'PT'}
+                          {p.displayName ? p.displayName.slice(0, 2).toUpperCase() : 'PT'}
                         </div>
                         <div>
                           <div className="font-semibold text-white">
-                            {p.name || p.identity} {p === room?.localParticipant && '(You)'}
+                            {p.displayName} {p.displayName === displayName && '(You)'}
                           </div>
-                          <div className="text-[10px] text-slate-500 capitalize">{p.identity === meeting.hostId ? 'Host' : 'Participant'}</div>
+                          <div className="text-[10px] text-slate-500 capitalize">
+                            {p.role || (p.displayName === meeting.hostName ? 'Host' : 'Participant')}
+                          </div>
                         </div>
                       </div>
 
                       {/* Host Actions */}
-                      {isHost && p !== room?.localParticipant && (
+                      {isHost && p.displayName !== displayName && (
                         <button
-                          onClick={() => handleKickParticipant(p.identity)}
+                          onClick={() => handleKickParticipant(p.id || p.displayName)}
                           className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 cursor-pointer"
                           title="Remove Participant"
                         >
@@ -588,14 +563,16 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                 <div className="flex-1 p-4 overflow-y-auto space-y-3 font-mono text-xs">
                   {chatMessages.length === 0 ? (
                     <div className="text-center text-slate-500 italic pt-12">
-                      No chat messages yet. Start the discussion below.
+                      No chat messages yet. Send a message to start discussion.
                     </div>
                   ) : (
                     chatMessages.map((msg, idx) => (
                       <div key={idx} className="bg-slate-950 p-3 rounded-2xl border border-slate-800/80 space-y-1">
                         <div className="flex items-center justify-between text-[10px]">
                           <span className="font-bold text-amber-300">{msg.senderName}</span>
-                          <span className="text-slate-500">{new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          <span className="text-slate-500">
+                            {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
                         </div>
                         <p className="text-slate-200 text-xs leading-relaxed font-sans">{msg.message}</p>
                       </div>
@@ -629,7 +606,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
       {/* Bottom Control Bar */}
       <footer className="h-20 px-6 bg-slate-950/90 border-t border-slate-800/80 flex items-center justify-between z-20 backdrop-blur-md">
         <div className="hidden sm:block text-xs text-slate-400 font-mono">
-          LiveKit Encrypted RTC
+          NexGen Video Conference
         </div>
 
         {/* Central Media Controls */}
@@ -697,7 +674,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                 ? 'bg-blue-600 text-white'
                 : 'bg-slate-800 hover:bg-slate-700 text-white border border-slate-700'
             }`}
-            title="In-Meeting Chat"
+            title="In-Meeting Discussion"
           >
             <MessageSquare className="w-5 h-5" />
             {unreadChatCount > 0 && (
@@ -709,7 +686,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
 
           {/* Leave Button */}
           <button
-            onClick={() => room?.disconnect()}
+            onClick={onLeave}
             className="px-5 py-3.5 bg-rose-600 hover:bg-rose-500 text-white rounded-2xl font-bold text-xs flex items-center gap-2 shadow-lg transition-all cursor-pointer"
           >
             <PhoneOff className="w-4 h-4" />
@@ -721,65 +698,6 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
           NexGen Council
         </div>
       </footer>
-    </div>
-  );
-};
-
-// Sub-component: Participant Video Tile
-const ParticipantTile: React.FC<{
-  participant: Participant;
-  isLocal: boolean;
-  isSpeaking: boolean;
-}> = ({ participant, isLocal, isSpeaking }) => {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  useEffect(() => {
-    const handleSubscribed = (pub: RemoteTrackPublication) => {
-      if (pub.kind === Track.Kind.Video && videoRef.current) {
-        pub.videoTrack?.attach(videoRef.current);
-      }
-      if (pub.kind === Track.Kind.Audio && audioRef.current && !isLocal) {
-        pub.audioTrack?.attach(audioRef.current);
-      }
-    };
-
-    if (isLocal) {
-      const videoPub = Array.from(participant.videoTrackPublications.values())[0] as any;
-      if (videoPub && videoPub.videoTrack && videoRef.current) {
-        videoPub.videoTrack.attach(videoRef.current);
-      }
-    } else {
-      participant.trackPublications.forEach((pub) => {
-        if (pub.isSubscribed) {
-          handleSubscribed(pub as RemoteTrackPublication);
-        }
-      });
-    }
-  }, [participant, isLocal]);
-
-  return (
-    <div
-      className={`relative w-full h-full bg-slate-900 rounded-3xl overflow-hidden border transition-all shadow-xl flex items-center justify-center aspect-video ${
-        isSpeaking ? 'border-2 border-emerald-400 ring-4 ring-emerald-500/20' : 'border-slate-800'
-      }`}
-    >
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted={isLocal}
-        className={`w-full h-full object-cover ${isLocal ? 'transform -scale-x-100' : ''}`}
-      />
-      <audio ref={audioRef} autoPlay />
-
-      {/* Participant Name Overlay */}
-      <div className="absolute bottom-3 left-3 bg-slate-950/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-800 text-xs font-semibold text-white flex items-center gap-2">
-        <span>{participant.name || participant.identity} {isLocal && '(You)'}</span>
-        {isSpeaking && (
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-        )}
-      </div>
     </div>
   );
 };

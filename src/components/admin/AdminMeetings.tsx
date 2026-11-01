@@ -276,7 +276,7 @@ export const AdminMeetings: React.FC = () => {
             <span className="p-2 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-100">
               <Video className="w-5 h-5" />
             </span>
-            <h1 className="text-2xl font-serif font-bold text-slate-900">LiveKit Video Meetings</h1>
+            <h1 className="text-2xl font-serif font-bold text-slate-900">NexGen Council Video Meetings</h1>
           </div>
           <p className="text-slate-500 text-sm mt-1">
             Schedule, manage, and host secure Google Meet-style video conferences across regional council networks.
@@ -388,7 +388,7 @@ export const AdminMeetings: React.FC = () => {
         {loading ? (
           <div className="p-12 text-center text-slate-500">
             <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-            <p className="text-sm font-medium">Loading LiveKit meeting sessions...</p>
+            <p className="text-sm font-medium">Loading video meeting sessions...</p>
           </div>
         ) : filteredMeetings.length === 0 ? (
           <div className="p-12 text-center text-slate-500 space-y-3">
