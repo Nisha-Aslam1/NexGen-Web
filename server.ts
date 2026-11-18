@@ -636,6 +636,25 @@ app.post('/api/team', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
   res.status(201).json(member);
 });
 
+app.put('/api/team/reorder', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
+  const { orderedIds } = req.body;
+  if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+    return res.status(400).json({ error: 'orderedIds array is required.' });
+  }
+  const updatedTeam = db.reorderTeamMembers(orderedIds);
+  const user = (req as any).user;
+  db.logActivity({
+    userId: user.userId,
+    userName: user.name,
+    userRole: user.role,
+    action: 'TEAM_REORDERED',
+    entityType: 'TeamMember',
+    details: `Updated leadership display sequence (${orderedIds.length} members ordered).`,
+    ipAddress: req.ip || 'unknown'
+  });
+  res.json(updatedTeam);
+});
+
 app.put('/api/team/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
   const updated = db.updateTeamMember(req.params.id, req.body);
   if (!updated) return res.status(404).json({ error: 'Team member not found' });

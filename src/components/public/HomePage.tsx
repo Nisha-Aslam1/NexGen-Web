@@ -63,7 +63,10 @@ export const HomePage: React.FC = () => {
   const featuredPrograms = programs.filter(p => p.featured || p.status === 'Published').slice(0, 3);
   const upcomingEvents = events.filter(e => e.status === 'Upcoming').slice(0, 3);
   const latestNews = news.filter(n => n.status === 'Published').slice(0, 3);
-  const leadershipPreview = team.filter(t => t.active).slice(0, 4);
+  const leadershipPreview = [...team]
+    .filter(t => t.active)
+    .sort((a, b) => (a.displayOrder ?? (a as any).order ?? 999) - (b.displayOrder ?? (b as any).order ?? 999))
+    .slice(0, 4);
 
   return (
     <div className="space-y-20 pb-20">

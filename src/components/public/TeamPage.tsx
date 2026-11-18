@@ -13,7 +13,9 @@ import {
 export const TeamPage: React.FC = () => {
   const { team, setActivePage, settings } = useApp();
 
-  const activeMembers = team.filter(m => m.active);
+  const activeMembers = [...team]
+    .filter(m => m.active)
+    .sort((a, b) => (a.displayOrder ?? (a as any).order ?? 999) - (b.displayOrder ?? (b as any).order ?? 999));
   const leadership = activeMembers.filter(m => m.department === 'Executive Board' || m.department === 'Leadership');
   const programLeads = activeMembers.filter(m => m.department !== 'Executive Board' && m.department !== 'Leadership');
 
@@ -101,8 +103,8 @@ export const TeamPage: React.FC = () => {
                 <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-slate-400">
                   <span className="text-[11px] text-slate-400">Council Member</span>
                   <div className="flex items-center gap-2">
-                    {mem.linkedin && (
-                      <a href={mem.linkedin} target="_blank" rel="noopener noreferrer" className="hover:text-indigo-950 transition-colors">
+                    {(mem.linkedinUrl || (mem as any).linkedin) && (
+                      <a href={mem.linkedinUrl || (mem as any).linkedin} target="_blank" rel="noopener noreferrer" className="hover:text-indigo-950 transition-colors">
                         <Linkedin className="w-4 h-4" />
                       </a>
                     )}

@@ -1175,7 +1175,12 @@ class Database {
 
   // --- Team ---
   getTeam(activeOnly = false) {
-    let list = [...this.data.team];
+    let list = this.data.team.map((t, idx) => ({
+      ...t,
+      displayOrder: Number.isFinite(Number(t.displayOrder ?? (t as any).order))
+        ? Number(t.displayOrder ?? (t as any).order)
+        : idx + 1
+    }));
     if (activeOnly) {
       list = list.filter(t => t.active);
     }
@@ -1183,10 +1188,18 @@ class Database {
   }
 
   createTeamMember(member: Omit<TeamMember, 'id'>) {
+    const rawOrder = member.displayOrder ?? (member as any).order;
+    const displayOrder = Number.isFinite(Number(rawOrder)) && Number(rawOrder) > 0
+      ? Number(rawOrder)
+      : this.data.team.length + 1;
     const newMember: TeamMember = {
       ...member,
+      displayOrder,
+      linkedinUrl: member.linkedinUrl || (member as any).linkedin || '',
       id: `tm_${Date.now()}`
     };
+    delete (newMember as any).order;
+    delete (newMember as any).linkedin;
     this.data.team.push(newMember);
     this.save();
     mongoUpsert('team', newMember.id, newMember).catch(() => {});
@@ -1196,10 +1209,58 @@ class Database {
   updateTeamMember(id: string, updates: Partial<TeamMember>) {
     const idx = this.data.team.findIndex(t => t.id === id);
     if (idx === -1) return null;
-    this.data.team[idx] = { ...this.data.team[idx], ...updates };
+    const normalizedUpdates: Partial<TeamMember> = { ...updates };
+    const rawOrder = normalizedUpdates.displayOrder ?? (normalizedUpdates as any).order;
+    if (rawOrder !== undefined && Number.isFinite(Number(rawOrder))) {
+      normalizedUpdates.displayOrder = Number(rawOrder);
+    }
+    if ((normalizedUpdates as any).linkedin !== undefined && !normalizedUpdates.linkedinUrl) {
+      normalizedUpdates.linkedinUrl = (normalizedUpdates as any).linkedin;
+    }
+    delete (normalizedUpdates as any).order;
+    delete (normalizedUpdates as any).linkedin;
+
+    this.data.team[idx] = { ...this.data.team[idx], ...normalizedUpdates };
     this.save();
     mongoUpsert('team', id, this.data.team[idx]).catch(() => {});
     return this.data.team[idx];
+  }
+
+  reorderTeamMembers(orderedIds: string[]) {
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+      return this.getTeam(false);
+    }
+
+    const orderMap = new Map<string, number>();
+    orderedIds.forEach((id, index) => {
+      if (!orderMap.has(id)) {
+        orderMap.set(id, index + 1);
+      }
+    });
+
+    let nextOrder = orderMap.size + 1;
+    const sortedCurrent = this.getTeam(false);
+
+    this.data.team = sortedCurrent.map((member) => {
+      const assignedOrder = orderMap.has(member.id)
+        ? orderMap.get(member.id)!
+        : nextOrder++;
+      const updatedMember: TeamMember = {
+        ...member,
+        displayOrder: assignedOrder
+      };
+      delete (updatedMember as any).order;
+      return updatedMember;
+    });
+
+    this.data.team.sort((a, b) => a.displayOrder - b.displayOrder);
+    this.save();
+
+    for (const member of this.data.team) {
+      mongoUpsert('team', member.id, member).catch(() => {});
+    }
+
+    return this.getTeam(false);
   }
 
   deleteTeamMember(id: string) {
