@@ -218,6 +218,27 @@ export interface WebsiteSettings {
   metaDescription?: string;
   googleSiteVerification?: string;
   googleAnalyticsId?: string;
+  // Email Sender Identity
+  emailSenderName?: string;
+  emailSenderEmail?: string;
+  emailReplyTo?: string;
+}
+
+export interface EmailLog {
+  id: string;
+  resendId?: string;
+  fromName: string;
+  fromEmail: string;
+  to: string[];
+  replyTo?: string;
+  subject: string;
+  message: string;
+  html?: string;
+  status: 'Sent' | 'Failed';
+  error?: string;
+  sentByUserId?: string;
+  sentByName?: string;
+  sentAt: string;
 }
 
 export type SiteSettings = WebsiteSettings;

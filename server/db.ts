@@ -18,7 +18,8 @@ import {
   MeetingParticipant,
   MeetingMessage,
   MeetingAttendance,
-  AdmissionStatus
+  AdmissionStatus,
+  EmailLog
 } from '../src/types.ts';
 import { syncSchemaToMongo, loadOrSeedMongo, mongoUpsert, mongoDelete, mongoClearCollections, isMongoConnected } from './mongo.ts';
 
@@ -139,6 +140,7 @@ export interface DatabaseSchema {
   contacts: ContactMessage[];
   settings: WebsiteSettings;
   activityLogs: ActivityLog[];
+  emailLogs?: EmailLog[];
   meetings?: Meeting[];
   meetingParticipants?: MeetingParticipant[];
   meetingMessages?: MeetingMessage[];
@@ -211,7 +213,10 @@ const defaultSettings: WebsiteSettings = {
   siteUrl: 'https://nexgencouncil.bond',
   metaDescription: 'NexGen Women Empowerment & Youth Leadership Council is an international civil society organization dedicated to accelerating female leadership, youth civic engagement, and socio-economic advancement.',
   googleSiteVerification: '',
-  googleAnalyticsId: ''
+  googleAnalyticsId: '',
+  emailSenderName: 'NexGen Council',
+  emailSenderEmail: 'admin@nexgencouncil.bond',
+  emailReplyTo: ''
 };
 
 function getSeedData(): DatabaseSchema {
@@ -558,6 +563,7 @@ function getSeedData(): DatabaseSchema {
     contacts: [],
     settings: defaultSettings,
     activityLogs: [],
+    emailLogs: [],
     meetings: [],
     meetingParticipants: [],
     meetingMessages: []
@@ -571,6 +577,7 @@ class Database {
     if (!this.data.meetings) this.data.meetings = [];
     if (!this.data.meetingParticipants) this.data.meetingParticipants = [];
     if (!this.data.meetingMessages) this.data.meetingMessages = [];
+    if (!this.data.emailLogs) this.data.emailLogs = [];
   }
 
   constructor() {
@@ -1369,6 +1376,63 @@ class Database {
 
   getActivityLogs(limit = 50) {
     return this.data.activityLogs.slice(0, limit);
+  }
+
+  // --- Email Sender Config & Sent History ---
+  getEmailSenderConfig() {
+    const s = this.getSettings();
+    return {
+      senderName: (s.emailSenderName || 'NexGen Council').trim(),
+      senderEmail: (s.emailSenderEmail || 'admin@nexgencouncil.bond').trim().toLowerCase(),
+      replyTo: (s.emailReplyTo || '').trim()
+    };
+  }
+
+  updateEmailSenderConfig(updates: { senderName?: string; senderEmail?: string; replyTo?: string }) {
+    const current = this.getEmailSenderConfig();
+    const senderName = updates.senderName !== undefined ? updates.senderName.trim() : current.senderName;
+    const senderEmail = updates.senderEmail !== undefined ? updates.senderEmail.trim().toLowerCase() : current.senderEmail;
+    const replyTo = updates.replyTo !== undefined ? updates.replyTo.trim() : current.replyTo;
+
+    this.updateSettings({
+      emailSenderName: senderName || 'NexGen Council',
+      emailSenderEmail: senderEmail || 'admin@nexgencouncil.bond',
+      emailReplyTo: replyTo
+    });
+
+    return this.getEmailSenderConfig();
+  }
+
+  getEmailLogs(limit = 200): EmailLog[] {
+    this.ensureMeetingArrays();
+    return [...(this.data.emailLogs || [])]
+      .sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime())
+      .slice(0, limit);
+  }
+
+  addEmailLog(entry: Omit<EmailLog, 'id' | 'sentAt'> & { sentAt?: string }): EmailLog {
+    this.ensureMeetingArrays();
+    const logItem: EmailLog = {
+      ...entry,
+      id: `eml_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      sentAt: entry.sentAt || new Date().toISOString()
+    };
+    this.data.emailLogs!.unshift(logItem);
+    if (this.data.emailLogs!.length > 500) {
+      this.data.emailLogs!.pop();
+    }
+    this.save();
+    mongoUpsert('emailLogs', logItem.id, logItem).catch(() => {});
+    return logItem;
+  }
+
+  deleteEmailLog(id: string): boolean {
+    this.ensureMeetingArrays();
+    const prevLen = this.data.emailLogs!.length;
+    this.data.emailLogs = this.data.emailLogs!.filter(e => e.id !== id);
+    this.save();
+    mongoDelete('emailLogs', id).catch(() => {});
+    return this.data.emailLogs!.length < prevLen;
   }
 
   // --- Analytics & Stats ---

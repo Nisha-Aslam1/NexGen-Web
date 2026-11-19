@@ -8,18 +8,43 @@ export interface SendEmailInput {
   message?: string;
   html?: string;
   replyTo?: string;
+  fromName?: string;
+  fromEmail?: string;
 }
 
 export interface SendEmailResult {
   success: boolean;
   data?: {
     id: string;
+    fromName: string;
+    fromEmail: string;
     recipients: string[];
     subject: string;
     sentAt: string;
   };
   error?: string;
   statusCode?: number;
+  attemptedDispatch?: boolean;
+  resolvedMeta?: {
+    fromName: string;
+    fromEmail: string;
+    recipients: string[];
+    subject: string;
+    replyTo?: string;
+    message: string;
+  };
+}
+
+export function sanitizeSenderName(name?: string): string {
+  const cleaned = String(name || '')
+    .replace(/[\r\n<>"]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || 'NexGen Council';
+}
+
+export function isValidEmailAddress(email?: string): boolean {
+  return EMAIL_REGEX.test(String(email || '').trim().toLowerCase());
 }
 
 function escapeHtml(text: string): string {
@@ -43,8 +68,13 @@ export function formatMessageToHtml(message: string): string {
   return paragraphs.join('\n');
 }
 
-export function buildNexGenEmailTemplate(subject: string, bodyHtml: string): string {
+export function buildNexGenEmailTemplate(
+  subject: string,
+  bodyHtml: string,
+  senderName = 'NexGen Council'
+): string {
   const safeSubject = escapeHtml(subject);
+  const safeSenderName = escapeHtml(sanitizeSenderName(senderName));
   const year = new Date().getFullYear();
 
   return `<!DOCTYPE html>
@@ -69,7 +99,7 @@ export function buildNexGenEmailTemplate(subject: string, bodyHtml: string): str
                       Official Communication
                     </div>
                     <div style="font-size: 22px; font-weight: 800; color: #ffffff; letter-spacing: -0.02em;">
-                      NexGen Council
+                      ${safeSenderName}
                     </div>
                     <div style="font-size: 12px; color: #94a3b8; margin-top: 2px;">
                       Women Empowerment &amp; Youth Leadership Council
@@ -101,10 +131,10 @@ export function buildNexGenEmailTemplate(subject: string, bodyHtml: string): str
           <tr>
             <td style="background-color: #020617; padding: 22px 32px; border-top: 1px solid #1e293b; text-align: center;">
               <p style="margin: 0 0 6px 0; font-size: 12px; font-weight: 600; color: #cbd5e1;">
-                NexGen Council • Executive Secretariat
+                ${safeSenderName} • Executive Secretariat
               </p>
               <p style="margin: 0 0 8px 0; font-size: 11px; color: #64748b;">
-                Sent from <a href="https://nexgencouncil.bond" style="color: #fbbf24; text-decoration: none;">nexgencouncil.bond</a>
+                Sent via <a href="https://nexgencouncil.bond" style="color: #fbbf24; text-decoration: none;">nexgencouncil.bond</a>
               </p>
               <p style="margin: 0; font-size: 11px; color: #475569;">
                 &copy; ${year} NexGen Women Empowerment &amp; Youth Leadership Council. All rights reserved.
@@ -143,12 +173,14 @@ export function parseRecipientList(to: string | string[]): { valid: string[]; in
 }
 
 export async function sendCouncilEmail(input: SendEmailInput): Promise<SendEmailResult> {
-  const apiKey = process.env.RESEND_API_KEY?.trim();
-  if (!apiKey) {
+  const fromName = sanitizeSenderName(input.fromName);
+  const fromEmail = (input.fromEmail || 'admin@nexgencouncil.bond').trim().toLowerCase();
+
+  if (!EMAIL_REGEX.test(fromEmail)) {
     return {
       success: false,
-      statusCode: 500,
-      error: 'Email service is not configured. Missing RESEND_API_KEY on server.'
+      statusCode: 400,
+      error: 'Sender email address must be a valid email (e.g. admin@nexgencouncil.bond).'
     };
   }
 
@@ -206,13 +238,33 @@ export async function sendCouncilEmail(input: SendEmailInput): Promise<SendEmail
     };
   }
 
+  const resolvedMeta = {
+    fromName,
+    fromEmail,
+    recipients,
+    subject,
+    replyTo,
+    message: rawMessage || '[HTML Content]'
+  };
+
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  if (!apiKey) {
+    return {
+      success: false,
+      statusCode: 500,
+      attemptedDispatch: true,
+      resolvedMeta,
+      error: 'Email service is not configured. Missing RESEND_API_KEY on server.'
+    };
+  }
+
   const bodyHtml = rawHtml || formatMessageToHtml(rawMessage);
-  const fullHtml = buildNexGenEmailTemplate(subject, bodyHtml);
+  const fullHtml = buildNexGenEmailTemplate(subject, bodyHtml, fromName);
 
   try {
     const resend = new Resend(apiKey);
     const { data, error } = await resend.emails.send({
-      from: 'NexGen Council <admin@nexgencouncil.bond>',
+      from: `${fromName} <${fromEmail}>`,
       to: recipients,
       subject,
       html: fullHtml,
@@ -224,6 +276,8 @@ export async function sendCouncilEmail(input: SendEmailInput): Promise<SendEmail
       return {
         success: false,
         statusCode: 502,
+        attemptedDispatch: true,
+        resolvedMeta,
         error: error.message || 'Resend rejected the email request.'
       };
     }
@@ -231,8 +285,12 @@ export async function sendCouncilEmail(input: SendEmailInput): Promise<SendEmail
     return {
       success: true,
       statusCode: 200,
+      attemptedDispatch: true,
+      resolvedMeta,
       data: {
         id: data?.id || `msg_${Date.now()}`,
+        fromName,
+        fromEmail,
         recipients,
         subject,
         sentAt: new Date().toISOString()
@@ -242,6 +300,8 @@ export async function sendCouncilEmail(input: SendEmailInput): Promise<SendEmail
     return {
       success: false,
       statusCode: 500,
+      attemptedDispatch: true,
+      resolvedMeta,
       error: err?.message || 'Unexpected error while dispatching email.'
     };
   }

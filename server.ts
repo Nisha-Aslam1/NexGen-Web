@@ -29,7 +29,7 @@ import {
 } from './server/seo.ts';
 
 import { meetingsRouter } from './server/meetings.ts';
-import { sendCouncilEmail } from './server/email.ts';
+import { sendCouncilEmail, sanitizeSenderName, isValidEmailAddress } from './server/email.ts';
 
 const app = express();
 const PORT = 3000;
@@ -717,20 +717,134 @@ app.delete(['/api/contact/:id', '/api/contacts/:id'], requireAuth(['ADMIN']), (r
   res.json({ ok: true });
 });
 
-// 10b. Admin Resend Email Dispatch
+// 10b. Admin Resend Email Dispatch, Sender Identity & Sent History
+app.get('/api/email/settings', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'VIEWER']), (req, res) => {
+  res.json(db.getEmailSenderConfig());
+});
+
+app.put('/api/email/settings', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER']), (req, res) => {
+  const { senderName, senderEmail, replyTo } = req.body || {};
+  const cleanName = sanitizeSenderName(senderName);
+  const cleanEmail = String(senderEmail || '').trim().toLowerCase();
+  const cleanReplyTo = typeof replyTo === 'string' ? replyTo.trim() : '';
+
+  if (!cleanName) {
+    return res.status(400).json({ success: false, error: 'Sender display name is required.' });
+  }
+  if (!isValidEmailAddress(cleanEmail)) {
+    return res.status(400).json({ success: false, error: 'Sender email must be a valid email address.' });
+  }
+  if (cleanReplyTo && !isValidEmailAddress(cleanReplyTo)) {
+    return res.status(400).json({ success: false, error: 'Default Reply-To must be a valid email address.' });
+  }
+
+  const config = db.updateEmailSenderConfig({
+    senderName: cleanName,
+    senderEmail: cleanEmail,
+    replyTo: cleanReplyTo
+  });
+
+  const user = (req as any).user;
+  db.logActivity({
+    userId: user.userId,
+    userName: user.name,
+    userRole: user.role,
+    action: 'EMAIL_SENDER_UPDATED',
+    entityType: 'WebsiteSettings',
+    details: `Updated default email sender identity to "${config.senderName} <${config.senderEmail}>".`,
+    ipAddress: req.ip || 'unknown'
+  });
+
+  return res.json({ success: true, config });
+});
+
+app.get('/api/email/history', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'VIEWER']), (req, res) => {
+  const { search, status } = req.query as Record<string, string>;
+  let logs = db.getEmailLogs(300);
+
+  if (status && status !== 'All') {
+    logs = logs.filter(l => l.status === status);
+  }
+  if (search && search.trim()) {
+    const q = search.trim().toLowerCase();
+    logs = logs.filter(l =>
+      l.subject.toLowerCase().includes(q) ||
+      l.fromEmail.toLowerCase().includes(q) ||
+      l.fromName.toLowerCase().includes(q) ||
+      l.to.some(r => r.toLowerCase().includes(q)) ||
+      (l.resendId && l.resendId.toLowerCase().includes(q))
+    );
+  }
+
+  res.json({ logs, total: logs.length });
+});
+
+app.delete('/api/email/history/:id', requireAuth(['ADMIN']), (req, res) => {
+  const deleted = db.deleteEmailLog(req.params.id);
+  if (!deleted) {
+    return res.status(404).json({ success: false, error: 'Email history record not found.' });
+  }
+  res.json({ success: true });
+});
+
 app.post('/api/send-email', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER']), async (req, res) => {
   try {
-    const { to, subject, html, message, replyTo } = req.body || {};
-    const result = await sendCouncilEmail({ to, subject, html, message, replyTo });
+    const { to, subject, html, message, replyTo, fromName, fromEmail } = req.body || {};
+    const savedConfig = db.getEmailSenderConfig();
+    const effectiveFromName = (typeof fromName === 'string' && fromName.trim()) ? fromName.trim() : savedConfig.senderName;
+    const effectiveFromEmail = (typeof fromEmail === 'string' && fromEmail.trim()) ? fromEmail.trim().toLowerCase() : savedConfig.senderEmail;
+    const effectiveReplyTo = typeof replyTo === 'string' ? replyTo.trim() : savedConfig.replyTo;
+
+    const result = await sendCouncilEmail({
+      to,
+      subject,
+      html,
+      message,
+      replyTo: effectiveReplyTo || undefined,
+      fromName: effectiveFromName,
+      fromEmail: effectiveFromEmail
+    });
+
+    const user = (req as any).user;
 
     if (!result.success) {
+      let failedLog = null;
+      if (result.attemptedDispatch && result.resolvedMeta) {
+        failedLog = db.addEmailLog({
+          fromName: result.resolvedMeta.fromName,
+          fromEmail: result.resolvedMeta.fromEmail,
+          to: result.resolvedMeta.recipients,
+          replyTo: result.resolvedMeta.replyTo,
+          subject: result.resolvedMeta.subject,
+          message: result.resolvedMeta.message,
+          status: 'Failed',
+          error: result.error || 'Failed to send email.',
+          sentByUserId: user.userId,
+          sentByName: user.name
+        });
+      }
+
       return res.status(result.statusCode || 400).json({
         success: false,
-        error: result.error || 'Failed to send email.'
+        error: result.error || 'Failed to send email.',
+        log: failedLog
       });
     }
 
-    const user = (req as any).user;
+    const savedLog = db.addEmailLog({
+      resendId: result.data?.id,
+      fromName: result.data?.fromName || effectiveFromName,
+      fromEmail: result.data?.fromEmail || effectiveFromEmail,
+      to: result.data?.recipients || [],
+      replyTo: effectiveReplyTo || undefined,
+      subject: result.data?.subject || String(subject || '').trim(),
+      message: String(message || '').trim() || '[HTML Content]',
+      status: 'Sent',
+      sentByUserId: user.userId,
+      sentByName: user.name,
+      sentAt: result.data?.sentAt
+    });
+
     db.logActivity({
       userId: user.userId,
       userName: user.name,
@@ -738,13 +852,14 @@ app.post('/api/send-email', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_
       action: 'EMAIL_SENT',
       entityType: 'Email',
       entityId: result.data?.id,
-      details: `Sent official email ("${result.data?.subject}") to ${result.data?.recipients.length || 0} recipient(s).`,
+      details: `Sent email "${result.data?.subject}" from "${savedLog.fromName} <${savedLog.fromEmail}>" to ${result.data?.recipients.length || 0} recipient(s).`,
       ipAddress: req.ip || 'unknown'
     });
 
     return res.status(200).json({
       success: true,
-      data: result.data
+      data: result.data,
+      log: savedLog
     });
   } catch (err: any) {
     return res.status(500).json({

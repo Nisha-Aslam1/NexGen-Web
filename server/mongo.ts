@@ -142,6 +142,8 @@ export async function initMongo(targetUri?: string): Promise<boolean> {
       await dbInstance.collection('contacts').createIndex({ id: 1 }, { unique: true });
       await dbInstance.collection('contacts').createIndex({ createdAt: -1 });
       await dbInstance.collection('activityLogs').createIndex({ timestamp: -1 });
+      await dbInstance.collection('emailLogs').createIndex({ sentAt: -1 });
+      await dbInstance.collection('emailLogs').createIndex({ id: 1 }, { unique: true });
       await dbInstance.collection('analytics_events').createIndex({ timestamp: -1 });
       await dbInstance.collection('analytics_events').createIndex({ sessionId: 1 });
       await dbInstance.collection('active_visitors').createIndex({ lastSeen: -1 });
@@ -269,6 +271,7 @@ export async function loadOrSeedMongo(fallbackData: DatabaseSchema): Promise<Dat
     const gallery = await dbInstance.collection('gallery').find({}).toArray();
     const contacts = await dbInstance.collection('contacts').find({}).sort({ createdAt: -1 }).toArray();
     const activityLogs = await dbInstance.collection('activityLogs').find({}).sort({ timestamp: -1 }).limit(200).toArray();
+    const emailLogs = await dbInstance.collection('emailLogs').find({}).sort({ sentAt: -1 }).limit(500).toArray();
 
     const settingsDoc = await dbInstance.collection('settings').findOne({ _id: 'global_settings' as any });
 
@@ -297,7 +300,8 @@ export async function loadOrSeedMongo(fallbackData: DatabaseSchema): Promise<Dat
       gallery: stripMongoId(gallery) as any,
       contacts: stripMongoId(contacts) as any,
       settings: settingsDoc ? (({ _id, ...s }) => s)(settingsDoc as any) : fallbackData.settings,
-      activityLogs: stripMongoId(activityLogs) as any
+      activityLogs: stripMongoId(activityLogs) as any,
+      emailLogs: stripMongoId(emailLogs) as any
     };
   } catch (err: any) {
     console.error('[MongoDB] Error loading collections from MongoDB, using fallback state:', err.message);
@@ -458,7 +462,8 @@ export async function syncSchemaToMongo(schema: DatabaseSchema) {
       team: schema.team,
       gallery: schema.gallery,
       contacts: schema.contacts,
-      activityLogs: schema.activityLogs
+      activityLogs: schema.activityLogs,
+      emailLogs: schema.emailLogs || []
     };
 
     for (const [colName, items] of Object.entries(collectionsMap)) {
