@@ -1060,11 +1060,17 @@ class Database {
   }
 
   getProgramBySlugOrId(identifier: string) {
-    return this.data.programs.find(p => p.id === identifier || p.slug === identifier) || null;
+    const clean = (identifier || '').trim().toLowerCase();
+    return this.data.programs.find(
+      p => p.id.toLowerCase() === clean || (p.slug && p.slug.toLowerCase() === clean)
+    ) || null;
   }
 
   getProgramBySlug(slug: string) {
-    return this.data.programs.find(p => p.slug === slug || p.id === slug) || null;
+    const clean = (slug || '').trim().toLowerCase();
+    return this.data.programs.find(
+      p => (p.slug && p.slug.toLowerCase() === clean) || p.id.toLowerCase() === clean
+    ) || null;
   }
 
   createProgram(programData: Omit<Program, 'id' | 'createdAt'>) {
@@ -1106,7 +1112,10 @@ class Database {
   }
 
   getEventBySlug(slug: string) {
-    return this.data.events.find(e => e.slug === slug || e.id === slug) || null;
+    const clean = (slug || '').trim().toLowerCase();
+    return this.data.events.find(
+      e => (e.slug && e.slug.toLowerCase() === clean) || e.id.toLowerCase() === clean
+    ) || null;
   }
 
   createEvent(eventData: Omit<EventItem, 'id'>) {
@@ -1144,7 +1153,10 @@ class Database {
   }
 
   getNewsBySlug(slug: string) {
-    return this.data.news.find(n => n.slug === slug || n.id === slug) || null;
+    const clean = (slug || '').trim().toLowerCase();
+    return this.data.news.find(
+      n => (n.slug && n.slug.toLowerCase() === clean) || n.id.toLowerCase() === clean
+    ) || null;
   }
 
   createNews(newsData: Omit<NewsItem, 'id'>) {

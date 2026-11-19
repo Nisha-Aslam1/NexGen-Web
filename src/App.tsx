@@ -35,6 +35,7 @@ import { AdminActivityLogs } from './components/admin/AdminActivityLogs.tsx';
 import { AdminDatabase } from './components/admin/AdminDatabase.tsx';
 import { AdminAnalytics } from './components/admin/AdminAnalytics.tsx';
 import { AdminMeetings } from './components/admin/AdminMeetings.tsx';
+import { AdminEmailComposer } from './components/admin/AdminEmailComposer.tsx';
 import { MeetingRoomWrapper } from './components/meetings/MeetingRoomWrapper.tsx';
 import { initAnalyticsHeartbeat, trackPageView } from './lib/analytics.ts';
 
@@ -101,6 +102,7 @@ const AppContent: React.FC = () => {
         {adminTab === 'team' && <AdminTeam />}
         {adminTab === 'gallery' && <AdminGallery />}
         {adminTab === 'contacts' && <AdminContacts />}
+        {adminTab === 'email' && <AdminEmailComposer />}
         {adminTab === 'settings' && <AdminSettings />}
         {adminTab === 'users' && <AdminUsers />}
         {adminTab === 'database' && <AdminDatabase />}

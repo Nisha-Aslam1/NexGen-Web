@@ -42,6 +42,7 @@ export type AdminTab =
   | 'team'
   | 'gallery'
   | 'contacts'
+  | 'email'
   | 'settings'
   | 'users'
   | 'activity'
@@ -162,6 +163,7 @@ interface AppContextType {
   news: NewsItem[];
   team: TeamMember[];
   gallery: GalleryItem[];
+  isLoadingPublicData: boolean;
   refreshData: () => Promise<void>;
 
   // Real-time State
@@ -267,6 +269,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [news, setNews] = useState<NewsItem[]>([]);
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [gallery, setGallery] = useState<GalleryItem[]>([]);
+  const [isLoadingPublicData, setIsLoadingPublicData] = useState<boolean>(true);
 
   // Real-time Sync State
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -355,6 +358,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (Array.isArray(galleryRes)) setGallery(galleryRes);
     } catch (err) {
       console.error('Error loading initial data:', err);
+    } finally {
+      setIsLoadingPublicData(false);
     }
   };
 
@@ -456,6 +461,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         news,
         team,
         gallery,
+        isLoadingPublicData,
         refreshData,
         isSyncing,
         lastSyncTime,

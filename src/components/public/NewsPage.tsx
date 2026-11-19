@@ -12,9 +12,10 @@ import {
   Check
 } from 'lucide-react';
 import { NewsItem } from '../../types.ts';
+import { NotFoundPage } from './NotFoundPage.tsx';
 
 export const NewsPage: React.FC = () => {
-  const { news, setActivePage, selectedNewsSlug, addToast } = useApp();
+  const { news, setActivePage, selectedNewsSlug, addToast, isLoadingPublicData } = useApp();
   const [search, setSearch] = useState('');
   const [selectedArticle, setSelectedArticle] = useState<NewsItem | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -27,40 +28,55 @@ export const NewsPage: React.FC = () => {
     n.summary.toLowerCase().includes(search.toLowerCase())
   );
 
+  const matchedArticle = selectedNewsSlug
+    ? news.find(
+        n =>
+          (n.slug && n.slug.toLowerCase() === selectedNewsSlug.toLowerCase()) ||
+          n.id.toLowerCase() === selectedNewsSlug.toLowerCase()
+      ) || null
+    : null;
+
+  const effectiveArticle = selectedArticle || matchedArticle;
+
   // Sync selectedNewsSlug from URL
   useEffect(() => {
-    if (selectedNewsSlug && news.length > 0) {
-      const match = news.find(n => n.slug === selectedNewsSlug || n.id === selectedNewsSlug);
-      if (match) {
-        setSelectedArticle(match);
+    if (selectedNewsSlug) {
+      if (matchedArticle) {
+        setSelectedArticle(matchedArticle);
       }
+    } else {
+      setSelectedArticle(null);
     }
-  }, [selectedNewsSlug, news]);
+  }, [selectedNewsSlug, matchedArticle]);
+
+  const isNotFoundSlug = Boolean(selectedNewsSlug && !isLoadingPublicData && !matchedArticle);
+  const shouldSkipSeo = Boolean(selectedNewsSlug && (isLoadingPublicData || !matchedArticle));
 
   useDocumentSEO({
-    title: selectedArticle
-      ? `${selectedArticle.title} | NexGen Council News`
+    skip: shouldSkipSeo,
+    title: effectiveArticle
+      ? `${effectiveArticle.title} | NexGen Council News`
       : 'Latest News, Dispatches & Announcements | NexGen Council',
-    description: selectedArticle
-      ? selectedArticle.summary
+    description: effectiveArticle
+      ? effectiveArticle.summary
       : 'Stay updated on women empowerment programs, youth civic development milestones, and official press releases from NexGen Council.',
-    canonicalPath: selectedArticle ? `/news/${selectedArticle.slug}` : '/news',
-    ogType: selectedArticle ? 'article' : 'website',
-    ogImage: selectedArticle?.coverImage || '/banner.png',
-    publishedTime: selectedArticle?.publishedAt,
-    author: selectedArticle?.author || 'NexGen Secretariat',
-    jsonLd: selectedArticle
+    canonicalPath: effectiveArticle ? `/news/${effectiveArticle.slug || effectiveArticle.id}` : '/news',
+    ogType: effectiveArticle ? 'article' : 'website',
+    ogImage: effectiveArticle?.coverImage || '/banner.png',
+    publishedTime: effectiveArticle?.publishedAt,
+    author: effectiveArticle?.author || 'NexGen Secretariat',
+    jsonLd: effectiveArticle
       ? {
           '@context': 'https://schema.org',
           '@type': 'NewsArticle',
-          headline: selectedArticle.title,
-          description: selectedArticle.summary,
-          image: [selectedArticle.coverImage],
-          datePublished: selectedArticle.publishedAt,
-          dateModified: selectedArticle.updatedAt || selectedArticle.publishedAt,
+          headline: effectiveArticle.title,
+          description: effectiveArticle.summary,
+          image: [effectiveArticle.coverImage],
+          datePublished: effectiveArticle.publishedAt,
+          dateModified: effectiveArticle.publishedAt,
           author: {
             '@type': 'Person',
-            name: selectedArticle.author
+            name: effectiveArticle.author
           },
           publisher: {
             '@type': 'NGO',
@@ -79,10 +95,14 @@ export const NewsPage: React.FC = () => {
             '@type': 'ListItem',
             position: idx + 1,
             name: n.title,
-            url: `${window.location.origin}/news/${n.slug}`
+            url: `${window.location.origin}/news/${n.slug || n.id}`
           }))
         }
   });
+
+  if (isNotFoundSlug) {
+    return <NotFoundPage />;
+  }
 
   const handleShareArticle = async (article: NewsItem) => {
     const shareUrl = `${window.location.origin}/news/${article.slug}`;
@@ -166,7 +186,7 @@ export const NewsPage: React.FC = () => {
                 <button
                   onClick={() => {
                     setSelectedArticle(featured);
-                    setActivePage('news', featured.slug);
+                    setActivePage('news', featured.slug || featured.id);
                   }}
                   className="px-5 py-2.5 bg-indigo-950 text-white rounded-xl text-xs font-semibold hover:bg-indigo-900 transition-colors cursor-pointer shadow-xs"
                 >
@@ -232,7 +252,7 @@ export const NewsPage: React.FC = () => {
                 <button
                   onClick={() => {
                     setSelectedArticle(item);
-                    setActivePage('news', item.slug);
+                    setActivePage('news', item.slug || item.id);
                   }}
                   className="text-xs font-semibold text-indigo-950 hover:underline cursor-pointer"
                 >

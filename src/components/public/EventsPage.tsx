@@ -11,49 +11,65 @@ import {
   Ticket
 } from 'lucide-react';
 import { EventItem } from '../../types.ts';
+import { NotFoundPage } from './NotFoundPage.tsx';
 
 export const EventsPage: React.FC = () => {
-  const { events, setActivePage, addToast, selectedEventSlug } = useApp();
+  const { events, setActivePage, addToast, selectedEventSlug, isLoadingPublicData } = useApp();
   const [tab, setTab] = useState<'Upcoming' | 'Past'>('Upcoming');
   const [search, setSearch] = useState('');
   const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
   const [rsvpSuccess, setRsvpSuccess] = useState(false);
 
+  const matchedEvent = selectedEventSlug
+    ? events.find(
+        e =>
+          (e.slug && e.slug.toLowerCase() === selectedEventSlug.toLowerCase()) ||
+          e.id.toLowerCase() === selectedEventSlug.toLowerCase()
+      ) || null
+    : null;
+
+  const effectiveEvent = selectedEvent || matchedEvent;
+
   // Sync selectedEventSlug from URL
   useEffect(() => {
-    if (selectedEventSlug && events.length > 0) {
-      const match = events.find(e => e.slug === selectedEventSlug || e.id === selectedEventSlug);
-      if (match) {
-        setSelectedEvent(match);
+    if (selectedEventSlug) {
+      if (matchedEvent) {
+        setSelectedEvent(matchedEvent);
       }
+    } else {
+      setSelectedEvent(null);
     }
-  }, [selectedEventSlug, events]);
+  }, [selectedEventSlug, matchedEvent]);
+
+  const isNotFoundSlug = Boolean(selectedEventSlug && !isLoadingPublicData && !matchedEvent);
+  const shouldSkipSeo = Boolean(selectedEventSlug && (isLoadingPublicData || !matchedEvent));
 
   useDocumentSEO({
-    title: selectedEvent
-      ? `${selectedEvent.title} | Events Calendar | NexGen Council`
+    skip: shouldSkipSeo,
+    title: effectiveEvent
+      ? `${effectiveEvent.title} | Events Calendar | NexGen Council`
       : 'Upcoming Events, Summits & Workshops | NexGen Council',
-    description: selectedEvent
-      ? `${selectedEvent.description} Organized by NexGen Council in ${selectedEvent.location}.`
+    description: effectiveEvent
+      ? `${effectiveEvent.description} Organized by NexGen Council in ${effectiveEvent.location}.`
       : 'Join NexGen Council for upcoming youth leadership summits, policy debates, and women empowerment community symposiums.',
-    canonicalPath: selectedEvent ? `/events/${selectedEvent.slug}` : '/events',
+    canonicalPath: effectiveEvent ? `/events/${effectiveEvent.slug || effectiveEvent.id}` : '/events',
     ogType: 'website',
-    ogImage: selectedEvent?.coverImage || '/banner.png',
-    jsonLd: selectedEvent
+    ogImage: effectiveEvent?.coverImage || effectiveEvent?.image || '/banner.png',
+    jsonLd: effectiveEvent
       ? {
           '@context': 'https://schema.org',
           '@type': 'Event',
-          name: selectedEvent.title,
-          description: selectedEvent.description,
-          startDate: selectedEvent.date,
+          name: effectiveEvent.title,
+          description: effectiveEvent.description,
+          startDate: effectiveEvent.date,
           eventStatus: 'https://schema.org/EventScheduled',
           eventAttendanceMode: 'https://schema.org/OfflineEventAttendanceMode',
           location: {
             '@type': 'Place',
-            name: selectedEvent.location,
+            name: effectiveEvent.location,
             address: {
               '@type': 'PostalAddress',
-              addressLocality: selectedEvent.location
+              addressLocality: effectiveEvent.location
             }
           },
           organizer: {
@@ -70,10 +86,14 @@ export const EventsPage: React.FC = () => {
             '@type': 'ListItem',
             position: idx + 1,
             name: e.title,
-            url: `${window.location.origin}/events/${e.slug}`
+            url: `${window.location.origin}/events/${e.slug || e.id}`
           }))
         }
   });
+
+  if (isNotFoundSlug) {
+    return <NotFoundPage />;
+  }
 
   const filteredEvents = events.filter(e => {
     const matchesTab = tab === 'Upcoming' ? e.status === 'Upcoming' : e.status === 'Past';
@@ -197,7 +217,7 @@ export const EventsPage: React.FC = () => {
                   <button
                     onClick={() => {
                       setSelectedEvent(evt);
-                      setActivePage('events', evt.slug);
+                      setActivePage('events', evt.slug || evt.id);
                       setRsvpSuccess(false);
                     }}
                     className="text-xs font-semibold text-indigo-950 hover:underline cursor-pointer"
@@ -209,7 +229,7 @@ export const EventsPage: React.FC = () => {
                     <button
                       onClick={() => {
                         setSelectedEvent(evt);
-                        setActivePage('events', evt.slug);
+                        setActivePage('events', evt.slug || evt.id);
                         setRsvpSuccess(false);
                       }}
                       className="px-3.5 py-2 bg-indigo-950 text-white rounded-xl text-xs font-semibold hover:bg-indigo-900 transition-colors cursor-pointer shadow-xs"

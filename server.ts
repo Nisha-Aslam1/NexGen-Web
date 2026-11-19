@@ -29,6 +29,7 @@ import {
 } from './server/seo.ts';
 
 import { meetingsRouter } from './server/meetings.ts';
+import { sendCouncilEmail } from './server/email.ts';
 
 const app = express();
 const PORT = 3000;
@@ -716,6 +717,43 @@ app.delete(['/api/contact/:id', '/api/contacts/:id'], requireAuth(['ADMIN']), (r
   res.json({ ok: true });
 });
 
+// 10b. Admin Resend Email Dispatch
+app.post('/api/send-email', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER']), async (req, res) => {
+  try {
+    const { to, subject, html, message, replyTo } = req.body || {};
+    const result = await sendCouncilEmail({ to, subject, html, message, replyTo });
+
+    if (!result.success) {
+      return res.status(result.statusCode || 400).json({
+        success: false,
+        error: result.error || 'Failed to send email.'
+      });
+    }
+
+    const user = (req as any).user;
+    db.logActivity({
+      userId: user.userId,
+      userName: user.name,
+      userRole: user.role,
+      action: 'EMAIL_SENT',
+      entityType: 'Email',
+      entityId: result.data?.id,
+      details: `Sent official email ("${result.data?.subject}") to ${result.data?.recipients.length || 0} recipient(s).`,
+      ipAddress: req.ip || 'unknown'
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: result.data
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Internal server error while sending email.'
+    });
+  }
+});
+
 // 11. Website Settings & Content Management
 app.get('/api/settings', (req, res) => {
   res.json(db.getSettings());
@@ -1101,6 +1139,51 @@ async function startServer() {
 
   app.use('/uploads', express.static(publicUploadsDir));
 
+  // Canonical URL normalization & 301 redirects for search engine crawlers
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/') || (req.path.includes('.') && !req.path.endsWith('.html'))) {
+      return next();
+    }
+
+    const hostHeader = ((req.headers['x-forwarded-host'] as string) || req.headers.host || '').split(',')[0].trim();
+    const hostname = hostHeader.split(':')[0].toLowerCase();
+    const proto = ((req.headers['x-forwarded-proto'] as string) || (req.secure ? 'https' : 'http')).split(',')[0].trim().toLowerCase();
+    const queryIdx = req.originalUrl.indexOf('?');
+    const querySuffix = queryIdx !== -1 ? req.originalUrl.slice(queryIdx) : '';
+
+    // 1. Redirect www.nexgencouncil.bond (or http on production domain) -> https://nexgencouncil.bond
+    if (hostname === 'www.nexgencouncil.bond' || (hostname === 'nexgencouncil.bond' && proto === 'http')) {
+      const cleanPath = req.path.length > 1 ? req.path.replace(/\/+$/, '') : '/';
+      return res.redirect(301, `https://nexgencouncil.bond${cleanPath}${querySuffix}`);
+    }
+
+    // 2. Strip trailing slash on non-root page URLs (e.g., /programs/foo/ -> /programs/foo)
+    if (req.path.length > 1 && req.path.endsWith('/')) {
+      const stripped = req.path.replace(/\/+$/, '');
+      return res.redirect(301, `${stripped}${querySuffix}`);
+    }
+
+    // 3. 301 Redirect legacy alias URLs to their single canonical route
+    const aliasRedirects: Record<string, string> = {
+      '/home': '/',
+      '/about-us': '/about',
+      '/upcoming-events': '/events',
+      '/news-and-updates': '/news',
+      '/leadership': '/team',
+      '/volunteer-with-us': '/volunteer',
+      '/volunteer-apply': '/volunteer',
+      '/track-application': '/track',
+      '/contact-us': '/contact'
+    };
+    const lowerPath = req.path.toLowerCase();
+    if (aliasRedirects[lowerPath]) {
+      return res.redirect(301, `${aliasRedirects[lowerPath]}${querySuffix}`);
+    }
+
+    next();
+  });
+
   // 1. Robots.txt Route
   app.get('/robots.txt', (req, res) => {
     const siteUrl = getSiteBaseUrl(req);
@@ -1173,23 +1256,26 @@ async function startServer() {
     });
   }
 
+  // Hydrate MongoDB before accepting SSR/API traffic (bounded wait so server always boots cleanly)
+  try {
+    const mongoConnected = await Promise.race([
+      initMongo(),
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 6000))
+    ]);
+    if (mongoConnected) {
+      await db.initFromMongo();
+      console.log('[MongoDB] Schema verified and hydrated from live MongoDB.');
+      const restored = await mongoRestoreAllMediaToDisk([publicUploadsDir, persistentUploadsDir]);
+      if (restored > 0) {
+        console.log(`[Storage] Successfully restored ${restored} media assets from MongoDB to local storage.`);
+      }
+    }
+  } catch (mErr: any) {
+    console.warn('[MongoDB] Init warning:', mErr?.message || mErr);
+  }
+
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`NexGen Council Server running on http://0.0.0.0:${PORT}`);
-
-    // Asynchronously initialize and synchronize MongoDB in the background
-    initMongo().then(async (mongoConnected) => {
-      if (mongoConnected) {
-        await db.initFromMongo();
-        console.log('[MongoDB] Schema verified and hydrated from live MongoDB.');
-        // Restore all uploaded media from MongoDB to local disk cache
-        const restored = await mongoRestoreAllMediaToDisk([publicUploadsDir, persistentUploadsDir]);
-        if (restored > 0) {
-          console.log(`[Storage] Successfully restored ${restored} media assets from MongoDB to local storage.`);
-        }
-      }
-    }).catch((mErr) => {
-      console.warn('[MongoDB] Init warning:', mErr?.message || mErr);
-    });
   });
 }
 

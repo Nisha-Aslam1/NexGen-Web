@@ -9,7 +9,7 @@ export const NotFoundPage: React.FC = () => {
   useDocumentSEO({
     title: 'Page Not Found (404) | NexGen Council',
     description: 'The requested page could not be located on the NexGen Women Empowerment & Youth Leadership Council platform.',
-    canonicalPath: '/404',
+    canonicalPath: typeof window !== 'undefined' ? window.location.pathname : '/404',
     noindex: true
   });
 

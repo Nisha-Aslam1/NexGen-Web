@@ -13,45 +13,61 @@ import {
   Sparkles
 } from 'lucide-react';
 import { Program } from '../../types.ts';
+import { NotFoundPage } from './NotFoundPage.tsx';
 
 export const ProgramsPage: React.FC = () => {
-  const { programs, setActivePage, selectedProgramSlug } = useApp();
+  const { programs, setActivePage, selectedProgramSlug, isLoadingPublicData } = useApp();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [activeModalProgram, setActiveModalProgram] = useState<Program | null>(null);
 
+  const matchedProgram = selectedProgramSlug
+    ? programs.find(
+        p =>
+          (p.slug && p.slug.toLowerCase() === selectedProgramSlug.toLowerCase()) ||
+          p.id.toLowerCase() === selectedProgramSlug.toLowerCase()
+      ) || null
+    : null;
+
+  const effectiveProgram = activeModalProgram || matchedProgram;
+
   // Sync selectedProgramSlug from URL
   useEffect(() => {
-    if (selectedProgramSlug && programs.length > 0) {
-      const match = programs.find(p => p.slug === selectedProgramSlug || p.id === selectedProgramSlug);
-      if (match) {
-        setActiveModalProgram(match);
+    if (selectedProgramSlug) {
+      if (matchedProgram) {
+        setActiveModalProgram(matchedProgram);
       }
+    } else {
+      setActiveModalProgram(null);
     }
-  }, [selectedProgramSlug, programs]);
+  }, [selectedProgramSlug, matchedProgram]);
+
+  const isNotFoundSlug = Boolean(selectedProgramSlug && !isLoadingPublicData && !matchedProgram);
+  const shouldSkipSeo = Boolean(selectedProgramSlug && (isLoadingPublicData || !matchedProgram));
 
   useDocumentSEO({
-    title: activeModalProgram
-      ? `${activeModalProgram.title} | Leadership Programs | NexGen Council`
+    skip: shouldSkipSeo,
+    title: effectiveProgram
+      ? `${effectiveProgram.title} | Leadership Programs | NexGen Council`
       : 'Empowerment & Leadership Programs | NexGen Council',
-    description: activeModalProgram
-      ? activeModalProgram.shortDescription
+    description: effectiveProgram
+      ? effectiveProgram.shortDescription
       : 'Browse active youth civic fellowships, women leadership cohorts, and skills accelerator programs designed to foster grassroots change.',
-    canonicalPath: activeModalProgram ? `/programs/${activeModalProgram.slug}` : '/programs',
+    canonicalPath: effectiveProgram ? `/programs/${effectiveProgram.slug || effectiveProgram.id}` : '/programs',
     ogType: 'website',
-    ogImage: activeModalProgram?.coverImage || '/banner.png',
-    jsonLd: activeModalProgram
+    ogImage: effectiveProgram?.coverImage || '/banner.png',
+    jsonLd: effectiveProgram
       ? {
           '@context': 'https://schema.org',
           '@type': 'EducationalOccupationalProgram',
-          name: activeModalProgram.title,
-          description: activeModalProgram.shortDescription,
+          name: effectiveProgram.title,
+          description: effectiveProgram.shortDescription,
           provider: {
             '@type': 'NGO',
             name: 'NexGen Council',
             url: window.location.origin
           },
-          timeToComplete: activeModalProgram.duration || 'P1M'
+          timeToComplete: effectiveProgram.duration || 'P1M'
         }
       : {
           '@context': 'https://schema.org',
@@ -61,10 +77,14 @@ export const ProgramsPage: React.FC = () => {
             '@type': 'ListItem',
             position: idx + 1,
             name: p.title,
-            url: `${window.location.origin}/programs/${p.slug}`
+            url: `${window.location.origin}/programs/${p.slug || p.id}`
           }))
         }
   });
+
+  if (isNotFoundSlug) {
+    return <NotFoundPage />;
+  }
 
   const categories = ['All', 'Leadership', 'Technology', 'Community', 'Advocacy'];
 
@@ -179,7 +199,7 @@ export const ProgramsPage: React.FC = () => {
                     <button
                       onClick={() => {
                         setActiveModalProgram(prg);
-                        setActivePage('programs', prg.slug);
+                        setActivePage('programs', prg.slug || prg.id);
                       }}
                       className="text-xs font-semibold text-indigo-950 hover:underline cursor-pointer"
                     >

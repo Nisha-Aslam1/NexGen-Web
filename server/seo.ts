@@ -18,15 +18,23 @@ export function getSiteBaseUrl(req?: Request): string {
   // 1. Environment variable SITE_URL, APP_URL, or VITE_SITE_URL
   const envUrl = process.env.SITE_URL || process.env.APP_URL || process.env.VITE_SITE_URL;
   if (envUrl && envUrl.trim()) {
-    return envUrl.trim().replace(/\/$/, '');
+    const normalizedEnv = envUrl.trim().replace(/\/+$/, '');
+    if (normalizedEnv.includes('www.nexgencouncil.bond') || normalizedEnv.includes('nexgencouncil.bond')) {
+      return 'https://nexgencouncil.bond';
+    }
+    return normalizedEnv;
   }
 
   // 2. Request host headers (handles proxy forwarding)
   if (req) {
-    const proto = (req.headers['x-forwarded-proto'] as string) || (req.secure ? 'https' : 'http');
-    const host = req.headers['x-forwarded-host'] || req.headers.host;
-    if (host && !host.includes('localhost') && !host.includes('127.0.0.1')) {
-      return `${proto}://${host}`.replace(/\/$/, '');
+    const proto = ((req.headers['x-forwarded-proto'] as string) || (req.secure ? 'https' : 'http')).split(',')[0].trim();
+    const rawHost = ((req.headers['x-forwarded-host'] as string) || req.headers.host || '').split(',')[0].trim();
+    const hostWithoutPort = rawHost.split(':')[0].toLowerCase();
+    if (hostWithoutPort === 'nexgencouncil.bond' || hostWithoutPort === 'www.nexgencouncil.bond') {
+      return 'https://nexgencouncil.bond';
+    }
+    if (rawHost && !rawHost.includes('localhost') && !rawHost.includes('127.0.0.1')) {
+      return `${proto}://${rawHost}`.replace(/\/+$/, '');
     }
   }
 
@@ -42,7 +50,8 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
     settings.tagline ||
     'Official platform for NexGen Women Empowerment & Youth Leadership Council. Dedicated to female leadership, youth civic engagement, and grassroots innovation.';
 
-  const cleanPath = pathname.split('?')[0].replace(/\/$/, '') || '/';
+  const rawCleanPath = pathname.split('?')[0].replace(/\/+$/, '') || '/';
+  const cleanPath = rawCleanPath.toLowerCase();
 
   // 1. Organization & Website Base Schemas
   const orgSchema = {
@@ -143,10 +152,11 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
   // Handle Dynamic Program Detail (/programs/:slug)
   if (cleanPath.startsWith('/programs/')) {
-    const slug = cleanPath.replace('/programs/', '').trim();
+    const slug = rawCleanPath.slice('/programs/'.length).trim();
     const program = db.getProgramBySlug(slug);
 
-    if (program) {
+    if (program && program.status === 'Published') {
+      const progSlug = program.slug || program.id;
       const progImage = program.coverImage.startsWith('http') ? program.coverImage : `${siteUrl}${program.coverImage}`;
       const courseSchema = {
         '@context': 'https://schema.org',
@@ -170,7 +180,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       return {
         title: `${program.title} | ${orgName}`,
         description: program.shortDescription || program.fullDescription.slice(0, 160),
-        canonicalUrl: `${siteUrl}/programs/${program.slug}`,
+        canonicalUrl: `${siteUrl}/programs/${progSlug}`,
         ogType: 'website',
         ogImage: progImage,
         jsonLd: [
@@ -179,7 +189,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
           createBreadcrumbs([
             { name: 'Home', url: `${siteUrl}/` },
             { name: 'Programs', url: `${siteUrl}/programs` },
-            { name: program.title, url: `${siteUrl}/programs/${program.slug}` }
+            { name: program.title, url: `${siteUrl}/programs/${progSlug}` }
           ])
         ]
       };
@@ -207,10 +217,10 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
   // Handle Dynamic Event Detail (/events/:slug)
   if (cleanPath.startsWith('/events/')) {
-    const slug = cleanPath.replace('/events/', '').trim();
+    const slug = rawCleanPath.slice('/events/'.length).trim();
     const event = db.getEventBySlug(slug);
 
-    if (event) {
+    if (event && event.status !== 'Draft') {
       const rawImg = event.coverImage || event.image || '/banner.png';
       const eventImage = rawImg.startsWith('http') ? rawImg : `${siteUrl}${rawImg}`;
       const eventSlug = event.slug || event.id;
@@ -279,10 +289,11 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
   // Handle Dynamic News Article (/news/:slug)
   if (cleanPath.startsWith('/news/')) {
-    const slug = cleanPath.replace('/news/', '').trim();
+    const slug = rawCleanPath.slice('/news/'.length).trim();
     const article = db.getNewsBySlug(slug);
 
-    if (article) {
+    if (article && article.status === 'Published') {
+      const articleSlug = article.slug || article.id;
       const articleImage = article.coverImage.startsWith('http') ? article.coverImage : `${siteUrl}${article.coverImage}`;
       const articleSchema = {
         '@context': 'https://schema.org',
@@ -309,7 +320,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       return {
         title: `${article.title} | ${orgName}`,
         description: article.summary.slice(0, 160),
-        canonicalUrl: `${siteUrl}/news/${article.slug}`,
+        canonicalUrl: `${siteUrl}/news/${articleSlug}`,
         ogType: 'article',
         ogImage: articleImage,
         publishedTime: article.publishedAt,
@@ -321,7 +332,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
           createBreadcrumbs([
             { name: 'Home', url: `${siteUrl}/` },
             { name: 'News', url: `${siteUrl}/news` },
-            { name: article.title, url: `${siteUrl}/news/${article.slug}` }
+            { name: article.title, url: `${siteUrl}/news/${articleSlug}` }
           ])
         ]
       };
@@ -749,11 +760,19 @@ export function injectSeoIntoHtml(
 
   const injectedTagsString = tags.join('\n    ');
 
-  // Strip pre-existing static meta tags to prevent duplicates
-  result = result.replace(/<meta\s+name="description"\s+content=".*?"\s*\/?>/gi, '');
-  result = result.replace(/<meta\s+property="og:.*?"\s+content=".*?"\s*\/?>/gi, '');
-  result = result.replace(/<meta\s+name="twitter:.*?"\s+content=".*?"\s*\/?>/gi, '');
-  result = result.replace(/<link\s+rel="canonical"\s+href=".*?"\s*\/?>/gi, '');
+  // Strip pre-existing static meta tags to prevent duplicates (handles quoted/unquoted attributes)
+  result = result.replace(/<meta\b[^>]*name=["']?description["']?[^>]*>/gi, '');
+  result = result.replace(/<meta\b[^>]*name=["']?robots["']?[^>]*>/gi, '');
+  result = result.replace(/<meta\b[^>]*property=["']?og:[^>]*>/gi, '');
+  result = result.replace(/<meta\b[^>]*name=["']?twitter:[^>]*>/gi, '');
+  result = result.replace(/<link\b[^>]*rel=["']?canonical["']?[^>]*>/gi, '');
+  result = result.replace(/<link\b[^>]*rel=["']?image_src["']?[^>]*>/gi, '');
+  if (googleVerification && googleVerification.trim()) {
+    result = result.replace(/<meta\b[^>]*name=["']?google-site-verification["']?[^>]*>/gi, '');
+  }
+  if (meta.author) {
+    result = result.replace(/<meta\b[^>]*name=["']?author["']?[^>]*>/gi, '');
+  }
 
   // Insert before </head>
   result = result.replace('</head>', `    ${injectedTagsString}\n  </head>`);

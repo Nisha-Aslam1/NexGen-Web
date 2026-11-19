@@ -25,7 +25,8 @@ import {
   RefreshCw,
   Radio,
   Code2,
-  Video
+  Video,
+  Send
 } from 'lucide-react';
 
 export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -58,6 +59,7 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
     { tab: 'team', label: 'Team', icon: UserCheck },
     { tab: 'gallery', label: 'Gallery', icon: ImageIcon },
     { tab: 'contacts', label: 'Inquiries', icon: Mail, badge: unreadContactsCount },
+    { tab: 'email', label: 'Send Email', icon: Send },
     { tab: 'settings', label: 'Settings', icon: Settings },
     { tab: 'users', label: 'Access Control', icon: ShieldCheck },
     { tab: 'database', label: 'Database & MongoDB', icon: Database },
@@ -84,7 +86,7 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
               }}
             />
             <div>
-              <h1 className="text-white font-bold text-base tracking-tight leading-none">NEXTGEN</h1>
+              <h1 className="text-white font-bold text-base tracking-tight leading-none">NEXGEN</h1>
               <p className="text-slate-400 text-[10px] uppercase tracking-widest mt-1 font-semibold">Council Platform</p>
             </div>
           </div>

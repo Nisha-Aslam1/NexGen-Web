@@ -11,6 +11,15 @@ export interface SEOProps {
   modifiedTime?: string;
   author?: string;
   jsonLd?: Record<string, any> | Record<string, any>[];
+  skip?: boolean;
+}
+
+function getNormalizedOrigin(): string {
+  const { origin, hostname } = window.location;
+  if (hostname === 'nexgencouncil.bond' || hostname === 'www.nexgencouncil.bond') {
+    return 'https://nexgencouncil.bond';
+  }
+  return origin.replace(/\/+$/, '');
 }
 
 /**
@@ -27,20 +36,27 @@ export function useDocumentSEO({
   publishedTime,
   modifiedTime,
   author,
-  jsonLd
+  jsonLd,
+  skip = false
 }: SEOProps) {
   useEffect(() => {
+    if (skip) return;
+
     // 1. Update Title
     if (title) {
       document.title = title;
     }
 
-    // 2. Base domain from current location
-    const origin = window.location.origin;
-    const cleanPath = canonicalPath.startsWith('/') ? canonicalPath : `/${canonicalPath}`;
-    const fullCanonical = `${origin}${cleanPath === '/' ? '' : cleanPath}`;
+    // 2. Base domain normalized to canonical origin
+    const origin = getNormalizedOrigin();
+    const rawPath = canonicalPath || window.location.pathname || '/';
+    const strippedPath = rawPath.split('?')[0].replace(/\/+$/, '') || '/';
+    const cleanPath = strippedPath.startsWith('/') ? strippedPath : `/${strippedPath}`;
+    const fullCanonical = cleanPath === '/' ? `${origin}/` : `${origin}${cleanPath}`;
     const defaultImage = `${origin}/banner.png`;
-    const imageToUse = ogImage || defaultImage;
+    const imageToUse = ogImage
+      ? (ogImage.startsWith('http') ? ogImage : `${origin}${ogImage.startsWith('/') ? '' : '/'}${ogImage}`)
+      : defaultImage;
 
     // Helper: update or create meta tag
     const setMeta = (attrName: string, attrVal: string, content: string) => {
@@ -120,6 +136,7 @@ export function useDocumentSEO({
       }
     };
   }, [
+    skip,
     title,
     description,
     canonicalPath,

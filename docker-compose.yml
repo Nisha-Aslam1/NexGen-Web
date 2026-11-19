@@ -15,6 +15,8 @@ services:
       - PORT=3000
       - MONGODB_URI=mongodb://mongodb:27017/nexgen_council
       - SESSION_SECRET=${SESSION_SECRET:-nexgen_oracle_secure_production_secret_2026}
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - SITE_URL=${SITE_URL:-https://nexgencouncil.bond}
     depends_on:
       mongodb:
         condition: service_healthy
