@@ -86,6 +86,120 @@ function isValidEmailImageInput(url: string): boolean {
   }
 }
 
+async function parseJsonResponse<T = any>(res: Response): Promise<T> {
+  const rawText = await res.text();
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    if (!res.ok) {
+      throw new Error(`Server returned HTTP ${res.status} with an empty response.`);
+    }
+    return {} as T;
+  }
+
+  try {
+    return JSON.parse(trimmed) as T;
+  } catch {
+    if (res.status === 413 || trimmed.includes('413') || trimmed.toLowerCase().includes('entity too large')) {
+      throw new Error('Image is too large for the server proxy (HTTP 413). Please try a smaller image.');
+    }
+    if (trimmed.startsWith('<')) {
+      throw new Error(`Server proxy returned HTML instead of JSON (HTTP ${res.status || 502}). Please retry or check server logs.`);
+    }
+    throw new Error(`Unexpected server response (HTTP ${res.status}).`);
+  }
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error('Failed to read image file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function compressImageToDataUrl(
+  file: File,
+  options: { maxDimension: number; preferPng?: boolean; maxDataUrlLength?: number }
+): Promise<{ dataUrl: string; filename: string }> {
+  const maxDataUrlLength = options.maxDataUrlLength ?? 720_000; // ~540KB binary, safely under Nginx 1MB default limit
+  const rawDataUrl = await readFileAsDataUrl(file);
+
+  // Keep small GIFs or already-small PNG/JPG files untouched
+  if (file.type === 'image/gif' && rawDataUrl.length <= maxDataUrlLength) {
+    return { dataUrl: rawDataUrl, filename: file.name };
+  }
+  if (rawDataUrl.length <= 450_000 && file.type !== 'image/webp' && file.type !== 'image/svg+xml') {
+    return { dataUrl: rawDataUrl, filename: file.name };
+  }
+
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image();
+    el.onload = () => resolve(el);
+    el.onerror = () => reject(new Error('Could not decode image file.'));
+    el.src = rawDataUrl;
+  });
+
+  let width = img.naturalWidth || img.width;
+  let height = img.naturalHeight || img.height;
+  const maxDim = options.maxDimension;
+
+  if (width > maxDim || height > maxDim) {
+    const scale = Math.min(maxDim / width, maxDim / height);
+    width = Math.max(1, Math.round(width * scale));
+    height = Math.max(1, Math.round(height * scale));
+  }
+
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    return { dataUrl: rawDataUrl, filename: file.name };
+  }
+
+  const drawAtSize = (w: number, h: number) => {
+    canvas.width = w;
+    canvas.height = h;
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+  };
+
+  drawAtSize(width, height);
+
+  // If logo/transparent PNG preferred, try PNG first
+  if (options.preferPng && file.type === 'image/png') {
+    const pngUrl = canvas.toDataURL('image/png');
+    if (pngUrl.length <= maxDataUrlLength) {
+      return { dataUrl: pngUrl, filename: file.name.replace(/\.[^.]+$/, '') + '.png' };
+    }
+    // Try smaller logo dimensions in PNG to keep transparency
+    for (const dim of [360, 260, 200]) {
+      const s = Math.min(1, dim / Math.max(width, height));
+      drawAtSize(Math.max(1, Math.round(width * s)), Math.max(1, Math.round(height * s)));
+      const smallerPng = canvas.toDataURL('image/png');
+      if (smallerPng.length <= maxDataUrlLength) {
+        return { dataUrl: smallerPng, filename: file.name.replace(/\.[^.]+$/, '') + '.png' };
+      }
+    }
+  }
+
+  // Fallback / standard email photos: JPEG compression (universally supported by Gmail & Outlook)
+  drawAtSize(width, height);
+  for (const quality of [0.85, 0.75, 0.65, 0.55]) {
+    const jpegUrl = canvas.toDataURL('image/jpeg', quality);
+    if (jpegUrl.length <= maxDataUrlLength) {
+      return { dataUrl: jpegUrl, filename: file.name.replace(/\.[^.]+$/, '') + '.jpg' };
+    }
+  }
+
+  // Final resize pass if dimensions were still dense
+  const s = 0.65;
+  drawAtSize(Math.max(1, Math.round(width * s)), Math.max(1, Math.round(height * s)));
+  return {
+    dataUrl: canvas.toDataURL('image/jpeg', 0.65),
+    filename: file.name.replace(/\.[^.]+$/, '') + '.jpg'
+  };
+}
+
 export const AdminEmailComposer: React.FC = () => {
   const { addToast, settings, refreshData, currentUser } = useApp();
 
@@ -148,7 +262,7 @@ export const AdminEmailComposer: React.FC = () => {
     try {
       const res = await authFetch('/api/email/settings');
       if (!res.ok) return;
-      const data = await res.json();
+      const data = await parseJsonResponse<any>(res);
       if (data.senderName) setSenderName(data.senderName);
       if (data.senderEmail) {
         setSenderEmail(data.senderEmail);
@@ -170,7 +284,7 @@ export const AdminEmailComposer: React.FC = () => {
     try {
       const res = await authFetch('/api/email/history');
       if (!res.ok) return;
-      const data = await res.json();
+      const data = await parseJsonResponse<any>(res);
       if (Array.isArray(data.logs)) {
         setHistoryLogs(data.logs);
       }
@@ -220,27 +334,26 @@ export const AdminEmailComposer: React.FC = () => {
     setSenderEmail(`${cleaned}@${VERIFIED_DOMAIN}`);
   };
 
-  const uploadImageFile = async (file: File): Promise<string> => {
+  const uploadImageFile = async (file: File, kind: 'logo' | 'body'): Promise<string> => {
     if (!file.type.startsWith('image/')) {
       throw new Error('Please choose a valid image file (PNG, JPG, WebP, GIF).');
     }
-    if (file.size > 10 * 1024 * 1024) {
-      throw new Error('Image is too large. Please select an image under 10MB.');
+    if (file.size > 15 * 1024 * 1024) {
+      throw new Error('Image is too large. Please select an image under 15MB.');
     }
 
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = () => reject(new Error('Failed to read image file.'));
-      reader.readAsDataURL(file);
+    const { dataUrl, filename } = await compressImageToDataUrl(file, {
+      maxDimension: kind === 'logo' ? 480 : 1200,
+      preferPng: kind === 'logo',
+      maxDataUrlLength: 720_000
     });
 
     const res = await authFetch('/api/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dataUrl, filename: file.name })
+      body: JSON.stringify({ dataUrl, filename })
     });
-    const data = await res.json();
+    const data = await parseJsonResponse<any>(res);
     if (!res.ok || !data.url) {
       throw new Error(data.error || 'Image upload failed.');
     }
@@ -254,7 +367,7 @@ export const AdminEmailComposer: React.FC = () => {
 
     setUploadingLogo(true);
     try {
-      const uploadedUrl = await uploadImageFile(file);
+      const uploadedUrl = await uploadImageFile(file, 'logo');
       setLogoUrl(uploadedUrl);
       addToast('Header logo uploaded! Click "Save as Default Sender" to keep it permanently.', 'success');
     } catch (err: any) {
@@ -278,7 +391,7 @@ export const AdminEmailComposer: React.FC = () => {
     try {
       const added: EmailImage[] = [];
       for (const file of files) {
-        const uploadedUrl = await uploadImageFile(file);
+        const uploadedUrl = await uploadImageFile(file, 'body');
         added.push({
           id: `eimg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
           url: uploadedUrl,
@@ -376,7 +489,7 @@ export const AdminEmailComposer: React.FC = () => {
           logoUrl: cleanLogoUrl
         })
       });
-      const data = await res.json();
+      const data = await parseJsonResponse<any>(res);
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Failed to save sender identity.');
       }
@@ -471,7 +584,7 @@ export const AdminEmailComposer: React.FC = () => {
         })
       });
 
-      const payload = await res.json();
+      const payload = await parseJsonResponse<any>(res);
 
       if (payload.log) {
         setHistoryLogs(prev => [payload.log, ...prev]);
@@ -535,7 +648,7 @@ export const AdminEmailComposer: React.FC = () => {
     if (!confirm('Remove this email entry from sent history?')) return;
     try {
       const res = await authFetch(`/api/email/history/${id}`, { method: 'DELETE' });
-      const data = await res.json();
+      const data = await parseJsonResponse<any>(res);
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Could not delete email record.');
       }

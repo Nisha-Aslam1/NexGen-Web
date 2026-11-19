@@ -27,8 +27,8 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
       return;
     }
 
-    if (file.size > 12 * 1024 * 1024) {
-      setError('Image is too large. Please select an image under 12MB.');
+    if (file.size > 15 * 1024 * 1024) {
+      setError('Image is too large. Please select an image under 15MB.');
       return;
     }
 
@@ -36,37 +36,81 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
     setUploading(true);
 
     try {
-      // Read as base64 data URL
-      const reader = new FileReader();
-      reader.onload = async () => {
+      const rawDataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error('Failed to read image file'));
+        reader.readAsDataURL(file);
+      });
+
+      let uploadDataUrl = rawDataUrl;
+      let uploadFilename = file.name;
+
+      // Compress raster images above ~450KB so base64 payloads stay safely below Nginx's 1MB default limit
+      if (
+        rawDataUrl.length > 450_000 &&
+        file.type !== 'image/svg+xml' &&
+        file.type !== 'image/gif'
+      ) {
         try {
-          const dataUrl = reader.result as string;
-          const res = await authFetch('/api/upload', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              dataUrl,
-              filename: file.name
-            })
+          const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+            const el = new Image();
+            el.onload = () => resolve(el);
+            el.onerror = () => reject(new Error('Could not decode image'));
+            el.src = rawDataUrl;
           });
-
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || 'Upload failed');
-
-          onChange(data.url);
-          setUploading(false);
-        } catch (uploadErr: any) {
-          setError(uploadErr.message || 'Error uploading image');
-          setUploading(false);
+          let w = img.naturalWidth || img.width;
+          let h = img.naturalHeight || img.height;
+          const maxDim = 1400;
+          if (w > maxDim || h > maxDim) {
+            const s = Math.min(maxDim / w, maxDim / h);
+            w = Math.max(1, Math.round(w * s));
+            h = Math.max(1, Math.round(h * s));
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, w, h);
+            for (const q of [0.85, 0.72, 0.6]) {
+              const candidate = canvas.toDataURL('image/jpeg', q);
+              if (candidate.length <= 720_000 || q === 0.6) {
+                uploadDataUrl = candidate;
+                uploadFilename = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+                break;
+              }
+            }
+          }
+        } catch {
+          // Fall back to original dataUrl if canvas optimization is unavailable
         }
-      };
+      }
 
-      reader.onerror = () => {
-        setError('Failed to read image file');
-        setUploading(false);
-      };
+      const res = await authFetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dataUrl: uploadDataUrl,
+          filename: uploadFilename
+        })
+      });
 
-      reader.readAsDataURL(file);
+      const rawText = await res.text();
+      let data: any = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        if (res.status === 413 || rawText.includes('413') || rawText.toLowerCase().includes('entity too large')) {
+          throw new Error('Image is too large for the server proxy (HTTP 413). Please choose a smaller image.');
+        }
+        throw new Error(`Unexpected server response (HTTP ${res.status}).`);
+      }
+
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+
+      onChange(data.url);
+      setUploading(false);
     } catch (e: any) {
       setError(e.message || 'Upload error');
       setUploading(false);
