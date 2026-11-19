@@ -216,7 +216,8 @@ const defaultSettings: WebsiteSettings = {
   googleAnalyticsId: '',
   emailSenderName: 'NexGen Council',
   emailSenderEmail: 'admin@nexgencouncil.bond',
-  emailReplyTo: ''
+  emailReplyTo: '',
+  emailLogoUrl: 'https://i.postimg.cc/5yM8rqz0/logo-(1).png'
 };
 
 function getSeedData(): DatabaseSchema {
@@ -1384,20 +1385,28 @@ class Database {
     return {
       senderName: (s.emailSenderName || 'NexGen Council').trim(),
       senderEmail: (s.emailSenderEmail || 'admin@nexgencouncil.bond').trim().toLowerCase(),
-      replyTo: (s.emailReplyTo || '').trim()
+      replyTo: (s.emailReplyTo || '').trim(),
+      logoUrl: (s.emailLogoUrl ?? 'https://i.postimg.cc/5yM8rqz0/logo-(1).png').trim()
     };
   }
 
-  updateEmailSenderConfig(updates: { senderName?: string; senderEmail?: string; replyTo?: string }) {
+  updateEmailSenderConfig(updates: {
+    senderName?: string;
+    senderEmail?: string;
+    replyTo?: string;
+    logoUrl?: string;
+  }) {
     const current = this.getEmailSenderConfig();
     const senderName = updates.senderName !== undefined ? updates.senderName.trim() : current.senderName;
     const senderEmail = updates.senderEmail !== undefined ? updates.senderEmail.trim().toLowerCase() : current.senderEmail;
     const replyTo = updates.replyTo !== undefined ? updates.replyTo.trim() : current.replyTo;
+    const logoUrl = updates.logoUrl !== undefined ? updates.logoUrl.trim() : current.logoUrl;
 
     this.updateSettings({
       emailSenderName: senderName || 'NexGen Council',
       emailSenderEmail: senderEmail || 'admin@nexgencouncil.bond',
-      emailReplyTo: replyTo
+      emailReplyTo: replyTo,
+      emailLogoUrl: logoUrl
     });
 
     return this.getEmailSenderConfig();

@@ -222,6 +222,15 @@ export interface WebsiteSettings {
   emailSenderName?: string;
   emailSenderEmail?: string;
   emailReplyTo?: string;
+  emailLogoUrl?: string;
+}
+
+export interface EmailImage {
+  id: string;
+  url: string;
+  alt?: string;
+  caption?: string;
+  placement?: 'top' | 'bottom';
 }
 
 export interface EmailLog {
@@ -234,6 +243,8 @@ export interface EmailLog {
   subject: string;
   message: string;
   html?: string;
+  logoUrl?: string;
+  images?: EmailImage[];
   status: 'Sent' | 'Failed';
   error?: string;
   sentByUserId?: string;

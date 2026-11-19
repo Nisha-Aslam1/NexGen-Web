@@ -29,7 +29,7 @@ import {
 } from './server/seo.ts';
 
 import { meetingsRouter } from './server/meetings.ts';
-import { sendCouncilEmail, sanitizeSenderName, isValidEmailAddress } from './server/email.ts';
+import { sendCouncilEmail, sanitizeSenderName, isValidEmailAddress, isValidImageUrl } from './server/email.ts';
 
 const app = express();
 const PORT = 3000;
@@ -723,10 +723,11 @@ app.get('/api/email/settings', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTE
 });
 
 app.put('/api/email/settings', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER']), (req, res) => {
-  const { senderName, senderEmail, replyTo } = req.body || {};
+  const { senderName, senderEmail, replyTo, logoUrl } = req.body || {};
   const cleanName = sanitizeSenderName(senderName);
   const cleanEmail = String(senderEmail || '').trim().toLowerCase();
   const cleanReplyTo = typeof replyTo === 'string' ? replyTo.trim() : '';
+  const cleanLogoUrl = typeof logoUrl === 'string' ? logoUrl.trim() : undefined;
 
   if (!cleanName) {
     return res.status(400).json({ success: false, error: 'Sender display name is required.' });
@@ -737,11 +738,15 @@ app.put('/api/email/settings', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTE
   if (cleanReplyTo && !isValidEmailAddress(cleanReplyTo)) {
     return res.status(400).json({ success: false, error: 'Default Reply-To must be a valid email address.' });
   }
+  if (cleanLogoUrl && !isValidImageUrl(cleanLogoUrl)) {
+    return res.status(400).json({ success: false, error: 'Header Logo URL must be a valid http(s) URL or uploaded image path.' });
+  }
 
   const config = db.updateEmailSenderConfig({
     senderName: cleanName,
     senderEmail: cleanEmail,
-    replyTo: cleanReplyTo
+    replyTo: cleanReplyTo,
+    ...(cleanLogoUrl !== undefined ? { logoUrl: cleanLogoUrl } : {})
   });
 
   const user = (req as any).user;
@@ -789,11 +794,13 @@ app.delete('/api/email/history/:id', requireAuth(['ADMIN']), (req, res) => {
 
 app.post('/api/send-email', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER']), async (req, res) => {
   try {
-    const { to, subject, html, message, replyTo, fromName, fromEmail } = req.body || {};
+    const { to, subject, html, message, replyTo, fromName, fromEmail, logoUrl, images } = req.body || {};
     const savedConfig = db.getEmailSenderConfig();
+    const siteSettings = db.getSettings();
     const effectiveFromName = (typeof fromName === 'string' && fromName.trim()) ? fromName.trim() : savedConfig.senderName;
     const effectiveFromEmail = (typeof fromEmail === 'string' && fromEmail.trim()) ? fromEmail.trim().toLowerCase() : savedConfig.senderEmail;
     const effectiveReplyTo = typeof replyTo === 'string' ? replyTo.trim() : savedConfig.replyTo;
+    const effectiveLogoUrl = logoUrl !== undefined ? (typeof logoUrl === 'string' ? logoUrl.trim() : '') : savedConfig.logoUrl;
 
     const result = await sendCouncilEmail({
       to,
@@ -802,7 +809,10 @@ app.post('/api/send-email', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_
       message,
       replyTo: effectiveReplyTo || undefined,
       fromName: effectiveFromName,
-      fromEmail: effectiveFromEmail
+      fromEmail: effectiveFromEmail,
+      logoUrl: effectiveLogoUrl || undefined,
+      images: Array.isArray(images) ? images : undefined,
+      siteUrl: siteSettings.siteUrl || 'https://nexgencouncil.bond'
     });
 
     const user = (req as any).user;
@@ -817,6 +827,8 @@ app.post('/api/send-email', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_
           replyTo: result.resolvedMeta.replyTo,
           subject: result.resolvedMeta.subject,
           message: result.resolvedMeta.message,
+          logoUrl: result.resolvedMeta.logoUrl,
+          images: result.resolvedMeta.images,
           status: 'Failed',
           error: result.error || 'Failed to send email.',
           sentByUserId: user.userId,
@@ -839,6 +851,8 @@ app.post('/api/send-email', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_
       replyTo: effectiveReplyTo || undefined,
       subject: result.data?.subject || String(subject || '').trim(),
       message: String(message || '').trim() || '[HTML Content]',
+      logoUrl: result.resolvedMeta?.logoUrl,
+      images: result.resolvedMeta?.images,
       status: 'Sent',
       sentByUserId: user.userId,
       sentByName: user.name,
