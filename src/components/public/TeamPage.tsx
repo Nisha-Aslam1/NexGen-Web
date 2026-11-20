@@ -1,17 +1,20 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext.tsx';
 import { useDocumentSEO } from '../../lib/seo.ts';
+import { TeamMember } from '../../types.ts';
+import { LeaderProfileModal } from './LeaderProfileModal.tsx';
 import {
   Users,
   Mail,
   Linkedin,
   Twitter,
-  ShieldCheck,
-  Award
+  Award,
+  ArrowUpRight
 } from 'lucide-react';
 
 export const TeamPage: React.FC = () => {
   const { team, setActivePage, settings } = useApp();
+  const [selectedMember, setSelectedMember] = useState<TeamMember | null>(null);
 
   const activeMembers = [...team]
     .filter(m => m.active)
@@ -20,12 +23,13 @@ export const TeamPage: React.FC = () => {
   const programLeads = activeMembers.filter(m => m.department !== 'Executive Board' && m.department !== 'Leadership');
 
   useDocumentSEO({
-    title: `Council Leadership & Governance | ${settings?.organizationName || 'NexGen Council'}`,
+    title: 'Executive Leadership & Board | NexGen Council',
     description:
-      'Meet the visionary leaders, policy educators, and civil society advocates steering the NexGen Women Empowerment & Youth Leadership Council.',
+      'Meet the founder, board of directors, council executives, and program coordinators leading NexGen Women Empowerment & Youth Leadership Council.',
     canonicalPath: '/team',
     ogType: 'website',
     ogImage: '/banner.png',
+    keywords: ['NexGen leadership', 'NexGen executive board', 'Minahil Imran Awan'],
     jsonLd: [
       {
         '@context': 'https://schema.org',
@@ -69,55 +73,108 @@ export const TeamPage: React.FC = () => {
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
         <div className="border-b border-slate-200 pb-3">
           <h2 className="text-2xl font-serif font-bold text-slate-900">Executive Council &amp; Directorship</h2>
-          <p className="text-xs text-slate-500 mt-1">Responsible for overall strategy, ethical standards, and global institutional partnerships.</p>
+          <p className="text-xs text-slate-500 mt-1">
+            Responsible for overall strategy, ethical standards, and global institutional partnerships. Click any profile card to read the full biography.
+          </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-          {(leadership.length > 0 ? leadership : activeMembers).map(mem => (
-            <div
-              key={mem.id}
-              className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-lg transition-all flex flex-col group"
-            >
-              <div className="aspect-square bg-slate-900 overflow-hidden relative">
-                <img
-                  src={mem.image}
-                  alt={`${mem.name} - ${mem.position}`}
-                  loading="lazy"
-                  decoding="async"
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                />
-                <span className="absolute bottom-3 left-3 px-2.5 py-0.5 rounded-full bg-slate-950/80 text-amber-300 text-[11px] font-semibold backdrop-blur-xs">
-                  {mem.department}
-                </span>
-              </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 items-stretch">
+          {(leadership.length > 0 ? leadership : activeMembers).map(mem => {
+            const linkedin = mem.linkedinUrl || (mem as any).linkedin;
+            const twitter = mem.twitterUrl || (mem as any).twitter;
+            const bioPreview = (mem.bio || '').trim();
 
-              <div className="p-6 flex-1 flex flex-col justify-between space-y-4">
-                <div className="space-y-2">
-                  <div>
-                    <h3 className="font-serif font-bold text-lg text-slate-900">{mem.name}</h3>
-                    <p className="text-xs font-semibold text-amber-700">{mem.position}</p>
-                  </div>
-                  <p className="text-xs text-slate-600 leading-relaxed">{mem.bio}</p>
+            return (
+              <article
+                key={mem.id}
+                onClick={() => setSelectedMember(mem)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setSelectedMember(mem);
+                  }
+                }}
+                tabIndex={0}
+                role="button"
+                aria-label={`Open full profile for ${mem.name}`}
+                className="h-full bg-white rounded-3xl border border-slate-200 hover:border-indigo-200 overflow-hidden shadow-xs hover:shadow-lg transition-all flex flex-col group cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              >
+                <div className="aspect-square bg-slate-900 overflow-hidden relative shrink-0">
+                  <img
+                    src={mem.image}
+                    alt={`${mem.name} - ${mem.position}`}
+                    loading="lazy"
+                    decoding="async"
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                  />
+                  <span className="absolute bottom-3 left-3 px-2.5 py-0.5 rounded-full bg-slate-950/80 text-amber-300 text-[11px] font-semibold backdrop-blur-xs">
+                    {mem.department}
+                  </span>
                 </div>
 
-                <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-slate-400">
-                  <span className="text-[11px] text-slate-400">Council Member</span>
-                  <div className="flex items-center gap-2">
-                    {(mem.linkedinUrl || (mem as any).linkedin) && (
-                      <a href={mem.linkedinUrl || (mem as any).linkedin} target="_blank" rel="noopener noreferrer" className="hover:text-indigo-950 transition-colors">
-                        <Linkedin className="w-4 h-4" />
-                      </a>
-                    )}
-                    {mem.email && (
-                      <a href={`mailto:${mem.email}`} className="hover:text-indigo-950 transition-colors">
-                        <Mail className="w-4 h-4" />
-                      </a>
-                    )}
+                <div className="p-6 flex-1 flex flex-col justify-between gap-4">
+                  <div className="space-y-2.5">
+                    <div>
+                      <h3 className="font-serif font-bold text-lg text-slate-900 line-clamp-1 group-hover:text-indigo-950 transition-colors">
+                        {mem.name}
+                      </h3>
+                      <p className="text-xs font-semibold text-amber-700 line-clamp-1 mt-0.5">
+                        {mem.position}
+                      </p>
+                    </div>
+
+                    <p className="text-xs text-slate-600 leading-relaxed line-clamp-3 min-h-[3.65rem]">
+                      {bioPreview || `${mem.position} at ${settings?.organizationName || 'NexGen Council'}. Click to view full profile.`}
+                    </p>
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-950 group-hover:text-amber-700 transition-colors">
+                      <span>View Full Profile</span>
+                      <ArrowUpRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                    </span>
+
+                    <div
+                      className="flex items-center gap-2 text-slate-400"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {linkedin && (
+                        <a
+                          href={linkedin}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label={`${mem.name} LinkedIn`}
+                          className="p-1 hover:text-indigo-950 transition-colors"
+                        >
+                          <Linkedin className="w-4 h-4" />
+                        </a>
+                      )}
+                      {twitter && (
+                        <a
+                          href={twitter}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label={`${mem.name} Twitter`}
+                          className="p-1 hover:text-indigo-950 transition-colors"
+                        >
+                          <Twitter className="w-4 h-4" />
+                        </a>
+                      )}
+                      {mem.email && (
+                        <a
+                          href={`mailto:${mem.email}`}
+                          aria-label={`Email ${mem.name}`}
+                          className="p-1 hover:text-indigo-950 transition-colors"
+                        >
+                          <Mail className="w-4 h-4" />
+                        </a>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
-          ))}
+              </article>
+            );
+          })}
         </div>
       </section>
 
@@ -129,40 +186,69 @@ export const TeamPage: React.FC = () => {
             <p className="text-xs text-slate-500 mt-1">Directing fellowship cohorts, grassroots projects, and digital curricula.</p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {programLeads.map(mem => (
-              <div
-                key={mem.id}
-                className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col group"
-              >
-                <div className="aspect-square bg-slate-100 overflow-hidden relative">
-                  <img
-                    src={mem.image}
-                    alt={mem.name}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                  />
-                  <span className="absolute bottom-2.5 left-2.5 px-2 py-0.5 rounded-full bg-slate-950/80 text-slate-200 text-[10px] font-semibold">
-                    {mem.department}
-                  </span>
-                </div>
-
-                <div className="p-5 flex-1 flex flex-col justify-between space-y-3">
-                  <div>
-                    <h4 className="font-serif font-bold text-base text-slate-900">{mem.name}</h4>
-                    <p className="text-xs font-semibold text-amber-700">{mem.position}</p>
-                    <p className="text-xs text-slate-500 mt-2 line-clamp-3 leading-relaxed">{mem.bio}</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 items-stretch">
+            {programLeads.map(mem => {
+              const bioPreview = (mem.bio || '').trim();
+              return (
+                <article
+                  key={mem.id}
+                  onClick={() => setSelectedMember(mem)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setSelectedMember(mem);
+                    }
+                  }}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`Open full profile for ${mem.name}`}
+                  className="h-full bg-white rounded-3xl border border-slate-200 hover:border-indigo-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col group cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                >
+                  <div className="aspect-square bg-slate-100 overflow-hidden relative shrink-0">
+                    <img
+                      src={mem.image}
+                      alt={mem.name}
+                      loading="lazy"
+                      decoding="async"
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    />
+                    <span className="absolute bottom-2.5 left-2.5 px-2 py-0.5 rounded-full bg-slate-950/80 text-slate-200 text-[10px] font-semibold">
+                      {mem.department}
+                    </span>
                   </div>
 
-                  <div className="pt-2 border-t border-slate-100 flex items-center justify-end gap-2 text-slate-400">
-                    {mem.email && (
-                      <a href={`mailto:${mem.email}`} className="hover:text-indigo-950 transition-colors">
-                        <Mail className="w-4 h-4" />
-                      </a>
-                    )}
+                  <div className="p-5 flex-1 flex flex-col justify-between gap-3">
+                    <div>
+                      <h4 className="font-serif font-bold text-base text-slate-900 line-clamp-1 group-hover:text-indigo-950 transition-colors">
+                        {mem.name}
+                      </h4>
+                      <p className="text-xs font-semibold text-amber-700 line-clamp-1 mt-0.5">{mem.position}</p>
+                      <p className="text-xs text-slate-500 mt-2 line-clamp-3 leading-relaxed min-h-[3.65rem]">
+                        {bioPreview || `${mem.position} — click to view profile.`}
+                      </p>
+                    </div>
+
+                    <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-950 group-hover:text-amber-700 transition-colors">
+                        <span>View Profile</span>
+                        <ArrowUpRight className="w-3 h-3" />
+                      </span>
+
+                      {mem.email && (
+                        <a
+                          href={`mailto:${mem.email}`}
+                          onClick={(e) => e.stopPropagation()}
+                          aria-label={`Email ${mem.name}`}
+                          className="p-1 text-slate-400 hover:text-indigo-950 transition-colors"
+                        >
+                          <Mail className="w-4 h-4" />
+                        </a>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </div>
-            ))}
+                </article>
+              );
+            })}
           </div>
         </section>
       )}
@@ -188,6 +274,12 @@ export const TeamPage: React.FC = () => {
           </div>
         </div>
       </section>
+
+      {/* Openable Full Leader Biography Modal */}
+      <LeaderProfileModal
+        member={selectedMember}
+        onClose={() => setSelectedMember(null)}
+      />
     </div>
   );
 };

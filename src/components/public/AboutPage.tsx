@@ -18,12 +18,13 @@ export const AboutPage: React.FC = () => {
   const { setActivePage, settings } = useApp();
 
   useDocumentSEO({
-    title: `About Us | ${settings?.organizationName || 'NexGen Council'}`,
+    title: 'About NexGen Council | NexGen Council',
     description:
-      'Discover the mission, history, and core values of NexGen Council. Learn how our civil society initiative accelerates women empowerment and youth civic leadership.',
+      'Learn about NexGen Council (NexGen Women Empowerment & Youth Leadership Council), our mission, charter, and impact across women and youth leadership.',
     canonicalPath: '/about',
     ogType: 'website',
     ogImage: '/banner.png',
+    keywords: ['about NexGen', 'NexGen Council mission', 'women leadership NGO Pakistan'],
     jsonLd: [
       {
         '@context': 'https://schema.org',

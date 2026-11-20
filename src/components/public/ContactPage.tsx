@@ -25,11 +25,12 @@ export const ContactPage: React.FC = () => {
   const [submittedSuccess, setSubmittedSuccess] = useState(false);
 
   useDocumentSEO({
-    title: `Contact Secretariat & Regional Chapters | ${settings?.organizationName || 'NexGen Council'}`,
-    description: `Connect with the administrative office, partnerships desk, or media liaison of ${settings?.organizationName || 'NexGen Council'}. Address: ${settings?.address || 'Islamabad, Pakistan'}.`,
+    title: 'Contact NexGen Secretariat | NexGen Council',
+    description: `Connect with the administrative office, partnerships desk, or media liaison of NexGen Council. Address: ${settings?.officeAddress || settings?.address || 'Sialkot, Pakistan'}.`,
     canonicalPath: '/contact',
     ogType: 'website',
     ogImage: '/banner.png',
+    keywords: ['contact NexGen Council', 'NexGen secretariat', 'NexGen partnerships'],
     jsonLd: [
       {
         '@context': 'https://schema.org',

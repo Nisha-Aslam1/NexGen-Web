@@ -34,12 +34,13 @@ export const GalleryPage: React.FC = () => {
   }));
 
   useDocumentSEO({
-    title: `Field Photos & Media Gallery | ${orgName}`,
+    title: 'Field Photos & Media Gallery | NexGen Council',
     description:
       'Explore photos and archival visual highlights from NexGen Council youth leadership conventions, skills workshops, and women empowerment outreach cohorts.',
     canonicalPath: '/gallery',
     ogType: 'website',
     ogImage: filteredItems.length > 0 ? filteredItems[0].imageUrl : '/banner.png',
+    keywords: ['NexGen gallery', 'youth leadership photos', 'women empowerment events gallery'],
     jsonLd: [
       {
         '@context': 'https://schema.org',

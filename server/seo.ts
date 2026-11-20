@@ -1,12 +1,31 @@
 import type { Request } from 'express';
 import { db } from './db.ts';
 
+export const CORE_NEXGEN_KEYWORDS = [
+  'NexGen',
+  'NexGen Council',
+  'NexGen Women Empowerment',
+  'NexGen Youth Leadership',
+  'NexGen Women Empowerment & Youth Leadership Council',
+  'NexGen Pakistan',
+  'NexGen Sialkot',
+  'NexGen Leadership Council',
+  'women empowerment organization',
+  'youth leadership council',
+  '30-Day Leadership Series',
+  'female leadership mentorship',
+  'youth civic engagement Pakistan',
+  'volunteer opportunities Pakistan',
+  'nexgencouncil.bond'
+];
+
 export interface RouteMetadata {
   title: string;
   description: string;
   canonicalUrl: string;
   ogType: 'website' | 'article';
   ogImage: string;
+  keywords?: string[];
   noindex?: boolean;
   publishedTime?: string;
   modifiedTime?: string;
@@ -45,30 +64,68 @@ export function getSiteBaseUrl(req?: Request): string {
 export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetadata {
   const settings = db.getSettings();
   const orgName = settings.organizationName || 'NexGen Women Empowerment & Youth Leadership Council';
+  const shortBrand = 'NexGen Council';
   const defaultLogo = `${siteUrl}/banner.png`;
   const defaultDescription =
-    settings.tagline ||
-    'Official platform for NexGen Women Empowerment & Youth Leadership Council. Dedicated to female leadership, youth civic engagement, and grassroots innovation.';
+    settings.metaDescription ||
+    'NexGen Council (NexGen Women Empowerment & Youth Leadership Council) empowers women and youth leaders through mentorship, fellowships, events, and civic action.';
 
   const rawCleanPath = pathname.split('?')[0].replace(/\/+$/, '') || '/';
   const cleanPath = rawCleanPath.toLowerCase();
 
-  // 1. Organization & Website Base Schemas
+  // 1. Organization & Website Base Schemas (Knowledge Graph Optimization for "NexGen" & "NexGen Council")
   const orgSchema = {
     '@context': 'https://schema.org',
     '@type': 'NGO',
+    '@id': `${siteUrl}/#organization`,
     name: orgName,
-    alternateName: 'NexGen Council',
+    alternateName: [
+      'NexGen',
+      'NexGen Council',
+      'NexGen Women Empowerment',
+      'NexGen Youth Leadership',
+      'NexGen Empowerment Council',
+      'NexGen Pakistan'
+    ],
     url: siteUrl,
-    logo: `${siteUrl}/logo.png`,
+    logo: {
+      '@type': 'ImageObject',
+      url: `${siteUrl}/logo.png`
+    },
     image: defaultLogo,
+    slogan: 'Empowering Women. Inspiring Youth. Transforming Communities.',
     description: defaultDescription,
+    keywords: CORE_NEXGEN_KEYWORDS.join(', '),
+    knowsAbout: [
+      'Women Empowerment',
+      'Youth Leadership Development',
+      'Female Entrepreneurship',
+      'Civic Engagement',
+      'Leadership Mentorship',
+      'Gender Equality',
+      'Grassroots Community Advocacy'
+    ],
+    areaServed: [
+      { '@type': 'Country', name: 'Pakistan' },
+      { '@type': 'Place', name: 'Global' }
+    ],
+    foundingLocation: {
+      '@type': 'Place',
+      name: 'Sialkot, Punjab, Pakistan'
+    },
     telephone: settings.contactPhone || '+1 (800) 482-9380',
-    email: settings.contactEmail || 'contact@nexgencouncil.org',
+    email: settings.contactEmail || 'admin@nexgencouncil.bond',
+    contactPoint: {
+      '@type': 'ContactPoint',
+      contactType: 'Secretariat & Partnerships',
+      email: settings.contactEmail || 'admin@nexgencouncil.bond',
+      availableLanguage: ['English', 'Urdu']
+    },
     address: {
       '@type': 'PostalAddress',
       streetAddress: settings.officeAddress || 'Executive Secretariat, 100 Leadership Plaza',
-      addressLocality: 'Islamabad',
+      addressLocality: 'Sialkot',
+      addressRegion: 'Punjab',
       addressCountry: 'PK'
     },
     sameAs: [
@@ -82,9 +139,51 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
   const websiteSchema = {
     '@context': 'https://schema.org',
     '@type': 'WebSite',
-    name: orgName,
+    '@id': `${siteUrl}/#website`,
+    name: 'NexGen Council',
+    alternateName: ['NexGen', orgName],
     url: siteUrl,
-    description: defaultDescription
+    description: defaultDescription,
+    publisher: {
+      '@id': `${siteUrl}/#organization`
+    },
+    inLanguage: 'en',
+    potentialAction: {
+      '@type': 'SearchAction',
+      target: `${siteUrl}/programs?q={search_term_string}`,
+      'query-input': 'required name=search_term_string'
+    }
+  };
+
+  const faqSchema = {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: [
+      {
+        '@type': 'Question',
+        name: 'What is NexGen Council?',
+        acceptedAnswer: {
+          '@type': 'Answer',
+          text: 'NexGen Council (NexGen Women Empowerment & Youth Leadership Council) is a civil society leadership organization empowering women and youth through structured mentorship, the 30-Day Leadership Series, civic innovation fellowships, and community outreach.'
+        }
+      },
+      {
+        '@type': 'Question',
+        name: 'How can I join or volunteer with NexGen Council?',
+        acceptedAnswer: {
+          '@type': 'Answer',
+          text: `You can apply online through the official Volunteer Registration portal at ${siteUrl}/volunteer to join leadership cohorts, community drives, and mentorship programs.`
+        }
+      },
+      {
+        '@type': 'Question',
+        name: 'What programs does NexGen Women Empowerment & Youth Leadership Council offer?',
+        acceptedAnswer: {
+          '@type': 'Answer',
+          text: `NexGen Council runs the 30-Day Leadership Development Series, Women in Tech and entrepreneurship workshops, youth civic policy symposiums, and regional community leadership initiatives listed at ${siteUrl}/programs.`
+        }
+      }
+    ]
   };
 
   // Helper for BreadcrumbList schema
@@ -102,25 +201,32 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
   // Handle Home
   if (cleanPath === '/' || cleanPath === '/home') {
     return {
-      title: `Home | ${orgName}`,
+      title: 'NexGen Council — Women Empowerment & Youth Leadership',
       description:
-        'Empowering the next generation of female leaders and civic innovators through structured mentorship, skill building, and grassroots advocacy.',
+        'NexGen Council (NexGen Women Empowerment & Youth Leadership Council) empowers women and youth leaders through mentorship, fellowships, events, and civic action.',
       canonicalUrl: `${siteUrl}/`,
       ogType: 'website',
       ogImage: defaultLogo,
-      jsonLd: [orgSchema, websiteSchema]
+      keywords: [
+        ...CORE_NEXGEN_KEYWORDS,
+        'NexGen official website',
+        'women empowerment NGO Pakistan',
+        'youth mentorship program'
+      ],
+      jsonLd: [orgSchema, websiteSchema, faqSchema]
     };
   }
 
   // Handle About
   if (cleanPath === '/about' || cleanPath === '/about-us') {
     return {
-      title: `About Us | ${orgName}`,
+      title: `About NexGen Council | ${shortBrand}`,
       description:
-        'Discover the mission, history, and core values of NexGen Council. Learn how our civil society initiative accelerates women empowerment and youth civic leadership.',
+        'Learn about NexGen Council (NexGen Women Empowerment & Youth Leadership Council), our mission, charter, and impact across women and youth leadership.',
       canonicalUrl: `${siteUrl}/about`,
       ogType: 'website',
       ogImage: defaultLogo,
+      keywords: [...CORE_NEXGEN_KEYWORDS, 'about NexGen', 'NexGen mission and vision', 'women leadership NGO'],
       jsonLd: [
         orgSchema,
         createBreadcrumbs([
@@ -134,12 +240,13 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
   // Handle Programs Listing
   if (cleanPath === '/programs') {
     return {
-      title: `Programs & Activities | ${orgName}`,
+      title: `Leadership Programs & Cohorts | ${shortBrand}`,
       description:
         'Explore NexGen Council training cohorts, 30-Day Leadership Development Series, Women in Tech fellowships, and grassroots community entrepreneurship programs.',
       canonicalUrl: `${siteUrl}/programs`,
       ogType: 'website',
       ogImage: defaultLogo,
+      keywords: [...CORE_NEXGEN_KEYWORDS, 'NexGen programs', '30-Day Leadership Series', 'women in tech fellowship'],
       jsonLd: [
         orgSchema,
         createBreadcrumbs([
@@ -178,11 +285,12 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       };
 
       return {
-        title: `${program.title} | ${orgName}`,
+        title: `${program.title} | ${shortBrand}`,
         description: program.shortDescription || program.fullDescription.slice(0, 160),
         canonicalUrl: `${siteUrl}/programs/${progSlug}`,
         ogType: 'website',
         ogImage: progImage,
+        keywords: [...CORE_NEXGEN_KEYWORDS, program.title, program.category, 'NexGen leadership cohort'],
         jsonLd: [
           orgSchema,
           courseSchema,
@@ -199,12 +307,13 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
   // Handle Events Listing
   if (cleanPath === '/events' || cleanPath === '/upcoming-events') {
     return {
-      title: `Upcoming Events & Conferences | ${orgName}`,
+      title: `Events & Leadership Summits | ${shortBrand}`,
       description:
         'Attend upcoming youth leadership summits, policy symposiums, community outreach workshops, and networking conferences hosted by NexGen Council.',
       canonicalUrl: `${siteUrl}/events`,
       ogType: 'website',
       ogImage: defaultLogo,
+      keywords: [...CORE_NEXGEN_KEYWORDS, 'NexGen events', 'youth leadership summit', 'women empowerment conference'],
       jsonLd: [
         orgSchema,
         createBreadcrumbs([
@@ -250,11 +359,12 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       };
 
       return {
-        title: `${event.title} | ${orgName}`,
+        title: `${event.title} | ${shortBrand}`,
         description: event.description.slice(0, 160),
         canonicalUrl: `${siteUrl}/events/${eventSlug}`,
         ogType: 'website',
         ogImage: eventImage,
+        keywords: [...CORE_NEXGEN_KEYWORDS, event.title, event.category, event.location],
         jsonLd: [
           orgSchema,
           eventSchema,
@@ -271,12 +381,13 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
   // Handle News Listing
   if (cleanPath === '/news' || cleanPath === '/news-and-updates') {
     return {
-      title: `News & Updates | ${orgName}`,
+      title: `News & Dispatches | ${shortBrand}`,
       description:
-        'Stay informed with the latest dispatches, policy research, changemaker spotlights, and council announcements from NexGen Council.',
+        'Stay informed with the latest dispatches, policy research, changemaker spotlights, and official announcements from NexGen Council.',
       canonicalUrl: `${siteUrl}/news`,
       ogType: 'website',
       ogImage: defaultLogo,
+      keywords: [...CORE_NEXGEN_KEYWORDS, 'NexGen news', 'NexGen announcements', 'youth policy updates'],
       jsonLd: [
         orgSchema,
         createBreadcrumbs([
@@ -318,11 +429,12 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       };
 
       return {
-        title: `${article.title} | ${orgName}`,
+        title: `${article.title} | ${shortBrand}`,
         description: article.summary.slice(0, 160),
         canonicalUrl: `${siteUrl}/news/${articleSlug}`,
         ogType: 'article',
         ogImage: articleImage,
+        keywords: [...CORE_NEXGEN_KEYWORDS, article.title, article.category, article.author],
         publishedTime: article.publishedAt,
         modifiedTime: article.publishedAt,
         author: article.author,
@@ -342,12 +454,13 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
   // Handle Volunteer
   if (cleanPath === '/volunteer' || cleanPath === '/volunteer-with-us' || cleanPath === '/volunteer-apply') {
     return {
-      title: `Volunteer With Us | ${orgName}`,
+      title: `Volunteer With NexGen | ${shortBrand}`,
       description:
-        'Become a volunteer changemaker with NexGen Council. Apply today to lead grassroots educational workshops, mentor youth, and advocate for gender equity.',
+        'Become a volunteer changemaker with NexGen Council. Apply today to lead grassroots educational workshops, mentor youth, and advocate for women empowerment.',
       canonicalUrl: `${siteUrl}/volunteer`,
       ogType: 'website',
       ogImage: defaultLogo,
+      keywords: [...CORE_NEXGEN_KEYWORDS, 'join NexGen Council', 'NexGen volunteer registration', 'youth volunteer Pakistan'],
       jsonLd: [
         orgSchema,
         createBreadcrumbs([
@@ -361,12 +474,13 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
   // Handle Track Application
   if (cleanPath === '/track' || cleanPath === '/track-application') {
     return {
-      title: `Track Application Status | ${orgName}`,
+      title: `Track Application Status | ${shortBrand}`,
       description:
         'Check the real-time review status of your NexGen Council volunteer enrollment or fellowship application using your application ID.',
       canonicalUrl: `${siteUrl}/track`,
       ogType: 'website',
       ogImage: defaultLogo,
+      keywords: [...CORE_NEXGEN_KEYWORDS, 'NexGen application status', 'track volunteer application'],
       jsonLd: [
         orgSchema,
         createBreadcrumbs([
@@ -380,12 +494,13 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
   // Handle Leadership / Team
   if (cleanPath === '/team' || cleanPath === '/leadership') {
     return {
-      title: `Leadership & Executive Board | ${orgName}`,
+      title: `Executive Leadership & Board | ${shortBrand}`,
       description:
-        'Meet the dedicated board of directors, council executives, and program coordinators spearheading NexGen Council initiatives worldwide.',
+        'Meet the founder, board of directors, council executives, and program coordinators leading NexGen Women Empowerment & Youth Leadership Council.',
       canonicalUrl: `${siteUrl}/team`,
       ogType: 'website',
       ogImage: defaultLogo,
+      keywords: [...CORE_NEXGEN_KEYWORDS, 'NexGen leadership', 'NexGen executive board', 'Minahil Imran Awan'],
       jsonLd: [
         orgSchema,
         createBreadcrumbs([
@@ -417,8 +532,8 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
     const gallerySchema = {
       '@context': 'https://schema.org',
       '@type': 'ImageGallery',
-      name: `Photo & Media Gallery | ${orgName}`,
-      description: 'Official image gallery showcasing youth leadership summits, skill building workshops, and civic outreach initiatives.',
+      name: `Photo & Media Gallery | ${shortBrand}`,
+      description: 'Official image gallery showcasing NexGen Council youth leadership summits, skill building workshops, and civic outreach initiatives.',
       url: `${siteUrl}/gallery`,
       image: imageObjects.length > 0 ? imageObjects : [`${siteUrl}/banner.png`]
     };
@@ -426,12 +541,13 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
     const firstImage = imageObjects.length > 0 ? imageObjects[0].url : defaultLogo;
 
     return {
-      title: `Field Photos & Media Gallery | ${orgName}`,
+      title: `Field Photos & Media Gallery | ${shortBrand}`,
       description:
         'Browse photo highlights and archival visual records from NexGen Council youth summits, community outreach drives, and leadership graduation ceremonies.',
       canonicalUrl: `${siteUrl}/gallery`,
       ogType: 'website',
       ogImage: firstImage,
+      keywords: [...CORE_NEXGEN_KEYWORDS, 'NexGen gallery', 'youth summit photos', 'women empowerment events gallery'],
       jsonLd: [
         orgSchema,
         gallerySchema,
@@ -446,12 +562,13 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
   // Handle Contact
   if (cleanPath === '/contact' || cleanPath === '/contact-us') {
     return {
-      title: `Contact Us | ${orgName}`,
+      title: `Contact NexGen Secretariat | ${shortBrand}`,
       description:
-        'Get in touch with the NexGen Council central secretariat for institutional partnerships, donor relations, event speaking, and community inquiries.',
+        'Get in touch with the NexGen Council central secretariat for institutional partnerships, sponsorships, event speaking, and community inquiries.',
       canonicalUrl: `${siteUrl}/contact`,
       ogType: 'website',
       ogImage: defaultLogo,
+      keywords: [...CORE_NEXGEN_KEYWORDS, 'contact NexGen Council', 'NexGen secretariat'],
       jsonLd: [
         orgSchema,
         createBreadcrumbs([
@@ -692,14 +809,23 @@ export function injectSeoIntoHtml(
   const safeDesc = escapeHtml(meta.description);
   const safeCanonical = escapeHtml(meta.canonicalUrl);
   const safeOgImage = escapeHtml(meta.ogImage);
+  const mergedKeywords = Array.from(
+    new Set([...(meta.keywords || []), ...CORE_NEXGEN_KEYWORDS].map(k => k.trim()).filter(Boolean))
+  );
+  const safeKeywords = escapeHtml(mergedKeywords.join(', '));
 
   // 1. Replace Title
   let result = html.replace(/<title>.*?<\/title>/i, `<title>${safeTitle}</title>`);
 
   // 2. Build Injected Tags
   const tags: string[] = [
+    `<meta name="application-name" content="NexGen Council" />`,
+    `<meta name="theme-color" content="#1e1b4b" />`,
     `<meta name="description" content="${safeDesc}" />`,
+    `<meta name="keywords" content="${safeKeywords}" />`,
     `<link rel="canonical" href="${safeCanonical}" />`,
+    `<link rel="alternate" hreflang="en" href="${safeCanonical}" />`,
+    `<link rel="alternate" hreflang="x-default" href="${safeCanonical}" />`,
     `<link rel="image_src" href="${safeOgImage}" />`,
     `<meta name="image" content="${safeOgImage}" />`,
     `<meta itemprop="image" content="${safeOgImage}" />`,
@@ -707,6 +833,7 @@ export function injectSeoIntoHtml(
     meta.noindex
       ? `<meta name="robots" content="noindex, nofollow" />`
       : `<meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />`,
+    `<meta property="og:locale" content="en_US" />`,
     `<meta property="og:title" content="${safeTitle}" />`,
     `<meta property="og:description" content="${safeDesc}" />`,
     `<meta property="og:url" content="${safeCanonical}" />`,
@@ -760,12 +887,16 @@ export function injectSeoIntoHtml(
 
   const injectedTagsString = tags.join('\n    ');
 
-  // Strip pre-existing static meta tags to prevent duplicates (handles quoted/unquoted attributes)
+  // Strip pre-existing static meta/link tags to prevent duplicates
+  result = result.replace(/<meta\b[^>]*name=["']?application-name["']?[^>]*>/gi, '');
+  result = result.replace(/<meta\b[^>]*name=["']?theme-color["']?[^>]*>/gi, '');
   result = result.replace(/<meta\b[^>]*name=["']?description["']?[^>]*>/gi, '');
+  result = result.replace(/<meta\b[^>]*name=["']?keywords["']?[^>]*>/gi, '');
   result = result.replace(/<meta\b[^>]*name=["']?robots["']?[^>]*>/gi, '');
   result = result.replace(/<meta\b[^>]*property=["']?og:[^>]*>/gi, '');
   result = result.replace(/<meta\b[^>]*name=["']?twitter:[^>]*>/gi, '');
   result = result.replace(/<link\b[^>]*rel=["']?canonical["']?[^>]*>/gi, '');
+  result = result.replace(/<link\b[^>]*rel=["']?alternate["']?[^>]*hreflang=[^>]*>/gi, '');
   result = result.replace(/<link\b[^>]*rel=["']?image_src["']?[^>]*>/gi, '');
   if (googleVerification && googleVerification.trim()) {
     result = result.replace(/<meta\b[^>]*name=["']?google-site-verification["']?[^>]*>/gi, '');
@@ -776,6 +907,14 @@ export function injectSeoIntoHtml(
 
   // Insert before </head>
   result = result.replace('</head>', `    ${injectedTagsString}\n  </head>`);
+
+  // Inject semantic SSR snapshot inside <div id="root"></div> for initial bot/crawler HTML reads
+  // (React's createRoot replaces #root cleanly on hydration)
+  if (!meta.noindex && result.includes('<div id="root"></div>')) {
+    const cleanBase = escapeHtml(siteUrl.replace(/\/+$/, ''));
+    const crawlerSnapshot = `<div id="root"><main style="font-family:system-ui,sans-serif;max-width:960px;margin:0 auto;padding:24px;"><h1>${safeTitle}</h1><p>${safeDesc}</p><nav aria-label="NexGen Council Navigation"><a href="${cleanBase}/">Home</a> | <a href="${cleanBase}/about">About NexGen</a> | <a href="${cleanBase}/programs">Leadership Programs</a> | <a href="${cleanBase}/events">Events</a> | <a href="${cleanBase}/news">News</a> | <a href="${cleanBase}/team">Executive Leadership</a> | <a href="${cleanBase}/gallery">Gallery</a> | <a href="${cleanBase}/volunteer">Volunteer</a> | <a href="${cleanBase}/contact">Contact</a></nav></main></div>`;
+    result = result.replace('<div id="root"></div>', crawlerSnapshot);
+  }
 
   return result;
 }

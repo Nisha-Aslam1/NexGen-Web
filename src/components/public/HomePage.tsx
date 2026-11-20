@@ -20,42 +20,129 @@ import {
   Maximize2,
   X
 } from 'lucide-react';
-import { Program, EventItem } from '../../types.ts';
+import { Program, EventItem, TeamMember } from '../../types.ts';
 import { useDocumentSEO } from '../../lib/seo.ts';
+import { LeaderProfileModal } from './LeaderProfileModal.tsx';
 
 export const HomePage: React.FC = () => {
   const { setActivePage, settings, programs, events, news, team } = useApp();
   const [selectedProgram, setSelectedProgram] = useState<Program | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
+  const [selectedMember, setSelectedMember] = useState<TeamMember | null>(null);
   const [showPosterModal, setShowPosterModal] = useState(false);
 
+  const canonicalBase =
+    window.location.hostname === 'nexgencouncil.bond' || window.location.hostname === 'www.nexgencouncil.bond'
+      ? 'https://nexgencouncil.bond'
+      : window.location.origin;
+
   useDocumentSEO({
-    title: `Home | ${settings?.organizationName || 'NexGen Council'}`,
+    title: 'NexGen Council — Women Empowerment & Youth Leadership',
     description:
-      'Empowering the next generation of female leaders and civic innovators through structured mentorship, skill building, and grassroots advocacy.',
+      'NexGen Council (NexGen Women Empowerment & Youth Leadership Council) empowers women and youth leaders through mentorship, fellowships, events, and civic action.',
     canonicalPath: '/',
     ogType: 'website',
     ogImage: '/banner.png',
+    keywords: [
+      'NexGen',
+      'NexGen Council',
+      'NexGen official website',
+      'NexGen Women Empowerment',
+      'NexGen Youth Leadership',
+      'NexGen Pakistan',
+      'women empowerment NGO Pakistan',
+      'youth leadership development'
+    ],
     jsonLd: [
       {
         '@context': 'https://schema.org',
         '@type': 'NGO',
+        '@id': `${canonicalBase}/#organization`,
         name: settings?.organizationName || 'NexGen Women Empowerment & Youth Leadership Council',
-        alternateName: 'NexGen Council',
-        url: window.location.origin,
-        logo: `${window.location.origin}/logo.png`,
-        image: `${window.location.origin}/banner.png`,
+        alternateName: [
+          'NexGen',
+          'NexGen Council',
+          'NexGen Women Empowerment',
+          'NexGen Youth Leadership',
+          'NexGen Empowerment Council',
+          'NexGen Pakistan'
+        ],
+        url: canonicalBase,
+        logo: {
+          '@type': 'ImageObject',
+          url: `${canonicalBase}/logo.png`
+        },
+        image: `${canonicalBase}/banner.png`,
+        slogan: 'Empowering Women. Inspiring Youth. Transforming Communities.',
         description:
-          settings?.tagline ||
-          'Empowering women and youth through leadership mentorship, civic innovation, and grassroots community advocacy.',
+          settings?.metaDescription ||
+          'NexGen Council empowers emerging female leaders and youth changemakers through leadership mentorship, civic innovation, and grassroots advocacy.',
+        knowsAbout: [
+          'Women Empowerment',
+          'Youth Leadership Development',
+          'Female Entrepreneurship',
+          'Civic Engagement',
+          'Leadership Mentorship',
+          'Gender Equality'
+        ],
+        areaServed: [
+          { '@type': 'Country', name: 'Pakistan' },
+          { '@type': 'Place', name: 'Global' }
+        ],
         telephone: settings?.contactPhone || '+1 (800) 482-9380',
-        email: settings?.contactEmail || 'contact@nexgencouncil.org'
+        email: settings?.contactEmail || 'admin@nexgencouncil.bond',
+        sameAs: [
+          settings?.socialLinks?.linkedin,
+          settings?.socialLinks?.instagram,
+          settings?.socialLinks?.facebook,
+          settings?.socialLinks?.twitter
+        ].filter(Boolean)
       },
       {
         '@context': 'https://schema.org',
         '@type': 'WebSite',
-        name: settings?.organizationName || 'NexGen Council',
-        url: window.location.origin
+        '@id': `${canonicalBase}/#website`,
+        name: 'NexGen Council',
+        alternateName: ['NexGen', settings?.organizationName || 'NexGen Women Empowerment & Youth Leadership Council'],
+        url: canonicalBase,
+        publisher: {
+          '@id': `${canonicalBase}/#organization`
+        },
+        potentialAction: {
+          '@type': 'SearchAction',
+          target: `${canonicalBase}/programs?q={search_term_string}`,
+          'query-input': 'required name=search_term_string'
+        }
+      },
+      {
+        '@context': 'https://schema.org',
+        '@type': 'FAQPage',
+        mainEntity: [
+          {
+            '@type': 'Question',
+            name: 'What is NexGen Council?',
+            acceptedAnswer: {
+              '@type': 'Answer',
+              text: 'NexGen Council (NexGen Women Empowerment & Youth Leadership Council) is a civil society leadership organization empowering women and youth through structured mentorship, the 30-Day Leadership Series, civic innovation fellowships, and community outreach.'
+            }
+          },
+          {
+            '@type': 'Question',
+            name: 'How can I join or volunteer with NexGen Council?',
+            acceptedAnswer: {
+              '@type': 'Answer',
+              text: `You can apply online through the official Volunteer Registration portal at ${canonicalBase}/volunteer to join leadership cohorts, community drives, and mentorship programs.`
+            }
+          },
+          {
+            '@type': 'Question',
+            name: 'What programs does NexGen Women Empowerment & Youth Leadership Council offer?',
+            acceptedAnswer: {
+              '@type': 'Answer',
+              text: `NexGen Council runs the 30-Day Leadership Development Series, Women in Tech and entrepreneurship workshops, youth civic policy symposiums, and regional community leadership initiatives listed at ${canonicalBase}/programs.`
+            }
+          }
+        ]
       }
     ]
   });
@@ -82,6 +169,9 @@ export const HomePage: React.FC = () => {
               </div>
 
               <h1 className="text-4xl sm:text-5xl lg:text-6xl font-serif font-bold text-slate-950 tracking-tight leading-[1.12]">
+                <span className="block text-sm sm:text-base font-sans font-bold uppercase tracking-[0.18em] text-amber-700 mb-2">
+                  NexGen Council
+                </span>
                 Empowering Women. <br />
                 Inspiring Youth. <br />
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-950 via-indigo-900 to-amber-700">
@@ -518,27 +608,45 @@ export const HomePage: React.FC = () => {
           </button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 items-stretch">
           {leadershipPreview.map(mem => (
-            <div
+            <article
               key={mem.id}
-              className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-all group flex flex-col"
+              onClick={() => setSelectedMember(mem)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setSelectedMember(mem);
+                }
+              }}
+              tabIndex={0}
+              role="button"
+              aria-label={`Open full profile for ${mem.name}`}
+              className="h-full bg-white rounded-3xl border border-slate-200 hover:border-indigo-200 overflow-hidden shadow-sm hover:shadow-md transition-all group flex flex-col cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-400"
             >
-              <div className="aspect-square bg-slate-100 overflow-hidden relative">
+              <div className="aspect-square bg-slate-100 overflow-hidden relative shrink-0">
                 <img
                   src={mem.image}
                   alt={mem.name}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                 />
               </div>
-              <div className="p-5 flex-1 flex flex-col justify-between space-y-2">
+              <div className="p-5 flex-1 flex flex-col justify-between gap-3">
                 <div>
-                  <h4 className="font-serif font-bold text-base text-slate-900">{mem.name}</h4>
-                  <p className="text-xs font-medium text-amber-700">{mem.position}</p>
+                  <h4 className="font-serif font-bold text-base text-slate-900 line-clamp-1 group-hover:text-indigo-950 transition-colors">
+                    {mem.name}
+                  </h4>
+                  <p className="text-xs font-medium text-amber-700 line-clamp-1 mt-0.5">{mem.position}</p>
+                  <p className="text-xs text-slate-500 line-clamp-3 leading-relaxed min-h-[3.5rem] mt-2">
+                    {(mem.bio || '').trim() || `${mem.position} — click to view full profile.`}
+                  </p>
                 </div>
-                <p className="text-xs text-slate-500 line-clamp-3 leading-relaxed">{mem.bio}</p>
+                <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] font-semibold text-indigo-950 group-hover:text-amber-700 transition-colors">
+                  <span>View Profile</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </div>
               </div>
-            </div>
+            </article>
           ))}
         </div>
       </section>
@@ -825,6 +933,10 @@ export const HomePage: React.FC = () => {
           </div>
         </div>
       )}
+      <LeaderProfileModal
+        member={selectedMember}
+        onClose={() => setSelectedMember(null)}
+      />
     </div>
   );
 };

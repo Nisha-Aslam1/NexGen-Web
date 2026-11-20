@@ -1,11 +1,30 @@
 import { useEffect } from 'react';
 
+export const CORE_NEXGEN_KEYWORDS = [
+  'NexGen',
+  'NexGen Council',
+  'NexGen Women Empowerment',
+  'NexGen Youth Leadership',
+  'NexGen Women Empowerment & Youth Leadership Council',
+  'NexGen Pakistan',
+  'NexGen Sialkot',
+  'NexGen Leadership Council',
+  'women empowerment organization',
+  'youth leadership council',
+  '30-Day Leadership Series',
+  'female leadership mentorship',
+  'youth civic engagement Pakistan',
+  'volunteer opportunities Pakistan',
+  'nexgencouncil.bond'
+];
+
 export interface SEOProps {
   title: string;
   description: string;
   canonicalPath?: string;
   ogType?: 'website' | 'article';
   ogImage?: string;
+  keywords?: string[];
   noindex?: boolean;
   publishedTime?: string;
   modifiedTime?: string;
@@ -24,7 +43,7 @@ function getNormalizedOrigin(): string {
 
 /**
  * Client-Side SEO Manager hook
- * Updates document.title, canonical, robots, meta tags, and JSON-LD schema dynamically
+ * Updates document.title, canonical, keywords, robots, meta tags, and JSON-LD schema dynamically
  */
 export function useDocumentSEO({
   title,
@@ -32,6 +51,7 @@ export function useDocumentSEO({
   canonicalPath = '',
   ogType = 'website',
   ogImage,
+  keywords,
   noindex = false,
   publishedTime,
   modifiedTime,
@@ -39,6 +59,8 @@ export function useDocumentSEO({
   jsonLd,
   skip = false
 }: SEOProps) {
+  const serializedKeywords = Array.isArray(keywords) ? keywords.join(',') : '';
+
   useEffect(() => {
     if (skip) return;
 
@@ -57,6 +79,10 @@ export function useDocumentSEO({
     const imageToUse = ogImage
       ? (ogImage.startsWith('http') ? ogImage : `${origin}${ogImage.startsWith('/') ? '' : '/'}${ogImage}`)
       : defaultImage;
+
+    const mergedKeywords = Array.from(
+      new Set([...(keywords || []), ...CORE_NEXGEN_KEYWORDS].map(k => k.trim()).filter(Boolean))
+    );
 
     // Helper: update or create meta tag
     const setMeta = (attrName: string, attrVal: string, content: string) => {
@@ -82,6 +108,8 @@ export function useDocumentSEO({
 
     // 3. Core Meta Tags
     setMeta('name', 'description', description);
+    setMeta('name', 'keywords', mergedKeywords.join(', '));
+    setMeta('name', 'application-name', 'NexGen Council');
     setLink('canonical', fullCanonical);
 
     if (noindex) {
@@ -91,11 +119,13 @@ export function useDocumentSEO({
     }
 
     // 4. Open Graph Tags
+    setMeta('property', 'og:locale', 'en_US');
     setMeta('property', 'og:title', title);
     setMeta('property', 'og:description', description);
     setMeta('property', 'og:url', fullCanonical);
     setMeta('property', 'og:type', ogType);
     setMeta('property', 'og:image', imageToUse);
+    setMeta('property', 'og:image:alt', title);
     setMeta('property', 'og:site_name', 'NexGen Council');
 
     // 5. Twitter / X Cards
@@ -103,6 +133,7 @@ export function useDocumentSEO({
     setMeta('name', 'twitter:title', title);
     setMeta('name', 'twitter:description', description);
     setMeta('name', 'twitter:image', imageToUse);
+    setMeta('name', 'twitter:image:alt', title);
 
     if (publishedTime) {
       setMeta('property', 'article:published_time', publishedTime);
@@ -114,11 +145,10 @@ export function useDocumentSEO({
       setMeta('name', 'author', author);
     }
 
-    // 6. JSON-LD Structured Data
-    const existingLd = document.getElementById('jsonld-seo-client');
-    if (existingLd) {
-      existingLd.remove();
-    }
+    // 6. JSON-LD Structured Data (replace both SSR & previous client scripts to keep clean single graph)
+    document.querySelectorAll('script[type="application/ld+json"]').forEach(el => {
+      if (el.id === 'jsonld-seo-client') el.remove();
+    });
 
     if (jsonLd) {
       const script = document.createElement('script');
@@ -129,7 +159,6 @@ export function useDocumentSEO({
     }
 
     return () => {
-      // Clean up dynamic client JSON-LD on unmount
       const ld = document.getElementById('jsonld-seo-client');
       if (ld) {
         ld.remove();
@@ -142,6 +171,7 @@ export function useDocumentSEO({
     canonicalPath,
     ogType,
     ogImage,
+    serializedKeywords,
     noindex,
     publishedTime,
     modifiedTime,
