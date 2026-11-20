@@ -134,7 +134,14 @@ export function resolveAdminCredentials(): ResolvedAdminCredentials {
 }
 
 export interface DatabaseSchema {
-  users: (User & { passwordHash: string; salt: string; tokenVersion?: number })[];
+  users: (User & {
+    passwordHash: string;
+    salt: string;
+    tokenVersion?: number;
+    twoFactorSecret?: string;
+    twoFactorEnabled?: boolean;
+    twoFactorBackupCodes?: string[];
+  })[];
   applications: VolunteerApplication[];
   volunteers: Volunteer[];
   programs: Program[];
@@ -702,16 +709,98 @@ class Database {
     return { success: true, message: 'All demo and mock records have been permanently cleared from database.' };
   }
 
+  private toSafeUser(user: DatabaseSchema['users'][0]): User {
+    const {
+      passwordHash: _p,
+      salt: _s,
+      twoFactorSecret: _sec,
+      twoFactorBackupCodes: backupCodes,
+      ...rest
+    } = user;
+    return {
+      ...rest,
+      twoFactorEnabled: Boolean(user.twoFactorEnabled),
+      twoFactorBackupCodesRemaining: Array.isArray(backupCodes) ? backupCodes.length : 0
+    };
+  }
+
   // --- Auth & Users ---
   getUsers() {
-    return this.data.users.map(({ passwordHash, salt, ...safeUser }) => safeUser);
+    return this.data.users.map(u => this.toSafeUser(u));
   }
 
   getUserById(id: string) {
     const user = this.data.users.find(u => u.id === id);
     if (!user) return null;
-    const { passwordHash, salt, ...safeUser } = user;
-    return safeUser;
+    return this.toSafeUser(user);
+  }
+
+  getUser2faInternal(userId: string) {
+    const user = this.data.users.find(u => u.id === userId);
+    if (!user) return null;
+    return {
+      id: user.id,
+      username: user.username,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      twoFactorSecret: user.twoFactorSecret,
+      twoFactorEnabled: Boolean(user.twoFactorEnabled),
+      twoFactorBackupCodes: Array.isArray(user.twoFactorBackupCodes) ? [...user.twoFactorBackupCodes] : []
+    };
+  }
+
+  setUserPending2faSecret(userId: string, secret: string) {
+    const user = this.data.users.find(u => u.id === userId);
+    if (!user) return null;
+    user.twoFactorSecret = secret;
+    user.twoFactorEnabled = false;
+    this.save();
+    mongoUpsert('users', user.id, user).catch(() => {});
+    return this.toSafeUser(user);
+  }
+
+  enableUser2fa(userId: string, hashedBackupCodes: string[]) {
+    const user = this.data.users.find(u => u.id === userId);
+    if (!user) return null;
+    user.twoFactorEnabled = true;
+    user.twoFactorBackupCodes = hashedBackupCodes;
+    this.save();
+    mongoUpsert('users', user.id, user).catch(() => {});
+    return this.toSafeUser(user);
+  }
+
+  disableUser2fa(userId: string) {
+    const user = this.data.users.find(u => u.id === userId);
+    if (!user) return null;
+    user.twoFactorEnabled = false;
+    user.twoFactorSecret = '';
+    user.twoFactorBackupCodes = [];
+    this.save();
+    mongoUpsert('users', user.id, user).catch(() => {});
+    return this.toSafeUser(user);
+  }
+
+  consumeUserBackupCode(userId: string, hashedCode: string): { consumed: boolean; remaining: number } {
+    const user = this.data.users.find(u => u.id === userId);
+    if (!user || !Array.isArray(user.twoFactorBackupCodes) || user.twoFactorBackupCodes.length === 0) {
+      return { consumed: false, remaining: 0 };
+    }
+    const targetBuf = Buffer.from(hashedCode, 'utf8');
+    let matchIndex = -1;
+    user.twoFactorBackupCodes.forEach((stored, idx) => {
+      const storedBuf = Buffer.from(stored, 'utf8');
+      if (storedBuf.length === targetBuf.length && crypto.timingSafeEqual(storedBuf, targetBuf)) {
+        matchIndex = idx;
+      }
+    });
+    if (matchIndex === -1) {
+      return { consumed: false, remaining: user.twoFactorBackupCodes.length };
+    }
+    user.twoFactorBackupCodes.splice(matchIndex, 1);
+    this.save();
+    mongoUpsert('users', user.id, user).catch(() => {});
+    return { consumed: true, remaining: user.twoFactorBackupCodes.length };
   }
 
   getUserTokenVersion(userId: string): number {
@@ -765,8 +854,7 @@ class Database {
           this.save();
           mongoUpsert('users', superAdmin.id, superAdmin).catch(() => {});
         }
-        const { passwordHash: _, salt: __, ...safeUser } = superAdmin;
-        return safeUser;
+        return this.toSafeUser(superAdmin);
       }
     }
 
@@ -787,8 +875,7 @@ class Database {
       mongoUpsert('users', user.id, user).catch(() => {});
     }
 
-    const { passwordHash, salt, ...safeUser } = user;
-    return safeUser;
+    return this.toSafeUser(user);
   }
 
   verifyUserPassword(userId: string, passwordPlain: string): boolean {
@@ -854,8 +941,7 @@ class Database {
     const updated = this.syncSuperAdminFromEnv();
     updated.tokenVersion = (updated.tokenVersion || 1) + 1;
     this.save();
-    const { passwordHash: _, salt: __, ...safeAdmin } = updated;
-    return safeAdmin;
+    return this.toSafeUser(updated);
   }
 
   createUser(userData: { username: string; name: string; email: string; role: any; password: string }) {
@@ -880,13 +966,14 @@ class Database {
       createdAt: new Date().toISOString(),
       passwordHash: hash,
       salt,
-      tokenVersion: 1
+      tokenVersion: 1,
+      twoFactorEnabled: false,
+      twoFactorBackupCodes: []
     };
     this.data.users.push(newUser);
     this.save();
     mongoUpsert('users', newUser.id, newUser).catch(() => {});
-    const { passwordHash: _, salt: __, ...safeUser } = newUser;
-    return safeUser;
+    return this.toSafeUser(newUser);
   }
 
   deleteUser(id: string) {
@@ -944,8 +1031,7 @@ class Database {
 
     this.save();
     mongoUpsert('users', user.id, user).catch(() => {});
-    const { passwordHash: _, salt: __, ...safeUser } = user;
-    return safeUser;
+    return this.toSafeUser(user);
   }
 
   // --- Volunteer Applications ---

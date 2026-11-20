@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext.tsx';
 import {
   ShieldCheck,
@@ -12,11 +12,13 @@ import {
   Fingerprint,
   Code2,
   ShieldAlert,
-  Clock
+  Clock,
+  Smartphone,
+  KeyRound
 } from 'lucide-react';
 
 export const AdminLogin: React.FC = () => {
-  const { login, setActivePage } = useApp();
+  const { login, verifyTwoFactorLogin, setActivePage } = useApp();
   // Strictly secure - no prefilled credentials or sample passwords
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -24,6 +26,16 @@ export const AdminLogin: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lockoutSeconds, setLockoutSeconds] = useState<number>(0);
+
+  // Two-Factor Authentication step state
+  const [twoFactorChallenge, setTwoFactorChallenge] = useState<{
+    temp2faToken: string;
+    userPreview?: { name: string; email: string };
+  } | null>(null);
+  const [twoFactorCode, setTwoFactorCode] = useState('');
+  const [useBackupCode, setUseBackupCode] = useState(false);
+  const [twoFactorExpirySeconds, setTwoFactorExpirySeconds] = useState(0);
+  const twoFactorInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (lockoutSeconds <= 0) return;
@@ -38,6 +50,28 @@ export const AdminLogin: React.FC = () => {
     }, 1000);
     return () => clearInterval(timer);
   }, [lockoutSeconds]);
+
+  useEffect(() => {
+    if (!twoFactorChallenge || twoFactorExpirySeconds <= 0) return;
+    const timer = setInterval(() => {
+      setTwoFactorExpirySeconds(prev => {
+        if (prev <= 1) {
+          setTwoFactorChallenge(null);
+          setTwoFactorCode('');
+          setErrorMessage('Two-factor session expired after 5 minutes. Please sign in again.');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [twoFactorChallenge, twoFactorExpirySeconds]);
+
+  useEffect(() => {
+    if (twoFactorChallenge && twoFactorInputRef.current) {
+      twoFactorInputRef.current.focus();
+    }
+  }, [twoFactorChallenge, useBackupCode]);
 
   const formatCountdown = (totalSeconds: number) => {
     const mins = Math.floor(totalSeconds / 60);
@@ -62,6 +96,19 @@ export const AdminLogin: React.FC = () => {
     const result = await login(trimmedUser, trimmedPass);
     setIsSubmitting(false);
 
+    if (result.requires2FA && result.temp2faToken) {
+      setPassword('');
+      setTwoFactorChallenge({
+        temp2faToken: result.temp2faToken,
+        userPreview: result.userPreview
+      });
+      setTwoFactorCode('');
+      setUseBackupCode(false);
+      setTwoFactorExpirySeconds(300);
+      setErrorMessage(null);
+      return;
+    }
+
     if (!result.ok) {
       setPassword('');
       if (result.retryAfterSeconds && result.retryAfterSeconds > 0) {
@@ -71,7 +118,171 @@ export const AdminLogin: React.FC = () => {
     }
   };
 
+  const submitTwoFactorCode = async (codeValue: string) => {
+    if (!twoFactorChallenge || isSubmitting) return;
+    const cleaned = useBackupCode
+      ? codeValue.trim().toUpperCase()
+      : codeValue.replace(/\D/g, '');
+
+    if (!useBackupCode && cleaned.length !== 6) {
+      setErrorMessage('Please enter the 6-digit code from Google Authenticator.');
+      return;
+    }
+    if (useBackupCode && cleaned.replace(/[^A-Z0-9]/g, '').length < 6) {
+      setErrorMessage('Please enter a valid 8-character backup recovery code.');
+      return;
+    }
+
+    setErrorMessage(null);
+    setIsSubmitting(true);
+    const result = await verifyTwoFactorLogin(twoFactorChallenge.temp2faToken, cleaned);
+    setIsSubmitting(false);
+
+    if (!result.ok) {
+      setTwoFactorCode('');
+      if (result.expired) {
+        setTwoFactorChallenge(null);
+        setTwoFactorExpirySeconds(0);
+      }
+      setErrorMessage(result.error || 'Verification failed. Please check the code and try again.');
+    }
+  };
+
+  const handleTwoFactorInputChange = (val: string) => {
+    if (errorMessage) setErrorMessage(null);
+    if (useBackupCode) {
+      setTwoFactorCode(val.toUpperCase());
+      return;
+    }
+    const digits = val.replace(/\D/g, '').slice(0, 6);
+    setTwoFactorCode(digits);
+    if (digits.length === 6) {
+      void submitTwoFactorCode(digits);
+    }
+  };
+
   const isLocked = lockoutSeconds > 0;
+
+  // Step 2: Dark-Mode Two-Factor Verification Step
+  if (twoFactorChallenge) {
+    return (
+      <div className="min-h-[88vh] flex items-center justify-center px-4 py-12 bg-slate-900/60 font-sans backdrop-blur-xs">
+        <div className="max-w-md w-full bg-slate-950 text-white rounded-3xl border border-slate-800 shadow-2xl p-6 sm:p-10 space-y-6 relative overflow-hidden">
+          <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-emerald-400 via-blue-500 to-amber-400" />
+
+          <div className="text-center space-y-2 pt-2">
+            <div className="w-16 h-16 rounded-2xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center mx-auto border border-emerald-500/30 shadow-lg shadow-emerald-950/30">
+              {useBackupCode ? <KeyRound className="w-8 h-8 text-amber-400" /> : <Smartphone className="w-8 h-8 text-emerald-400" />}
+            </div>
+            <h2 className="text-2xl font-black text-white tracking-tight">
+              Two-Factor Verification
+            </h2>
+            <p className="text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
+              {useBackupCode
+                ? 'Enter one of your single-use backup recovery codes to unlock admin access.'
+                : 'Enter the 6-digit verification code from your Google Authenticator app.'}
+            </p>
+          </div>
+
+          {twoFactorChallenge.userPreview && (
+            <div className="flex items-center justify-between gap-2 py-2 px-3.5 bg-slate-900 border border-slate-800 rounded-xl text-[11px]">
+              <div className="min-w-0">
+                <span className="text-slate-400 block text-[10px] uppercase tracking-wider">Verifying Account</span>
+                <span className="font-bold text-slate-100 truncate block">{twoFactorChallenge.userPreview.name}</span>
+              </div>
+              <div className="inline-flex items-center gap-1 font-mono text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-1 rounded-lg shrink-0">
+                <Clock className="w-3 h-3" />
+                <span>{formatCountdown(twoFactorExpirySeconds)}</span>
+              </div>
+            </div>
+          )}
+
+          {errorMessage && (
+            <div className="p-3 bg-rose-950/70 border border-rose-500/40 rounded-xl flex items-start gap-2.5 text-rose-200 text-xs">
+              <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-400 mt-0.5" />
+              <div className="flex-1 font-medium">{errorMessage}</div>
+            </div>
+          )}
+
+          <form
+            onSubmit={e => {
+              e.preventDefault();
+              void submitTwoFactorCode(twoFactorCode);
+            }}
+            className="space-y-4"
+          >
+            <div>
+              <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2 text-center">
+                {useBackupCode ? 'Backup Recovery Code' : '6-Digit Authenticator Code'}
+              </label>
+              <input
+                ref={twoFactorInputRef}
+                type="text"
+                inputMode={useBackupCode ? 'text' : 'numeric'}
+                autoComplete="one-time-code"
+                disabled={isSubmitting}
+                maxLength={useBackupCode ? 12 : 6}
+                value={twoFactorCode}
+                onChange={e => handleTwoFactorInputChange(e.target.value)}
+                placeholder={useBackupCode ? 'XXXX-XXXX' : '••••••'}
+                className={`w-full px-4 py-4 rounded-2xl bg-slate-900 border border-slate-700 text-white text-center font-mono font-black focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400 transition-colors placeholder:text-slate-600 ${
+                  useBackupCode ? 'text-xl tracking-[0.2em] uppercase' : 'text-3xl tracking-[0.45em]'
+                }`}
+              />
+              {!useBackupCode && (
+                <p className="text-[11px] text-slate-400 text-center mt-2">
+                  Auto-verifies automatically once all 6 digits are entered
+                </p>
+              )}
+            </div>
+
+            <button
+              type="submit"
+              disabled={isSubmitting || (!useBackupCode && twoFactorCode.length !== 6) || (useBackupCode && twoFactorCode.trim().length < 6)}
+              className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-sm font-black transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSubmitting ? (
+                <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <>
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Verify &amp; Enter Admin Console</span>
+                </>
+              )}
+            </button>
+          </form>
+
+          <div className="flex flex-col gap-2 pt-3 border-t border-slate-800 text-center">
+            <button
+              type="button"
+              onClick={() => {
+                setUseBackupCode(prev => !prev);
+                setTwoFactorCode('');
+                setErrorMessage(null);
+              }}
+              className="text-xs font-semibold text-amber-300 hover:text-amber-200 transition-colors cursor-pointer py-1"
+            >
+              {useBackupCode
+                ? 'Use 6-Digit Google Authenticator Code Instead'
+                : 'Lost access to phone? Use a Backup Recovery Code'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setTwoFactorChallenge(null);
+                setTwoFactorCode('');
+                setErrorMessage(null);
+              }}
+              className="inline-flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-white transition-colors cursor-pointer py-1"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" /> Back to Username &amp; Password
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-[88vh] flex items-center justify-center px-4 py-12 bg-slate-900/60 font-sans backdrop-blur-xs">
@@ -95,7 +306,7 @@ export const AdminLogin: React.FC = () => {
         {/* Security badge banner */}
         <div className="flex items-center justify-center gap-2 py-1.5 px-3 bg-slate-50 border border-slate-200 rounded-xl text-[11px] text-slate-600 font-medium">
           <Fingerprint className="w-3.5 h-3.5 text-blue-600" />
-          <span>Brute-Force Shield • Role-Based Access Control</span>
+          <span>Brute-Force Shield • 2FA TOTP • RBAC</span>
         </div>
 
         {/* Lockout Alert Banner */}

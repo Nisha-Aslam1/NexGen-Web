@@ -18,6 +18,7 @@ import {
   EyeOff
 } from 'lucide-react';
 import { AdminUser, Role } from '../../types.ts';
+import { TwoFactorSettingsCard } from './TwoFactorSettingsCard.tsx';
 
 interface SecurityStatus {
   pbkdf2Iterations: number;
@@ -425,6 +426,9 @@ export const AdminUsers: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Two-Factor Authentication (Google Authenticator) */}
+      <TwoFactorSettingsCard variant="card" />
 
       {/* Security Shield & Emergency Session Revocation Panel */}
       {isSuperAdmin && securityStatus && (

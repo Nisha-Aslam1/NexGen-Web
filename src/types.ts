@@ -7,6 +7,8 @@ export interface User {
   email: string;
   role: Role;
   avatar?: string;
+  twoFactorEnabled?: boolean;
+  twoFactorBackupCodesRemaining?: number;
   createdAt: string;
 }
 

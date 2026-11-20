@@ -3,6 +3,8 @@ import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs';
+import { generateSecret, generateURI, verifySync } from 'otplib';
+import QRCode from 'qrcode';
 import { createServer as createViteServer } from 'vite';
 import { db, resolveAdminCredentials } from './server/db.ts';
 import { Role } from './src/types.ts';
@@ -453,6 +455,129 @@ app.post('/api/auth/login', async (req, res) => {
 
   clearLoginFailures(req, username);
 
+  // Check if Two-Factor Authentication (Google Authenticator) is active on this user
+  const user2fa = db.getUser2faInternal(user.id);
+  if (user2fa?.twoFactorEnabled && user2fa.twoFactorSecret) {
+    const temp2faToken = signTemp2faToken(user.id, db.getUserTokenVersion(user.id));
+    db.logActivity({
+      userId: user.id,
+      userName: user.name,
+      userRole: user.role,
+      action: 'LOGIN_2FA_CHALLENGE',
+      entityType: 'Auth',
+      entityId: user.id,
+      details: `Password verified for ${user.username}; awaiting Google Authenticator 2FA code.`,
+      ipAddress: getClientIp(req)
+    });
+    return res.json({
+      ok: true,
+      requires2FA: true,
+      temp2faToken,
+      userPreview: {
+        name: user.name,
+        email: user.email
+      }
+    });
+  }
+
+  return issueFullSessionResponse(req, res, user, 'User authenticated cleanly.');
+});
+
+// 2FA Temp Token Helpers & Brute-Force Tracking
+const TEMP_2FA_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_2FA_ATTEMPTS = 5;
+const consumedTemp2faJtis = new Map<string, number>();
+const temp2faAttempts = new Map<string, number>();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [jti, exp] of consumedTemp2faJtis.entries()) {
+    if (exp < now) {
+      consumedTemp2faJtis.delete(jti);
+      temp2faAttempts.delete(jti);
+    }
+  }
+}, 5 * 60 * 1000).unref();
+
+interface Temp2faPayload {
+  typ: 'temp_2fa';
+  userId: string;
+  jti: string;
+  tv: number;
+  iat: number;
+  exp: number;
+}
+
+function signTemp2faToken(userId: string, tv: number): string {
+  const now = Date.now();
+  const payload: Temp2faPayload = {
+    typ: 'temp_2fa',
+    userId,
+    jti: crypto.randomBytes(16).toString('hex'),
+    tv,
+    iat: now,
+    exp: now + TEMP_2FA_TTL_MS
+  };
+  const data = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', `${SESSION_SECRET}:2fa`).update(data).digest('base64url');
+  return `${data}.${sig}`;
+}
+
+function verifyTemp2faToken(token?: string): Temp2faPayload | null {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [data, signature] = parts;
+  if (!data || !signature) return null;
+
+  const expected = crypto.createHmac('sha256', `${SESSION_SECRET}:2fa`).update(data).digest('base64url');
+  const sigBuf = Buffer.from(signature);
+  const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(Buffer.from(data, 'base64url').toString('utf-8')) as Temp2faPayload;
+    if (payload.typ !== 'temp_2fa' || !payload.userId || !payload.jti) return null;
+    if (!payload.exp || payload.exp < Date.now()) return null;
+    if (consumedTemp2faJtis.has(payload.jti)) return null;
+    if (payload.iat && payload.iat < db.getMinValidTokenIssuedAt()) return null;
+
+    const liveVersion = db.getUserTokenVersion(payload.userId);
+    if (payload.tv !== liveVersion) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function hashBackupCode(userId: string, code: string): string {
+  const normalized = code.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return crypto.createHash('sha256').update(`${userId}:${normalized}`).digest('hex');
+}
+
+function generateBackupCodes(count = 6): string[] {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const codes: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const bytes = crypto.randomBytes(8);
+    let raw = '';
+    for (let j = 0; j < 8; j++) {
+      raw += alphabet[bytes[j] % alphabet.length];
+    }
+    codes.push(`${raw.slice(0, 4)}-${raw.slice(4, 8)}`);
+  }
+  return codes;
+}
+
+function issueFullSessionResponse(
+  req: Request,
+  res: Response,
+  user: ReturnType<typeof db.getUserById> & object,
+  activityDetails: string,
+  extraPayload: Record<string, unknown> = {}
+) {
   const now = Date.now();
   const tokenPayload: AuthSession = {
     userId: user.id,
@@ -480,21 +605,272 @@ app.post('/api/auth/login', async (req, res) => {
     action: 'USER_LOGIN',
     entityType: 'User',
     entityId: user.id,
-    details: `User ${user.username} authenticated cleanly.`,
+    details: activityDetails,
     ipAddress: getClientIp(req)
   });
 
   return res.json({
     ok: true,
     token,
-    user: {
-      id: user.id,
-      username: user.username,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      avatar: user.avatar
+    user,
+    ...extraPayload
+  });
+}
+
+// 2FA Step 2: Verify TOTP or single-use Backup Code
+app.post('/api/auth/2fa/verify-login', async (req, res) => {
+  const temp2faToken = String(req.body?.temp2faToken || '').trim();
+  const rawCode = String(req.body?.code || '').trim();
+
+  if (!temp2faToken || !rawCode) {
+    return res.status(400).json({ error: 'Verification token and 2FA code are required.' });
+  }
+
+  const payload = verifyTemp2faToken(temp2faToken);
+  if (!payload) {
+    return res.status(401).json({
+      error: 'Your 2FA verification session expired or is invalid. Please sign in with your password again.',
+      expired: true
+    });
+  }
+
+  const currentFails = temp2faAttempts.get(payload.jti) || 0;
+  if (currentFails >= MAX_2FA_ATTEMPTS) {
+    consumedTemp2faJtis.set(payload.jti, payload.exp);
+    return res.status(429).json({
+      error: 'Too many invalid 2FA attempts. Please restart login with your username and password.',
+      expired: true
+    });
+  }
+
+  const user2fa = db.getUser2faInternal(payload.userId);
+  const liveUser = db.getUserById(payload.userId);
+  if (!user2fa || !liveUser || !user2fa.twoFactorEnabled || !user2fa.twoFactorSecret) {
+    return res.status(401).json({ error: '2FA configuration is unavailable for this account.' });
+  }
+
+  const normalizedDigits = rawCode.replace(/\s+/g, '');
+  let verifiedViaTotp = false;
+  let usedBackupCode = false;
+
+  if (/^\d{6}$/.test(normalizedDigits)) {
+    try {
+      const check = verifySync({
+        token: normalizedDigits,
+        secret: user2fa.twoFactorSecret,
+        epochTolerance: 30
+      });
+      verifiedViaTotp = check.valid;
+    } catch {
+      verifiedViaTotp = false;
     }
+  }
+
+  if (!verifiedViaTotp) {
+    const cleanAlphaNum = rawCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (cleanAlphaNum.length >= 6) {
+      const candidateHash = hashBackupCode(user2fa.id, cleanAlphaNum);
+      const result = db.consumeUserBackupCode(user2fa.id, candidateHash);
+      if (result.consumed) {
+        usedBackupCode = true;
+      }
+    }
+  }
+
+  if (!verifiedViaTotp && !usedBackupCode) {
+    const nextFails = currentFails + 1;
+    temp2faAttempts.set(payload.jti, nextFails);
+    await new Promise(r => setTimeout(r, 350));
+
+    const clientIp = getClientIp(req);
+    const remaining = Math.max(0, MAX_2FA_ATTEMPTS - nextFails);
+
+    if (nextFails >= MAX_2FA_ATTEMPTS) {
+      consumedTemp2faJtis.set(payload.jti, payload.exp);
+      blockedAttemptsCount += 1;
+      db.logActivity({
+        userId: user2fa.id,
+        userName: user2fa.name,
+        userRole: user2fa.role,
+        action: 'LOGIN_2FA_BLOCKED',
+        entityType: 'Auth',
+        entityId: user2fa.id,
+        details: `Blocked 2FA login challenge for ${user2fa.username} after ${MAX_2FA_ATTEMPTS} invalid codes from IP ${clientIp}.`,
+        ipAddress: clientIp
+      });
+      return res.status(429).json({
+        error: 'Too many invalid 2FA codes. Temporary challenge invalidated — please sign in again.',
+        expired: true,
+        attemptsRemaining: 0
+      });
+    }
+
+    db.logActivity({
+      userId: user2fa.id,
+      userName: user2fa.name,
+      userRole: user2fa.role,
+      action: 'LOGIN_2FA_FAILED',
+      entityType: 'Auth',
+      entityId: user2fa.id,
+      details: `Invalid 2FA verification code entered for ${user2fa.username} from IP ${clientIp} (${remaining} attempt(s) left).`,
+      ipAddress: clientIp
+    });
+
+    return res.status(401).json({
+      error: `Invalid authenticator or backup code. ${remaining} attempt(s) remaining.`,
+      attemptsRemaining: remaining
+    });
+  }
+
+  // Consume temp token single-use so it cannot be replayed
+  consumedTemp2faJtis.set(payload.jti, payload.exp);
+  temp2faAttempts.delete(payload.jti);
+
+  const refreshedUser = db.getUserById(user2fa.id) || liveUser;
+  const note = usedBackupCode
+    ? `User ${refreshedUser.username} authenticated via one-time 2FA backup code (${refreshedUser.twoFactorBackupCodesRemaining ?? 0} remaining).`
+    : `User ${refreshedUser.username} authenticated cleanly with Google Authenticator 2FA.`;
+
+  return issueFullSessionResponse(req, res, refreshedUser, note, {
+    usedBackupCode,
+    backupCodesRemaining: refreshedUser.twoFactorBackupCodesRemaining ?? 0
+  });
+});
+
+// 2FA Setup: Generate unique secret & QR Code for authenticated user
+app.post('/api/auth/2fa/setup', requireAuth(), async (req, res) => {
+  const session = (req as any).user as AuthSession;
+  const liveUser = db.getUserById(session.userId);
+  if (!liveUser) {
+    return res.status(404).json({ error: 'User account not found.' });
+  }
+
+  try {
+    const secret = generateSecret();
+    const accountLabel = liveUser.email || liveUser.username;
+    const otpauthUrl = generateURI({
+      issuer: 'NextGen Council Admin',
+      label: accountLabel,
+      secret
+    });
+    const qrCodeDataUrl = await QRCode.toDataURL(otpauthUrl, {
+      width: 240,
+      margin: 2,
+      color: { dark: '#0f172a', light: '#ffffff' }
+    });
+
+    db.setUserPending2faSecret(liveUser.id, secret);
+
+    res.json({
+      qrCodeDataUrl,
+      secret,
+      otpauthUrl
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to generate 2FA setup QR code.' });
+  }
+});
+
+// 2FA Verify Setup: Confirm 6-digit code, activate 2FA, and issue 6 one-time backup codes
+app.post('/api/auth/2fa/verify-setup', requireAuth(), (req, res) => {
+  const session = (req as any).user as AuthSession;
+  const token = String(req.body?.token || req.body?.code || '').replace(/\s+/g, '');
+
+  if (!/^\d{6}$/.test(token)) {
+    return res.status(400).json({ error: 'Please enter the 6-digit code shown in Google Authenticator.' });
+  }
+
+  const user2fa = db.getUser2faInternal(session.userId);
+  if (!user2fa || !user2fa.twoFactorSecret) {
+    return res.status(400).json({ error: 'No pending 2FA setup found. Please click Enable Google Authenticator first.' });
+  }
+
+  let isValid = false;
+  try {
+    const check = verifySync({
+      token,
+      secret: user2fa.twoFactorSecret,
+      epochTolerance: 30
+    });
+    isValid = check.valid;
+  } catch {
+    isValid = false;
+  }
+
+  if (!isValid) {
+    return res.status(400).json({ error: 'Invalid 6-digit code. Make sure your device clock is synced and try the latest code.' });
+  }
+
+  const backupCodes = generateBackupCodes(6);
+  const hashedCodes = backupCodes.map(c => hashBackupCode(session.userId, c));
+  const updatedUser = db.enableUser2fa(session.userId, hashedCodes);
+
+  db.logActivity({
+    userId: session.userId,
+    userName: session.name,
+    userRole: session.role,
+    action: 'TWO_FACTOR_ENABLED',
+    entityType: 'Security',
+    entityId: session.userId,
+    details: `${session.username} enabled Google Authenticator (TOTP 2FA) with 6 recovery backup codes.`,
+    ipAddress: getClientIp(req)
+  });
+
+  res.json({
+    success: true,
+    backupCodes,
+    user: updatedUser
+  });
+});
+
+// 2FA Disable: Requires valid current password OR valid 6-digit TOTP code
+app.post('/api/auth/2fa/disable', requireAuth(), (req, res) => {
+  const session = (req as any).user as AuthSession;
+  const password = String(req.body?.password || '').trim();
+  const code = String(req.body?.code || req.body?.token || '').replace(/\s+/g, '');
+
+  const user2fa = db.getUser2faInternal(session.userId);
+  if (!user2fa || !user2fa.twoFactorEnabled) {
+    return res.status(400).json({ error: 'Two-Factor Authentication is not currently enabled on your account.' });
+  }
+
+  let authorized = false;
+  if (password && db.verifyUserPassword(session.userId, password)) {
+    authorized = true;
+  } else if (/^\d{6}$/.test(code) && user2fa.twoFactorSecret) {
+    try {
+      const check = verifySync({
+        token: code,
+        secret: user2fa.twoFactorSecret,
+        epochTolerance: 30
+      });
+      authorized = check.valid;
+    } catch {
+      authorized = false;
+    }
+  }
+
+  if (!authorized) {
+    return res.status(401).json({
+      error: 'Verification failed. Enter your current password or a valid 6-digit Google Authenticator code to disable 2FA.'
+    });
+  }
+
+  const updatedUser = db.disableUser2fa(session.userId);
+  db.logActivity({
+    userId: session.userId,
+    userName: session.name,
+    userRole: session.role,
+    action: 'TWO_FACTOR_DISABLED',
+    entityType: 'Security',
+    entityId: session.userId,
+    details: `${session.username} disabled Google Authenticator 2FA on their account.`,
+    ipAddress: getClientIp(req)
+  });
+
+  res.json({
+    success: true,
+    user: updatedUser
   });
 });
 

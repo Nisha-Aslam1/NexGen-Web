@@ -57,6 +57,10 @@ interface Toast {
 
 export interface LoginResult {
   ok: boolean;
+  requires2FA?: boolean;
+  temp2faToken?: string;
+  userPreview?: { name: string; email: string };
+  expired?: boolean;
   error?: string;
   retryAfterSeconds?: number;
   attemptsRemaining?: number;
@@ -187,6 +191,8 @@ interface AppContextType {
   currentUser: User | null;
   authToken: string | null;
   login: (username: string, password: string) => Promise<LoginResult>;
+  verifyTwoFactorLogin: (temp2faToken: string, code: string) => Promise<LoginResult>;
+  updateCurrentUser: (user: User) => void;
   logout: () => Promise<void>;
   isLoadingAuth: boolean;
 
@@ -494,6 +500,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
   }, [currentUser, activePage]);
 
+  const updateCurrentUser = (user: User) => {
+    setCurrentUser(user);
+  };
+
   const login = async (username: string, password: string): Promise<LoginResult> => {
     try {
       const res = await fetch('/api/auth/login', {
@@ -513,10 +523,60 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           attemptsRemaining: typeof data.attemptsRemaining === 'number' ? data.attemptsRemaining : undefined
         };
       }
+
+      if (data.requires2FA && data.temp2faToken) {
+        return {
+          ok: true,
+          requires2FA: true,
+          temp2faToken: data.temp2faToken,
+          userPreview: data.userPreview
+        };
+      }
+
       setAuthToken(data.token);
       localStorage.setItem('ng_token', data.token);
       setCurrentUser(data.user);
       addToast(`Welcome back, ${data.user.name}!`, 'success');
+      setActivePage('admin');
+      return { ok: true };
+    } catch (err: any) {
+      const errMsg = err.message || 'Connection error';
+      addToast(errMsg, 'error');
+      return { ok: false, error: errMsg };
+    }
+  };
+
+  const verifyTwoFactorLogin = async (temp2faToken: string, code: string): Promise<LoginResult> => {
+    try {
+      const res = await fetch('/api/auth/2fa/verify-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ temp2faToken, code }),
+        credentials: 'include'
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const errMsg = data.error || 'Invalid verification code.';
+        addToast(errMsg, 'error');
+        return {
+          ok: false,
+          error: errMsg,
+          expired: Boolean(data.expired),
+          attemptsRemaining: typeof data.attemptsRemaining === 'number' ? data.attemptsRemaining : undefined
+        };
+      }
+
+      setAuthToken(data.token);
+      localStorage.setItem('ng_token', data.token);
+      setCurrentUser(data.user);
+      if (data.usedBackupCode) {
+        addToast(
+          `Signed in with backup recovery code (${data.backupCodesRemaining ?? 0} remaining).`,
+          'info'
+        );
+      } else {
+        addToast(`Welcome back, ${data.user.name}!`, 'success');
+      }
       setActivePage('admin');
       return { ok: true };
     } catch (err: any) {
@@ -560,6 +620,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         currentUser,
         authToken,
         login,
+        verifyTwoFactorLogin,
+        updateCurrentUser,
         logout,
         isLoadingAuth,
         toasts,

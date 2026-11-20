@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp, AdminTab, canAccessAdminTab } from '../../context/AppContext.tsx';
 import { authFetch } from '../../lib/api.ts';
+import { TwoFactorSettingsCard } from './TwoFactorSettingsCard.tsx';
 import {
   LayoutDashboard,
   FileCheck2,
@@ -364,10 +365,10 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
         </div>
       </main>
 
-      {/* Self-Service Password Rotation Modal */}
+      {/* Account Profile Security Modal (2FA & Password Rotation) */}
       {isPasswordModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 space-y-5 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 space-y-5 shadow-2xl my-auto">
             <div className="flex items-center justify-between border-b border-slate-200 pb-3">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 rounded-xl bg-indigo-50 text-indigo-950">
@@ -375,10 +376,10 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
                 </div>
                 <div>
                   <h3 className="font-serif font-bold text-lg text-slate-900 leading-none">
-                    Update Security Password
+                    Account Security &amp; 2FA
                   </h3>
                   <span className="text-[11px] text-slate-400">
-                    Rotating your password invalidates all other active tokens
+                    Google Authenticator protection &amp; password rotation
                   </span>
                 </div>
               </div>
@@ -390,7 +391,12 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
               </button>
             </div>
 
-            <form onSubmit={handleChangeOwnPassword} className="space-y-4 text-xs">
+            <TwoFactorSettingsCard variant="modal" />
+
+            <form onSubmit={handleChangeOwnPassword} className="space-y-4 text-xs pt-2 border-t border-slate-100">
+              <div className="font-bold text-slate-800 text-xs uppercase tracking-wider">
+                Update Account Password
+              </div>
               <div>
                 <label className="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">
                   Current Password *
