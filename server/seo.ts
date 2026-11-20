@@ -219,19 +219,87 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
   // Handle About
   if (cleanPath === '/about' || cleanPath === '/about-us') {
+    const aboutTitle = `About NexGen Council | Women Empowerment & Youth Leadership`;
+    const aboutDesc =
+      'Discover NexGen Council—our mission, charter, 30-Day Leadership Series, and governance empowering women and youth civic leaders across Pakistan and beyond.';
+    const aboutPageSchema = {
+      '@context': 'https://schema.org',
+      '@type': 'AboutPage',
+      '@id': `${siteUrl}/about#webpage`,
+      url: `${siteUrl}/about`,
+      name: aboutTitle,
+      description: aboutDesc,
+      inLanguage: 'en',
+      isPartOf: { '@id': `${siteUrl}/#website` },
+      about: { '@id': `${siteUrl}/#organization` },
+      mainEntity: { '@id': `${siteUrl}/#organization` },
+      primaryImageOfPage: {
+        '@type': 'ImageObject',
+        url: defaultLogo
+      }
+    };
+    const aboutFaqSchema = {
+      '@context': 'https://schema.org',
+      '@type': 'FAQPage',
+      mainEntity: [
+        {
+          '@type': 'Question',
+          name: 'What is NexGen Council (NexGen Women Empowerment & Youth Leadership Council)?',
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: 'NexGen Council is an independent civil society leadership council founded in 2021 to advance women empowerment, youth civic participation, and structured leadership mentorship across Pakistan and international chapters.'
+          }
+        },
+        {
+          '@type': 'Question',
+          name: 'What is the 30-Day Leadership Series offered by NexGen Council?',
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: 'The 30-Day Leadership Development Series is NexGen Council’s flagship intensive fellowship covering public policy, ethical governance, communication strategy, entrepreneurship, and community project execution.'
+          }
+        },
+        {
+          '@type': 'Question',
+          name: 'How can women and youth volunteer or join NexGen Council programs?',
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: `Aspiring fellows, volunteers, and community organizers can apply online through the Volunteer Registration portal at ${siteUrl}/volunteer and track their review status at ${siteUrl}/track.`
+          }
+        },
+        {
+          '@type': 'Question',
+          name: 'How can educational institutions or organizations partner with NexGen Council?',
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: `Universities, NGOs, and civic partners can connect with the NexGen Council central secretariat via ${siteUrl}/contact for co-hosted symposiums, mentorship cohorts, and youth leadership sponsorships.`
+          }
+        }
+      ]
+    };
+
     return {
-      title: `About NexGen Council | ${shortBrand}`,
-      description:
-        'Learn about NexGen Council (NexGen Women Empowerment & Youth Leadership Council), our mission, charter, and impact across women and youth leadership.',
+      title: aboutTitle,
+      description: aboutDesc,
       canonicalUrl: `${siteUrl}/about`,
       ogType: 'website',
       ogImage: defaultLogo,
-      keywords: [...CORE_NEXGEN_KEYWORDS, 'about NexGen', 'NexGen mission and vision', 'women leadership NGO'],
+      keywords: [
+        ...CORE_NEXGEN_KEYWORDS,
+        'about NexGen',
+        'about NexGen Council',
+        'NexGen mission and vision',
+        'NexGen institutional charter',
+        'women leadership NGO Pakistan',
+        'youth leadership academy Pakistan',
+        'Minahil Imran Awan NexGen'
+      ],
       jsonLd: [
         orgSchema,
+        aboutPageSchema,
+        aboutFaqSchema,
         createBreadcrumbs([
           { name: 'Home', url: `${siteUrl}/` },
-          { name: 'About Us', url: `${siteUrl}/about` }
+          { name: 'About NexGen Council', url: `${siteUrl}/about` }
         ])
       ]
     };
@@ -654,7 +722,19 @@ export function generateSitemapXml(siteUrl: string): string {
         { url: '/banner.png', title: 'NexGen Women Empowerment & Youth Leadership Banner' }
       ]
     },
-    { url: `${siteUrl}/about`, priority: '0.8', changefreq: 'monthly', lastmod: currentDate },
+    {
+      url: `${siteUrl}/about`,
+      priority: '0.9',
+      changefreq: 'weekly',
+      lastmod: currentDate,
+      images: [
+        {
+          url: '/banner.png',
+          title: 'About NexGen Council — Women Empowerment & Youth Leadership',
+          caption: 'NexGen Women Empowerment & Youth Leadership Council mission, charter, and milestones'
+        }
+      ]
+    },
     { url: `${siteUrl}/programs`, priority: '0.9', changefreq: 'weekly', lastmod: currentDate },
     { url: `${siteUrl}/events`, priority: '0.9', changefreq: 'weekly', lastmod: currentDate },
     { url: `${siteUrl}/news`, priority: '0.9', changefreq: 'weekly', lastmod: currentDate },

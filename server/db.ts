@@ -241,6 +241,9 @@ const defaultSettings: WebsiteSettings = {
   metaDescription: 'NexGen Women Empowerment & Youth Leadership Council is an international civil society organization dedicated to accelerating female leadership, youth civic engagement, and socio-economic advancement.',
   googleSiteVerification: '',
   googleAnalyticsId: '',
+  directoryHeading: 'Institutional Record & Directory',
+  primaryDomains: 'Women Empowerment · Youth Civic Leadership · Mentorship · Policy Dialogue',
+  directoryHeadquarters: 'Sialkot, PK',
   emailSenderName: 'NexGen Council',
   emailSenderEmail: 'admin@nexgencouncil.bond',
   emailReplyTo: '',
@@ -1508,12 +1511,35 @@ class Database {
   createGalleryItem(item: Omit<GalleryItem, 'id'>) {
     const newItem: GalleryItem = {
       ...item,
+      date: item.date || new Date().toISOString().split('T')[0],
+      displayOrder: typeof item.displayOrder === 'number' ? item.displayOrder : this.data.gallery.length + 1,
       id: `gal_${Date.now()}`
     };
     this.data.gallery.push(newItem);
     this.save();
     mongoUpsert('gallery', newItem.id, newItem).catch(() => {});
     return newItem;
+  }
+
+  updateGalleryItem(id: string, updates: Partial<GalleryItem>) {
+    const idx = this.data.gallery.findIndex(g => g.id === id);
+    if (idx === -1) return null;
+    const current = this.data.gallery[idx];
+    const updated: GalleryItem = {
+      ...current,
+      ...(typeof updates.title === 'string' && updates.title.trim() ? { title: updates.title.trim() } : {}),
+      ...(typeof updates.category === 'string' && updates.category.trim() ? { category: updates.category.trim() } : {}),
+      ...(typeof updates.imageUrl === 'string' && updates.imageUrl.trim() ? { imageUrl: updates.imageUrl.trim() } : {}),
+      ...(typeof updates.caption === 'string' ? { caption: updates.caption.trim() } : {}),
+      ...(typeof updates.date === 'string' && updates.date.trim() ? { date: updates.date.trim() } : {}),
+      ...(typeof updates.displayOrder === 'number' && !Number.isNaN(updates.displayOrder)
+        ? { displayOrder: updates.displayOrder }
+        : {})
+    };
+    this.data.gallery[idx] = updated;
+    this.save();
+    mongoUpsert('gallery', updated.id, updated).catch(() => {});
+    return updated;
   }
 
   deleteGalleryItem(id: string) {

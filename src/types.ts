@@ -231,6 +231,10 @@ export interface WebsiteSettings {
   metaDescription?: string;
   googleSiteVerification?: string;
   googleAnalyticsId?: string;
+  // About Page: Institutional Record & Directory
+  directoryHeading?: string;
+  primaryDomains?: string;
+  directoryHeadquarters?: string;
   // Email Sender Identity
   emailSenderName?: string;
   emailSenderEmail?: string;

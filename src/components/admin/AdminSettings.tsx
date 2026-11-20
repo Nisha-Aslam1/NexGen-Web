@@ -666,6 +666,140 @@ export const AdminSettings: React.FC = () => {
           </div>
         </div>
 
+        {/* About Page: Institutional Record & Directory */}
+        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2">
+              <Building className="w-4 h-4 text-indigo-950" />
+              <div>
+                <h3 className="font-serif font-bold text-base text-slate-900">
+                  About Page — Institutional Record &amp; Directory
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  All details shown inside the Institutional Record &amp; Directory card on the public About page.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Directory Section Heading</label>
+              <input
+                type="text"
+                value={formData.directoryHeading ?? 'Institutional Record & Directory'}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, directoryHeading: e.target.value });
+                }}
+                placeholder="Institutional Record & Directory"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300"
+              />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Council Headquarters Badge</label>
+              <input
+                type="text"
+                value={formData.directoryHeadquarters ?? 'Sialkot, PK'}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, directoryHeadquarters: e.target.value });
+                }}
+                placeholder="Sialkot, PK"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300"
+              />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Official Title</label>
+              <input
+                type="text"
+                value={formData.organizationName || ''}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, organizationName: e.target.value });
+                }}
+                placeholder="NexGen Women Empowerment & Youth Leadership Council"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300"
+              />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Official Contact Email</label>
+              <input
+                type="email"
+                value={formData.contactEmail || ''}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, contactEmail: e.target.value });
+                }}
+                placeholder="admin@nexgencouncil.bond"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300"
+              />
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="block font-semibold text-slate-700 mb-1">Primary Domains</label>
+              <input
+                type="text"
+                value={
+                  formData.primaryDomains ??
+                  'Women Empowerment · Youth Civic Leadership · Mentorship · Policy Dialogue'
+                }
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, primaryDomains: e.target.value });
+                }}
+                placeholder="Women Empowerment · Youth Civic Leadership · Mentorship · Policy Dialogue"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300"
+              />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Secretariat Office Address</label>
+              <input
+                type="text"
+                value={formData.officeAddress || ''}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, officeAddress: e.target.value });
+                }}
+                placeholder="Executive Secretariat, Sialkot, Punjab, Pakistan"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300"
+              />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Official Helpline / Phone</label>
+              <input
+                type="text"
+                value={formData.contactPhone || ''}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, contactPhone: e.target.value });
+                }}
+                placeholder="+92 300 0000000"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300"
+              />
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="block font-semibold text-slate-700 mb-1">Registration / Charter ID</label>
+              <input
+                type="text"
+                value={formData.registrationNumber || ''}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, registrationNumber: e.target.value });
+                }}
+                placeholder="Registered Civil Society & Non-Profit Initiative #092-2024"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300"
+              />
+            </div>
+          </div>
+        </div>
+
         {/* Social Media Channels */}
         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
           <div className="flex items-center gap-2 border-b border-slate-100 pb-3">

@@ -1428,6 +1428,25 @@ app.post('/api/gallery', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATION
   res.status(201).json(item);
 });
 
+app.put('/api/gallery/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR']), (req, res) => {
+  const updated = db.updateGalleryItem(req.params.id, req.body || {});
+  if (!updated) {
+    return res.status(404).json({ error: 'Gallery item not found' });
+  }
+  const currentUser = (req as any).user;
+  db.logActivity({
+    userId: currentUser.userId,
+    userName: currentUser.name,
+    userRole: currentUser.role,
+    action: 'GALLERY_UPDATED',
+    entityType: 'Gallery',
+    entityId: req.params.id,
+    details: `Updated gallery item "${updated.title}" (${updated.category}).`,
+    ipAddress: getClientIp(req)
+  });
+  res.json(updated);
+});
+
 app.delete('/api/gallery/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR']), (req, res) => {
   db.deleteGalleryItem(req.params.id);
   res.json({ ok: true });
