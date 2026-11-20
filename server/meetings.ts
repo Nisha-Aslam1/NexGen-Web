@@ -199,7 +199,9 @@ meetingsRouter.post('/meetings/:code/join', (req: Request, res: Response) => {
     user.role === 'SUPER_ADMIN' ||
     user.role === 'ADMIN' ||
     user.role === 'CONTENT_MANAGER' ||
-    user.role === 'VOLUNTEER_MANAGER'
+    user.role === 'VOLUNTEER_MANAGER' ||
+    user.role === 'MEETING_HOST' ||
+    user.role === 'EVENT_COORDINATOR'
   );
 
   const { password, displayName, email, participantId } = req.body || {};

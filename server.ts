@@ -1210,7 +1210,7 @@ app.delete('/api/volunteers/:id', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), (
 // 5. Programs
 app.get('/api/programs', (req, res) => {
   const session = getSession(req);
-  const isManager = session && ['SUPER_ADMIN', 'ADMIN', 'CONTENT_MANAGER'].includes(session.role);
+  const isManager = session && ['SUPER_ADMIN', 'ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR'].includes(session.role);
   const programs = db.getPrograms(!isManager);
   res.json(programs);
 });
@@ -1221,7 +1221,7 @@ app.get('/api/programs/:id', (req, res) => {
   res.json(program);
 });
 
-app.post('/api/programs', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
+app.post('/api/programs', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), (req, res) => {
   const body = req.body;
   if (!body.title || !body.shortDescription) {
     return res.status(400).json({ error: 'Title and short description are required.' });
@@ -1257,13 +1257,13 @@ app.post('/api/programs', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) 
   res.status(201).json(program);
 });
 
-app.put('/api/programs/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
+app.put('/api/programs/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), (req, res) => {
   const updated = db.updateProgram(req.params.id, req.body);
   if (!updated) return res.status(404).json({ error: 'Program not found' });
   res.json(updated);
 });
 
-app.delete('/api/programs/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
+app.delete('/api/programs/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), (req, res) => {
   db.deleteProgram(req.params.id);
   res.json({ ok: true });
 });
@@ -1275,7 +1275,7 @@ app.get('/api/events', (req, res) => {
   res.json(events);
 });
 
-app.post('/api/events', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
+app.post('/api/events', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), (req, res) => {
   const body = req.body;
   if (!body.title || !body.date) {
     return res.status(400).json({ error: 'Title and date are required.' });
@@ -1310,13 +1310,13 @@ app.post('/api/events', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) =>
   res.status(201).json(eventItem);
 });
 
-app.put('/api/events/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
+app.put('/api/events/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), (req, res) => {
   const updated = db.updateEvent(req.params.id, req.body);
   if (!updated) return res.status(404).json({ error: 'Event not found' });
   res.json(updated);
 });
 
-app.delete('/api/events/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
+app.delete('/api/events/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), (req, res) => {
   db.deleteEvent(req.params.id);
   res.json({ ok: true });
 });
@@ -1324,12 +1324,12 @@ app.delete('/api/events/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, r
 // 7. News
 app.get('/api/news', (req, res) => {
   const session = getSession(req);
-  const isManager = session && ['SUPER_ADMIN', 'ADMIN', 'CONTENT_MANAGER'].includes(session.role);
+  const isManager = session && ['SUPER_ADMIN', 'ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER'].includes(session.role);
   const news = db.getNews(!isManager);
   res.json(news);
 });
 
-app.post('/api/news', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
+app.post('/api/news', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
   const body = req.body;
   if (!body.title || !body.content) {
     return res.status(400).json({ error: 'Title and content are required.' });
@@ -1364,13 +1364,13 @@ app.post('/api/news', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
   res.status(201).json(newsItem);
 });
 
-app.put('/api/news/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
+app.put('/api/news/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
   const updated = db.updateNews(req.params.id, req.body);
   if (!updated) return res.status(404).json({ error: 'Article not found' });
   res.json(updated);
 });
 
-app.delete('/api/news/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
+app.delete('/api/news/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
   db.deleteNews(req.params.id);
   res.json({ ok: true });
 });
@@ -1423,12 +1423,12 @@ app.get('/api/gallery', (req, res) => {
   res.json(db.getGallery());
 });
 
-app.post('/api/gallery', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
+app.post('/api/gallery', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR']), (req, res) => {
   const item = db.createGalleryItem(req.body);
   res.status(201).json(item);
 });
 
-app.delete('/api/gallery/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
+app.delete('/api/gallery/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR']), (req, res) => {
   db.deleteGalleryItem(req.params.id);
   res.json({ ok: true });
 });
@@ -1453,11 +1453,11 @@ app.post('/api/contact', (req, res) => {
   res.status(201).json({ ok: true, message: 'Message sent successfully. Our team will contact you shortly.' });
 });
 
-app.get(['/api/contact', '/api/contacts'], requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'VIEWER']), (req, res) => {
+app.get(['/api/contact', '/api/contacts'], requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'COMMUNICATIONS_OFFICER', 'VIEWER']), (req, res) => {
   res.json(db.getContacts());
 });
 
-app.patch(['/api/contact/:id', '/api/contacts/:id', '/api/contacts/:id/status'], requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER']), (req, res) => {
+app.patch(['/api/contact/:id', '/api/contacts/:id', '/api/contacts/:id/status'], requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
   const updated = db.updateContactStatus(req.params.id, req.body.status);
   if (!updated) return res.status(404).json({ error: 'Message not found' });
   res.json(updated);
@@ -1469,11 +1469,11 @@ app.delete(['/api/contact/:id', '/api/contacts/:id'], requireAuth(['ADMIN']), (r
 });
 
 // 10b. Admin Resend Email Dispatch, Sender Identity & Sent History
-app.get('/api/email/settings', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'VIEWER']), (req, res) => {
+app.get('/api/email/settings', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'COMMUNICATIONS_OFFICER', 'VIEWER']), (req, res) => {
   res.json(db.getEmailSenderConfig());
 });
 
-app.put('/api/email/settings', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER']), (req, res) => {
+app.put('/api/email/settings', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
   const { senderName, senderEmail, replyTo, logoUrl } = req.body || {};
   const cleanName = sanitizeSenderName(senderName);
   const cleanEmail = String(senderEmail || '').trim().toLowerCase();
@@ -1514,7 +1514,7 @@ app.put('/api/email/settings', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTE
   return res.json({ success: true, config });
 });
 
-app.get('/api/email/history', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'VIEWER']), (req, res) => {
+app.get('/api/email/history', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'COMMUNICATIONS_OFFICER', 'VIEWER']), (req, res) => {
   const { search, status } = req.query as Record<string, string>;
   let logs = db.getEmailLogs(300);
 
@@ -1543,7 +1543,7 @@ app.delete('/api/email/history/:id', requireAuth(['ADMIN']), (req, res) => {
   res.json({ success: true });
 });
 
-app.post('/api/send-email', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER']), async (req, res) => {
+app.post('/api/send-email', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'COMMUNICATIONS_OFFICER']), async (req, res) => {
   try {
     const { to, subject, html, message, replyTo, fromName, fromEmail, logoUrl, images } = req.body || {};
     const savedConfig = db.getEmailSenderConfig();
@@ -1655,7 +1655,16 @@ app.put('/api/settings', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) =
 });
 
 // 12. User & Roles Management
-const ALLOWED_ROLES = ['SUPER_ADMIN', 'ADMIN', 'VOLUNTEER_MANAGER', 'CONTENT_MANAGER', 'VIEWER'];
+const ALLOWED_ROLES = [
+  'SUPER_ADMIN',
+  'ADMIN',
+  'VOLUNTEER_MANAGER',
+  'CONTENT_MANAGER',
+  'COMMUNICATIONS_OFFICER',
+  'EVENT_COORDINATOR',
+  'MEETING_HOST',
+  'VIEWER'
+];
 
 app.get('/api/users', requireAuth(['SUPER_ADMIN']), (req, res) => {
   res.json(db.getUsers());
@@ -1753,17 +1762,17 @@ app.delete('/api/users/:id', requireAuth(['SUPER_ADMIN']), (req, res) => {
 });
 
 // 13. Dashboard Analytics & Activity Logs
-app.get('/api/analytics', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'CONTENT_MANAGER', 'VIEWER']), (req, res) => {
+app.get('/api/analytics', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR', 'MEETING_HOST', 'VIEWER']), (req, res) => {
   res.json(db.getDashboardStats());
 });
 
-app.get('/api/activity-logs', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'CONTENT_MANAGER', 'VIEWER']), (req, res) => {
+app.get('/api/activity-logs', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR', 'MEETING_HOST', 'VIEWER']), (req, res) => {
   const limit = req.query.limit ? Number(req.query.limit) : 50;
   res.json(db.getActivityLogs(limit));
 });
 
 // 14. Real-time Image & Visual Asset Uploader (Hardened against SVG XSS & oversized payloads)
-app.post('/api/upload', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER']), async (req, res) => {
+app.post('/api/upload', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR']), async (req, res) => {
   const { dataUrl, filename, image } = req.body || {};
   const payload = dataUrl || image;
   if (!payload || typeof payload !== 'string') {
@@ -1870,7 +1879,7 @@ app.post('/api/analytics/heartbeat', async (req, res) => {
   }
 });
 
-app.get('/api/analytics/realtime', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'CONTENT_MANAGER', 'VIEWER']), async (req, res) => {
+app.get('/api/analytics/realtime', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR', 'MEETING_HOST', 'VIEWER']), async (req, res) => {
   try {
     const appsCount = db.getApplications({ perPage: 1000 }).total;
     const volsCount = db.getVolunteers().length;

@@ -87,6 +87,15 @@ export function canAccessAdminTab(tab: AdminTab, role?: string): boolean {
   if (norm === 'CONTENT_MANAGER') {
     return ['dashboard', 'meetings', 'analytics', 'programs', 'events', 'news', 'team', 'gallery', 'contacts', 'email', 'settings', 'activity'].includes(tab);
   }
+  if (norm === 'COMMUNICATIONS_OFFICER') {
+    return ['dashboard', 'contacts', 'email', 'news', 'gallery', 'analytics', 'activity'].includes(tab);
+  }
+  if (norm === 'EVENT_COORDINATOR') {
+    return ['dashboard', 'programs', 'events', 'gallery', 'meetings', 'analytics', 'activity'].includes(tab);
+  }
+  if (norm === 'MEETING_HOST') {
+    return ['dashboard', 'meetings', 'analytics', 'activity'].includes(tab);
+  }
   if (norm === 'VIEWER') {
     return ['dashboard', 'analytics', 'activity'].includes(tab);
   }

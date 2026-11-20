@@ -32,29 +32,67 @@ interface SecurityStatus {
   svgUploadBlocked: boolean;
 }
 
-const ROLE_OPTIONS = [
+const ROLE_OPTIONS: {
+  value: Role;
+  label: string;
+  shortDesc: string;
+  desc: string;
+  badgeClass: string;
+}[] = [
   {
     value: 'SUPER_ADMIN',
     label: 'Super Admin',
-    desc: 'Full administrative authority, database access, settings & user management',
+    shortDesc: 'Full Administrative Authority & Security',
+    desc: 'Full administrative authority, database access, security shield, settings & user management',
     badgeClass: 'bg-indigo-100 text-indigo-900 border-indigo-200'
+  },
+  {
+    value: 'ADMIN',
+    label: 'Executive Admin',
+    shortDesc: 'Operations, Content & Meetings Control',
+    desc: 'Manage volunteers, applications, programs, events, emails & meetings (without DB/RBAC overrides)',
+    badgeClass: 'bg-blue-100 text-blue-900 border-blue-200'
   },
   {
     value: 'VOLUNTEER_MANAGER',
     label: 'Volunteer Manager',
-    desc: 'Review & approve applications, manage active volunteers & applicant tracking',
+    shortDesc: 'Applications, Volunteers & Outreach',
+    desc: 'Review & approve applications, manage active volunteers, inquiries, emails & meetings',
     badgeClass: 'bg-emerald-100 text-emerald-900 border-emerald-200'
   },
   {
     value: 'CONTENT_MANAGER',
     label: 'Content Manager',
-    desc: 'Publish & edit programs, community events, news articles, team & media gallery',
+    shortDesc: 'Programs, Events, News, Team & Settings',
+    desc: 'Publish & edit programs, community events, news articles, leadership team, gallery & site settings',
     badgeClass: 'bg-amber-100 text-amber-900 border-amber-200'
+  },
+  {
+    value: 'COMMUNICATIONS_OFFICER',
+    label: 'Communications Officer',
+    shortDesc: 'Official Emails, Inquiries, News & Media',
+    desc: 'Send official council emails, reply to contact inquiries, publish news dispatches & update gallery',
+    badgeClass: 'bg-purple-100 text-purple-900 border-purple-200'
+  },
+  {
+    value: 'EVENT_COORDINATOR',
+    label: 'Event Coordinator',
+    shortDesc: 'Events, Programs, Gallery & Meetings',
+    desc: 'Organize scheduled events, manage council programs, upload gallery highlights & coordinate meetings',
+    badgeClass: 'bg-cyan-100 text-cyan-900 border-cyan-200'
+  },
+  {
+    value: 'MEETING_HOST',
+    label: 'Meeting Host',
+    shortDesc: 'Schedule & Moderate Jitsi Video Meetings',
+    desc: 'Create, launch, lock, and moderate council Jitsi video meetings, waiting rooms & analytics',
+    badgeClass: 'bg-rose-100 text-rose-900 border-rose-200'
   },
   {
     value: 'VIEWER',
     label: 'Viewer (Read-Only)',
-    desc: 'Read-only access to dashboard statistics, visitor telemetry & activity logs',
+    shortDesc: 'Read-Only Telemetry & Activity Logs',
+    desc: 'Read-only access to dashboard statistics, live visitor telemetry & security activity logs',
     badgeClass: 'bg-slate-100 text-slate-800 border-slate-200'
   }
 ];
@@ -363,14 +401,12 @@ export const AdminUsers: React.FC = () => {
 
   const getRoleBadge = (role: string) => {
     const norm = role.toUpperCase().replace(/[\s-]+/g, '_');
-    if (norm === 'SUPER_ADMIN') {
-      return { label: 'Super Admin', color: 'bg-indigo-100 text-indigo-950 border-indigo-200' };
+    const matched = ROLE_OPTIONS.find(r => r.value === norm);
+    if (matched) {
+      return { label: matched.label, color: matched.badgeClass };
     }
-    if (norm === 'VOLUNTEER_MANAGER') {
-      return { label: 'Volunteer Manager', color: 'bg-emerald-100 text-emerald-950 border-emerald-200' };
-    }
-    if (norm === 'CONTENT_MANAGER' || norm === 'EDITOR') {
-      return { label: 'Content Manager', color: 'bg-amber-100 text-amber-950 border-amber-200' };
+    if (norm === 'EDITOR') {
+      return { label: 'Content Manager', color: 'bg-amber-100 text-amber-900 border-amber-200' };
     }
     return { label: 'Viewer', color: 'bg-slate-100 text-slate-800 border-slate-200' };
   };
@@ -590,10 +626,11 @@ export const AdminUsers: React.FC = () => {
                             onChange={e => handleQuickRoleChange(u.id, e.target.value as Role)}
                             className="text-[11px] font-semibold bg-white border border-slate-200 rounded-lg px-2 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-600 cursor-pointer shadow-2xs"
                           >
-                            <option value="SUPER_ADMIN">Super Admin</option>
-                            <option value="VOLUNTEER_MANAGER">Volunteer Manager</option>
-                            <option value="CONTENT_MANAGER">Content Manager</option>
-                            <option value="VIEWER">Viewer</option>
+                            {ROLE_OPTIONS.map(opt => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
                           </select>
                         ) : (
                           <span className="text-[11px] text-slate-400 italic">
@@ -746,10 +783,11 @@ export const AdminUsers: React.FC = () => {
                   onChange={e => setNewUser({ ...newUser, role: e.target.value as Role })}
                   className="w-full px-3 py-2.5 rounded-xl border border-slate-300 bg-white font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-900/20"
                 >
-                  <option value="VOLUNTEER_MANAGER">Volunteer Manager — Review &amp; Approve Candidates</option>
-                  <option value="CONTENT_MANAGER">Content Manager — Programs, Events &amp; News</option>
-                  <option value="SUPER_ADMIN">Super Admin — Full Administrative Control</option>
-                  <option value="VIEWER">Viewer — Read-Only Reports &amp; Telemetry</option>
+                  {ROLE_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label} — {opt.shortDesc}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -847,10 +885,11 @@ export const AdminUsers: React.FC = () => {
                   onChange={e => setEditingUser({ ...editingUser, role: e.target.value as Role })}
                   className="w-full px-3 py-2.5 rounded-xl border border-slate-300 bg-white font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-900/20"
                 >
-                  <option value="SUPER_ADMIN">Super Admin (Full Administrative Authority)</option>
-                  <option value="VOLUNTEER_MANAGER">Volunteer Manager (Review &amp; Approve Candidates)</option>
-                  <option value="CONTENT_MANAGER">Content Manager (Programs, Events, News &amp; Media)</option>
-                  <option value="VIEWER">Viewer (Read-Only Reports &amp; Telemetry)</option>
+                  {ROLE_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label} ({opt.shortDesc})
+                    </option>
+                  ))}
                 </select>
               </div>
 
