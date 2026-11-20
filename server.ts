@@ -33,10 +33,234 @@ import { sendCouncilEmail, sanitizeSenderName, isValidEmailAddress, isValidImage
 
 const app = express();
 const PORT = 3000;
-const SESSION_SECRET = process.env.SESSION_SECRET || 'nexgen_council_secure_session_secret_2026';
+
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+
+function resolveSessionSecret(): string {
+  const envSecret = (process.env.SESSION_SECRET || '').trim();
+  if (envSecret && envSecret.length >= 24 && !envSecret.includes('nexgen_council_secure_session_secret')) {
+    return envSecret;
+  }
+  const secretDir = path.join(process.cwd(), 'data');
+  const secretFile = path.join(secretDir, '.session_secret');
+  try {
+    if (fs.existsSync(secretFile)) {
+      const saved = fs.readFileSync(secretFile, 'utf-8').trim();
+      if (saved.length >= 32) return saved;
+    }
+    if (!fs.existsSync(secretDir)) {
+      fs.mkdirSync(secretDir, { recursive: true });
+    }
+    const generated = crypto.randomBytes(64).toString('hex');
+    fs.writeFileSync(secretFile, generated, { encoding: 'utf-8', mode: 0o600 });
+    return generated;
+  } catch {
+    return crypto.randomBytes(64).toString('hex');
+  }
+}
+
+const SESSION_SECRET = resolveSessionSecret();
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+
+// In-memory revoked token JTIs (for instant logout invalidation)
+const revokedTokenJtis = new Map<string, number>();
+
+// Cleanup expired revoked JTIs periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [jti, exp] of revokedTokenJtis.entries()) {
+    if (exp < now) revokedTokenJtis.delete(jti);
+  }
+}, 30 * 60 * 1000).unref();
+
+// Helper: Extract client IP accurately behind Nginx / Cloudflare
+function getClientIp(req: Request): string {
+  const cfIp = req.headers['cf-connecting-ip'];
+  if (typeof cfIp === 'string' && cfIp.trim()) return cfIp.trim();
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function isHttpsRequest(req: Request): boolean {
+  const proto = (req.headers['x-forwarded-proto'] as string || '').split(',')[0].trim().toLowerCase();
+  return req.secure || proto === 'https';
+}
+
+// Security Headers Middleware
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const reqHost = (req.headers['x-forwarded-host'] as string || req.headers.host || '').split(',')[0].trim().toLowerCase();
+  const isAiStudioOrLocal =
+    !reqHost ||
+    reqHost.includes('localhost') ||
+    reqHost.includes('127.0.0.1') ||
+    reqHost.endsWith('.run.app') ||
+    process.env.NODE_ENV !== 'production';
+
+  if (isAiStudioOrLocal) {
+    // Permit AI Studio preview iframe while blocking arbitrary third-party framing
+    res.setHeader(
+      'Content-Security-Policy',
+      "frame-ancestors 'self' https://aistudio.google.com https://*.google.com https://*.usercontent.goog"
+    );
+  } else {
+    // Strict clickjacking protection on live custom production domain
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader(
+      'Content-Security-Policy',
+      "frame-ancestors 'self' https://nexgencouncil.bond https://www.nexgencouncil.bond"
+    );
+  }
+
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader(
+    'Permissions-Policy',
+    'camera=(self "https://meet.nexgencouncil.bond"), microphone=(self "https://meet.nexgencouncil.bond"), display-capture=(self "https://meet.nexgencouncil.bond"), geolocation=(), payment=()'
+  );
+  if (isHttpsRequest(req)) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  if (req.path.startsWith('/api/') || req.path === '/admin' || req.path.startsWith('/admin/') || req.path === '/admin-login') {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Pragma', 'no-cache');
+  }
+  next();
+});
+
+// General Sliding-Window API Rate Limiter
+interface RateLimitBucket {
+  count: number;
+  resetAt: number;
+}
+const apiRateMap = new Map<string, RateLimitBucket>();
+
+function rateLimit(maxRequests: number, windowMs: number, keyPrefix = 'api') {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const ip = getClientIp(req);
+    const key = `${keyPrefix}:${ip}`;
+    const now = Date.now();
+    const bucket = apiRateMap.get(key);
+
+    if (!bucket || bucket.resetAt <= now) {
+      apiRateMap.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+
+    bucket.count += 1;
+    if (bucket.count > maxRequests) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfterSeconds));
+      return res.status(429).json({
+        error: `Too many requests. Please try again in ${retryAfterSeconds} seconds.`,
+        retryAfterSeconds
+      });
+    }
+    next();
+  };
+}
+
+// Clean up stale rate-limit buckets every 10 mins
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, b] of apiRateMap.entries()) {
+    if (b.resetAt <= now) apiRateMap.delete(k);
+  }
+}, 10 * 60 * 1000).unref();
+
+// Login Brute-Force Shield
+interface BruteForceRecord {
+  failures: number;
+  firstFailureAt: number;
+  lockedUntil: number;
+}
+const loginAttempts = new Map<string, BruteForceRecord>();
+const MAX_LOGIN_FAILURES = 5;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
+let blockedAttemptsCount = 0;
+
+function getBruteForceKeys(req: Request, username: string): string[] {
+  const ip = getClientIp(req);
+  const normUser = username.toLowerCase().trim();
+  return [`ip:${ip}`, ...(normUser ? [`acct:${ip}:${normUser}`] : [])];
+}
+
+function checkLoginLockout(req: Request, username: string): { locked: boolean; retryAfterSeconds: number } {
+  const now = Date.now();
+  let maxLockedUntil = 0;
+  for (const key of getBruteForceKeys(req, username)) {
+    const rec = loginAttempts.get(key);
+    if (rec && rec.lockedUntil > now) {
+      maxLockedUntil = Math.max(maxLockedUntil, rec.lockedUntil);
+    }
+  }
+  if (maxLockedUntil > now) {
+    return { locked: true, retryAfterSeconds: Math.ceil((maxLockedUntil - now) / 1000) };
+  }
+  return { locked: false, retryAfterSeconds: 0 };
+}
+
+function recordLoginFailure(req: Request, username: string): { locked: boolean; attemptsRemaining: number; retryAfterSeconds: number } {
+  const now = Date.now();
+  let lockedNow = false;
+  let minRemaining = MAX_LOGIN_FAILURES;
+  let retryAfter = 0;
+
+  for (const key of getBruteForceKeys(req, username)) {
+    const existing = loginAttempts.get(key);
+    if (!existing || (now - existing.firstFailureAt > LOGIN_WINDOW_MS && existing.lockedUntil <= now)) {
+      loginAttempts.set(key, { failures: 1, firstFailureAt: now, lockedUntil: 0 });
+      minRemaining = Math.min(minRemaining, MAX_LOGIN_FAILURES - 1);
+    } else {
+      existing.failures += 1;
+      const limit = key.startsWith('ip:') ? MAX_LOGIN_FAILURES * 2 : MAX_LOGIN_FAILURES;
+      if (existing.failures >= limit) {
+        existing.lockedUntil = now + LOGIN_LOCKOUT_MS;
+        lockedNow = true;
+        retryAfter = Math.ceil(LOGIN_LOCKOUT_MS / 1000);
+        minRemaining = 0;
+      } else {
+        minRemaining = Math.min(minRemaining, Math.max(0, limit - existing.failures));
+      }
+    }
+  }
+
+  return { locked: lockedNow, attemptsRemaining: minRemaining, retryAfterSeconds: retryAfter };
+}
+
+function clearLoginFailures(req: Request, username: string) {
+  for (const key of getBruteForceKeys(req, username)) {
+    loginAttempts.delete(key);
+  }
+}
 
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+app.use('/api', rateLimit(240, 60 * 1000, 'global_api'));
+
+// Origin / CSRF guard for cookie-authenticated state-changing requests
+app.use('/api', (req, res, next) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+  // Skip check for explicit Bearer header API clients or public analytics beacons
+  if (req.headers.authorization?.startsWith('Bearer ')) return next();
+  const origin = req.headers.origin;
+  const host = (req.headers['x-forwarded-host'] as string || req.headers.host || '').split(',')[0].trim().toLowerCase();
+  if (origin && host) {
+    try {
+      const originHost = new URL(origin).host.toLowerCase();
+      if (originHost !== host) {
+        return res.status(403).json({ error: 'Cross-site request blocked for security.' });
+      }
+    } catch {
+      return res.status(403).json({ error: 'Invalid request origin.' });
+    }
+  }
+  next();
+});
 
 // Populate optional auth session on req.user for all API routes
 app.use((req, res, next) => {
@@ -59,15 +283,28 @@ function parseCookies(cookieHeader?: string): Record<string, string> {
   return list;
 }
 
-function signToken(payload: object): string {
+interface AuthSession {
+  userId: string;
+  username: string;
+  role: Role;
+  name: string;
+  jti: string;
+  iat: number;
+  tv: number;
+  exp: number;
+}
+
+function signToken(payload: AuthSession): string {
   const data = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const signature = crypto.createHmac('sha256', SESSION_SECRET).update(data).digest('base64url');
   return `${data}.${signature}`;
 }
 
-function verifyToken<T = any>(token?: string): T | null {
+function verifyToken(token?: string): AuthSession | null {
   if (!token) return null;
-  const [data, signature] = token.split('.');
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [data, signature] = parts;
   if (!data || !signature) return null;
   const expected = crypto.createHmac('sha256', SESSION_SECRET).update(data).digest('base64url');
   const sigBuf = Buffer.from(signature);
@@ -76,36 +313,42 @@ function verifyToken<T = any>(token?: string): T | null {
     return null;
   }
   try {
-    const payload = JSON.parse(Buffer.from(data, 'base64url').toString('utf-8'));
-    if (payload.exp && payload.exp < Date.now()) return null;
-    return payload as T;
+    const payload = JSON.parse(Buffer.from(data, 'base64url').toString('utf-8')) as AuthSession;
+    if (!payload.userId || !payload.exp || payload.exp < Date.now()) return null;
+    if (payload.jti && revokedTokenJtis.has(payload.jti)) return null;
+    if (payload.iat && payload.iat < db.getMinValidTokenIssuedAt()) return null;
+
+    // Live DB user & tokenVersion validation (prevents deleted/demoted user reuse)
+    const liveUser = db.getUserById(payload.userId);
+    if (!liveUser) return null;
+    const liveVersion = db.getUserTokenVersion(payload.userId);
+    if (payload.tv && payload.tv !== liveVersion) return null;
+
+    return {
+      ...payload,
+      role: liveUser.role,
+      name: liveUser.name,
+      username: liveUser.username
+    };
   } catch {
     return null;
   }
 }
 
-interface AuthSession {
-  userId: string;
-  username: string;
-  role: Role;
-  name: string;
-  exp: number;
+function extractRawToken(req: Request): string | undefined {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    return authHeader.substring(7).trim();
+  }
+  if (typeof req.headers['x-auth-token'] === 'string') {
+    return req.headers['x-auth-token'].trim();
+  }
+  const cookies = parseCookies(req.headers.cookie);
+  return cookies['ng_session'];
 }
 
 function getSession(req: Request): AuthSession | null {
-  const authHeader = req.headers.authorization;
-  let token: string | undefined;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    token = authHeader.substring(7);
-  } else if (req.headers['x-auth-token']) {
-    token = req.headers['x-auth-token'] as string;
-  } else if (typeof req.query?.auth_token === 'string') {
-    token = req.query.auth_token;
-  } else {
-    const cookies = parseCookies(req.headers.cookie);
-    token = cookies['ng_session'];
-  }
-  return verifyToken<AuthSession>(token);
+  return verifyToken(extractRawToken(req));
 }
 
 function normalizeRole(r?: string): string {
@@ -120,13 +363,13 @@ function requireAuth(allowedRoles?: Role[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     const session = getSession(req);
     if (!session) {
-      return res.status(401).json({ error: 'Authentication required. Please log in.' });
+      return res.status(401).json({ error: 'Authentication required. Please log in again.' });
     }
     const sessionRole = normalizeRole(session.role);
     if (allowedRoles && allowedRoles.length > 0) {
       const normalizedAllowed = allowedRoles.map(r => normalizeRole(r));
       if (sessionRole !== 'SUPER_ADMIN' && !normalizedAllowed.includes(sessionRole)) {
-        return res.status(403).json({ error: 'You do not have permission to perform this action.' });
+        return res.status(403).json({ error: 'Access denied. You do not have permission to perform this action.' });
       }
     }
     (req as any).user = session;
@@ -143,33 +386,91 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// 2. Authentication
-app.post('/api/auth/login', (req, res) => {
-  const username = (req.body.username || req.body.usernameOrEmail || '').trim();
-  const password = (req.body.password || '').trim();
+// 2. Authentication (Protected by Brute-Force Lockout Shield)
+app.post('/api/auth/login', async (req, res) => {
+  const username = String(req.body?.username || req.body?.usernameOrEmail || '').trim();
+  const password = String(req.body?.password || '').trim();
+
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password are required.' });
+  }
+  if (username.length > 150 || password.length > 200) {
+    return res.status(400).json({ error: 'Invalid credential input length.' });
+  }
+
+  const lockStatus = checkLoginLockout(req, username);
+  if (lockStatus.locked) {
+    blockedAttemptsCount += 1;
+    res.setHeader('Retry-After', String(lockStatus.retryAfterSeconds));
+    return res.status(429).json({
+      error: `Account temporarily locked due to repeated failed attempts. Try again in ${Math.ceil(lockStatus.retryAfterSeconds / 60)} minute(s).`,
+      retryAfterSeconds: lockStatus.retryAfterSeconds
+    });
   }
 
   const user = db.authenticate(username, password);
   if (!user) {
-    return res.status(401).json({ error: 'Invalid credentials. Please verify username and password.' });
+    const failState = recordLoginFailure(req, username);
+    // Artificial delay on failed attempt to hinder automated credential stuffing
+    await new Promise(r => setTimeout(r, 350));
+
+    const clientIp = getClientIp(req);
+    if (failState.locked) {
+      blockedAttemptsCount += 1;
+      db.logActivity({
+        userId: 'security_shield',
+        userName: 'Security Shield',
+        userRole: 'SYSTEM',
+        action: 'LOGIN_BRUTEFORCE_BLOCKED',
+        entityType: 'Auth',
+        details: `Blocked brute-force login attempts for identifier "${username.slice(0, 40)}" from IP ${clientIp} (15m lockout).`,
+        ipAddress: clientIp
+      });
+      res.setHeader('Retry-After', String(failState.retryAfterSeconds));
+      return res.status(429).json({
+        error: 'Too many failed login attempts. Access temporarily locked for 15 minutes.',
+        retryAfterSeconds: failState.retryAfterSeconds
+      });
+    }
+
+    db.logActivity({
+      userId: 'security_shield',
+      userName: 'Security Shield',
+      userRole: 'SYSTEM',
+      action: 'LOGIN_FAILED',
+      entityType: 'Auth',
+      details: `Failed admin login attempt for "${username.slice(0, 40)}" from IP ${clientIp} (${failState.attemptsRemaining} attempts left before lockout).`,
+      ipAddress: clientIp
+    });
+
+    return res.status(401).json({
+      error: failState.attemptsRemaining <= 2
+        ? `Invalid credentials. ${failState.attemptsRemaining} attempt(s) remaining before temporary lockout.`
+        : 'Invalid credentials. Please verify username and password.',
+      attemptsRemaining: failState.attemptsRemaining
+    });
   }
 
+  clearLoginFailures(req, username);
+
+  const now = Date.now();
   const tokenPayload: AuthSession = {
     userId: user.id,
     username: user.username,
     name: user.name,
     role: user.role,
-    exp: Date.now() + 24 * 60 * 60 * 1000 // 24 hours
+    jti: crypto.randomBytes(16).toString('hex'),
+    iat: now,
+    tv: db.getUserTokenVersion(user.id),
+    exp: now + SESSION_TTL_MS
   };
 
   const token = signToken(tokenPayload);
+  const secureFlag = isHttpsRequest(req) ? '; Secure' : '';
 
-  // Set HTTP cookie
   res.setHeader(
     'Set-Cookie',
-    `ng_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`
+    `ng_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secureFlag}`
   );
 
   db.logActivity({
@@ -179,8 +480,8 @@ app.post('/api/auth/login', (req, res) => {
     action: 'USER_LOGIN',
     entityType: 'User',
     entityId: user.id,
-    details: `User ${user.username} logged in successfully.`,
-    ipAddress: req.ip || 'unknown'
+    details: `User ${user.username} authenticated cleanly.`,
+    ipAddress: getClientIp(req)
   });
 
   return res.json({
@@ -198,8 +499,82 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 app.post('/api/auth/logout', (req, res) => {
-  res.setHeader('Set-Cookie', 'ng_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+  const session = getSession(req);
+  if (session?.jti) {
+    revokedTokenJtis.set(session.jti, session.exp);
+  }
+  const secureFlag = isHttpsRequest(req) ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `ng_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureFlag}`);
   res.json({ ok: true });
+});
+
+app.post('/api/auth/revoke-all', requireAuth(['SUPER_ADMIN']), (req, res) => {
+  const cutoff = db.revokeAllSessions();
+  const user = (req as any).user as AuthSession;
+  db.logActivity({
+    userId: user.userId,
+    userName: user.name,
+    userRole: user.role,
+    action: 'REVOKE_ALL_SESSIONS',
+    entityType: 'Security',
+    details: 'Super Admin invalidated all active authentication sessions across all devices.',
+    ipAddress: getClientIp(req)
+  });
+  const secureFlag = isHttpsRequest(req) ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `ng_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureFlag}`);
+  res.json({ ok: true, revokedAt: cutoff, message: 'All active admin sessions have been signed out immediately.' });
+});
+
+app.put('/api/auth/change-password', requireAuth(), (req, res) => {
+  const session = (req as any).user as AuthSession;
+  const currentPassword = String(req.body?.currentPassword || '').trim();
+  const newPassword = String(req.body?.newPassword || '').trim();
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'Current password and new password are required.' });
+  }
+  if (newPassword.length < 8) {
+    return res.status(400).json({ error: 'New password must be at least 8 characters long.' });
+  }
+  if (!db.verifyUserPassword(session.userId, currentPassword)) {
+    return res.status(401).json({ error: 'Current password is incorrect.' });
+  }
+
+  try {
+    db.updateUser(session.userId, { password: newPassword });
+    db.logActivity({
+      userId: session.userId,
+      userName: session.name,
+      userRole: session.role,
+      action: 'PASSWORD_CHANGED',
+      entityType: 'User',
+      entityId: session.userId,
+      details: `${session.username} updated their own account password.`,
+      ipAddress: getClientIp(req)
+    });
+    res.json({ ok: true, message: 'Password updated cleanly. Other active sessions were invalidated.' });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/system/security-status', requireAuth(['SUPER_ADMIN']), (req, res) => {
+  const now = Date.now();
+  let activeLockouts = 0;
+  for (const [k, v] of loginAttempts.entries()) {
+    if (k.startsWith('acct:') && v.lockedUntil > now) activeLockouts++;
+  }
+  res.json({
+    pbkdf2Iterations: 120000,
+    sessionTtlHours: 12,
+    bruteForceShieldActive: true,
+    maxLoginAttempts: MAX_LOGIN_FAILURES,
+    activeLockouts,
+    blockedAttemptsCount,
+    csrfOriginProtection: true,
+    httpsSecureCookies: isHttpsRequest(req),
+    svgUploadBlocked: true
+  });
 });
 
 app.get('/api/auth/session', (req, res) => {
@@ -904,67 +1279,101 @@ app.put('/api/settings', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) =
 });
 
 // 12. User & Roles Management
+const ALLOWED_ROLES = ['SUPER_ADMIN', 'ADMIN', 'VOLUNTEER_MANAGER', 'CONTENT_MANAGER', 'VIEWER'];
+
 app.get('/api/users', requireAuth(['SUPER_ADMIN']), (req, res) => {
   res.json(db.getUsers());
 });
 
 app.post('/api/users', requireAuth(['SUPER_ADMIN']), (req, res) => {
-  const { username, name, email, role, password } = req.body;
+  const { username, name, email, role, password } = req.body || {};
   if (!username || !name || !email || !password || !role) {
     return res.status(400).json({ error: 'All fields are required.' });
   }
-  const user = db.createUser({ username, name, email, role, password });
-  const currentUser = (req as any).user;
-  db.logActivity({
-    userId: currentUser.userId,
-    userName: currentUser.name,
-    userRole: currentUser.role,
-    action: 'STAFF_CREATED',
-    entityType: 'User',
-    entityId: user.id,
-    details: `Created new staff account for ${user.name} (@${user.username}) with assigned role "${user.role}".`,
-    ipAddress: req.ip || 'unknown'
-  });
-  res.status(201).json(user);
+  if (!ALLOWED_ROLES.includes(String(role))) {
+    return res.status(400).json({ error: 'Invalid role specified.' });
+  }
+  if (String(password).trim().length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters long for security.' });
+  }
+
+  try {
+    const user = db.createUser({ username, name, email, role, password: String(password).trim() });
+    const currentUser = (req as any).user;
+    db.logActivity({
+      userId: currentUser.userId,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      action: 'STAFF_CREATED',
+      entityType: 'User',
+      entityId: user.id,
+      details: `Created new staff account for ${user.name} (@${user.username}) with assigned role "${user.role}".`,
+      ipAddress: getClientIp(req)
+    });
+    res.status(201).json(user);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Failed to create user.' });
+  }
 });
 
 app.put('/api/users/:id', requireAuth(['SUPER_ADMIN']), (req, res) => {
   const { id } = req.params;
-  const { username, name, email, role, password } = req.body;
-  const updated = db.updateUser(id, { username, name, email, role, password });
-  if (!updated) {
-    return res.status(404).json({ error: 'Staff account not found' });
+  const { username, name, email, role, password } = req.body || {};
+  if (role && !ALLOWED_ROLES.includes(String(role))) {
+    return res.status(400).json({ error: 'Invalid role specified.' });
+  }
+  if (password && String(password).trim().length < 8) {
+    return res.status(400).json({ error: 'Reset password must be at least 8 characters long.' });
   }
 
-  const currentUser = (req as any).user;
-  db.logActivity({
-    userId: currentUser.userId,
-    userName: currentUser.name,
-    userRole: currentUser.role,
-    action: 'STAFF_ROLE_ASSIGNED',
-    entityType: 'User',
-    entityId: id,
-    details: `Updated staff permissions and access for ${updated.name} (@${updated.username}) with assigned role: "${updated.role}".`,
-    ipAddress: req.ip || 'unknown'
-  });
+  try {
+    const updated = db.updateUser(id, { username, name, email, role, password });
+    if (!updated) {
+      return res.status(404).json({ error: 'Staff account not found' });
+    }
 
-  res.json(updated);
+    const currentUser = (req as any).user;
+    db.logActivity({
+      userId: currentUser.userId,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      action: 'STAFF_ROLE_ASSIGNED',
+      entityType: 'User',
+      entityId: id,
+      details: `Updated staff permissions and access for ${updated.name} (@${updated.username}) with assigned role: "${updated.role}".`,
+      ipAddress: getClientIp(req)
+    });
+
+    res.json(updated);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Failed to update staff account.' });
+  }
 });
 
 app.delete('/api/users/:id', requireAuth(['SUPER_ADMIN']), (req, res) => {
-  db.deleteUser(req.params.id);
   const currentUser = (req as any).user;
-  db.logActivity({
-    userId: currentUser.userId,
-    userName: currentUser.name,
-    userRole: currentUser.role,
-    action: 'STAFF_DELETED',
-    entityType: 'User',
-    entityId: req.params.id,
-    details: `Revoked access credentials for staff ID ${req.params.id}.`,
-    ipAddress: req.ip || 'unknown'
-  });
-  res.json({ ok: true });
+  if (req.params.id === currentUser.userId) {
+    return res.status(400).json({ error: 'You cannot delete your own active session account.' });
+  }
+  try {
+    const ok = db.deleteUser(req.params.id);
+    if (!ok) {
+      return res.status(404).json({ error: 'Staff account not found' });
+    }
+    db.logActivity({
+      userId: currentUser.userId,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      action: 'STAFF_DELETED',
+      entityType: 'User',
+      entityId: req.params.id,
+      details: `Revoked access credentials for staff ID ${req.params.id}.`,
+      ipAddress: getClientIp(req)
+    });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Failed to delete user.' });
+  }
 });
 
 // 13. Dashboard Analytics & Activity Logs
@@ -977,11 +1386,11 @@ app.get('/api/activity-logs', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'CONTEN
   res.json(db.getActivityLogs(limit));
 });
 
-// 14. Real-time Image & Visual Asset Uploader (Multi-tier persistence: public/uploads, data/uploads, and MongoDB media collection)
+// 14. Real-time Image & Visual Asset Uploader (Hardened against SVG XSS & oversized payloads)
 app.post('/api/upload', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER']), async (req, res) => {
-  const { dataUrl, filename, image } = req.body;
+  const { dataUrl, filename, image } = req.body || {};
   const payload = dataUrl || image;
-  if (!payload) {
+  if (!payload || typeof payload !== 'string') {
     return res.status(400).json({ error: 'No image data provided.' });
   }
 
@@ -995,45 +1404,50 @@ app.post('/api/upload', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANA
       fs.mkdirSync(persistentUploadsDir, { recursive: true });
     }
 
-    // Check if base64 data URL
-    if (typeof payload === 'string' && payload.startsWith('data:image/')) {
-      const matches = payload.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
-      if (matches) {
-        const ext = matches[1].replace('jpeg', 'jpg').replace('+xml', '');
-        const mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
-        const base64Data = matches[2];
-        const rawName = (filename || 'upload').replace(/[^a-zA-Z0-9_-]/g, '_');
-        const finalName = `${Date.now()}_${rawName.slice(0, 30)}.${ext}`;
-        const publicFilePath = path.join(publicUploadsDir, finalName);
-        const persistentFilePath = path.join(persistentUploadsDir, finalName);
-        const buffer = Buffer.from(base64Data, 'base64');
-
-        // 1. Write to public/uploads for direct instant static web serving
-        fs.writeFileSync(publicFilePath, buffer);
-
-        // 2. Write to data/uploads for local disk persistence
-        try {
-          fs.writeFileSync(persistentFilePath, buffer);
-        } catch (e) {
-          console.warn('[Storage] Could not write to data/uploads backup:', e);
-        }
-
-        // 3. Persist to MongoDB media collection (permanent database storage surviving any git pull/wipe)
-        mongoSaveMedia(finalName, payload, mimeType, buffer.length).catch(mErr => {
-          console.warn('[MongoDB] Background media persistence notice:', mErr?.message);
-        });
-
-        const publicUrl = `/uploads/${finalName}`;
-
-        return res.json({
-          ok: true,
-          url: publicUrl,
-          filename: finalName
-        });
+    if (payload.startsWith('data:image/')) {
+      // Strictly whitelist safe raster formats only (blocks SVG XSS scripts)
+      const matches = payload.match(/^data:image\/(png|jpeg|jpg|webp|gif);base64,([A-Za-z0-9+/=]+)$/);
+      if (!matches) {
+        return res.status(400).json({ error: 'Only PNG, JPG, WEBP, and GIF raster images are permitted.' });
       }
+      const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+      const mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+      const base64Data = matches[2];
+      const buffer = Buffer.from(base64Data, 'base64');
+
+      if (buffer.length > 5 * 1024 * 1024) {
+        return res.status(413).json({ error: 'Image size exceeds 5MB maximum limit.' });
+      }
+
+      const rawName = String(filename || 'upload').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const finalName = `${Date.now()}_${rawName.slice(0, 30)}.${ext}`;
+      const publicFilePath = path.join(publicUploadsDir, finalName);
+      const persistentFilePath = path.join(persistentUploadsDir, finalName);
+
+      fs.writeFileSync(publicFilePath, buffer);
+
+      try {
+        fs.writeFileSync(persistentFilePath, buffer);
+      } catch (e) {
+        console.warn('[Storage] Could not write to data/uploads backup:', e);
+      }
+
+      mongoSaveMedia(finalName, payload, mimeType, buffer.length).catch(mErr => {
+        console.warn('[MongoDB] Background media persistence notice:', mErr?.message);
+      });
+
+      return res.json({
+        ok: true,
+        url: `/uploads/${finalName}`,
+        filename: finalName
+      });
     }
 
-    // Fallback: return payload as url directly if it's already a URL
+    // Only allow safe http/https or relative /uploads URLs as pass-through
+    if (!/^https?:\/\//i.test(payload) && !payload.startsWith('/uploads/')) {
+      return res.status(400).json({ error: 'Invalid image URL protocol.' });
+    }
+
     res.json({
       ok: true,
       url: payload,
@@ -1041,12 +1455,7 @@ app.post('/api/upload', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANA
     });
   } catch (err: any) {
     console.error('Error saving uploaded image:', err);
-    // Graceful fallback to data URL
-    res.json({
-      ok: true,
-      url: payload,
-      filename: filename || 'image.png'
-    });
+    res.status(500).json({ error: 'Failed to process uploaded image.' });
   }
 });
 
@@ -1096,8 +1505,8 @@ app.get('/api/analytics/realtime', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'C
   }
 });
 
-// 16. MongoDB & Oracle Cloud VM System Status & Test Endpoints
-app.get('/api/system/database-status', async (req, res) => {
+// 16. MongoDB & System Status (Strictly Super Admin Authenticated)
+app.get('/api/system/database-status', requireAuth(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   const mongoStatus = await getMongoStatus();
   const summary = {
     ...mongoStatus,

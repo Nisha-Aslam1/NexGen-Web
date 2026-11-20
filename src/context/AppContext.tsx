@@ -55,6 +55,40 @@ interface Toast {
   message: string;
 }
 
+export interface LoginResult {
+  ok: boolean;
+  error?: string;
+  retryAfterSeconds?: number;
+  attemptsRemaining?: number;
+}
+
+export function normalizeUserRole(role?: string): string {
+  if (!role) return '';
+  const s = role.toUpperCase().replace(/[\s-]+/g, '_');
+  if (s === 'SUPERADMIN') return 'SUPER_ADMIN';
+  if (s === 'EDITOR') return 'CONTENT_MANAGER';
+  return s;
+}
+
+export function canAccessAdminTab(tab: AdminTab, role?: string): boolean {
+  const norm = normalizeUserRole(role);
+  if (!norm) return false;
+  if (norm === 'SUPER_ADMIN') return true;
+  if (norm === 'ADMIN') {
+    return tab !== 'users' && tab !== 'database';
+  }
+  if (norm === 'VOLUNTEER_MANAGER') {
+    return ['dashboard', 'meetings', 'analytics', 'applications', 'volunteers', 'contacts', 'email', 'activity'].includes(tab);
+  }
+  if (norm === 'CONTENT_MANAGER') {
+    return ['dashboard', 'meetings', 'analytics', 'programs', 'events', 'news', 'team', 'gallery', 'contacts', 'email', 'settings', 'activity'].includes(tab);
+  }
+  if (norm === 'VIEWER') {
+    return ['dashboard', 'analytics', 'activity'].includes(tab);
+  }
+  return false;
+}
+
 export function parsePathname(pathname: string, hash?: string): {
   page: ActivePage;
   programSlug?: string;
@@ -152,7 +186,7 @@ interface AppContextType {
   // Auth
   currentUser: User | null;
   authToken: string | null;
-  login: (username: string, password: string) => Promise<boolean>;
+  login: (username: string, password: string) => Promise<LoginResult>;
   logout: () => Promise<void>;
   isLoadingAuth: boolean;
 
@@ -400,7 +434,67 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     refreshData();
   }, []);
 
-  const login = async (username: string, password: string): Promise<boolean> => {
+  // Automatically log out immediately if backend rejects a session with 401 (revoked/expired)
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      localStorage.removeItem('ng_token');
+      setAuthToken(null);
+      setCurrentUser(prev => {
+        if (prev) {
+          addToast('Your admin session expired or was revoked. Please sign in again.', 'error');
+        }
+        return null;
+      });
+      setActivePageState(prev => (prev === 'admin' ? 'admin-login' : prev));
+    };
+
+    window.addEventListener('ng:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('ng:unauthorized', handleUnauthorized);
+  }, []);
+
+  // Idle Inactivity Auto-Logout (30 minutes of inactivity while logged into Admin)
+  useEffect(() => {
+    if (!currentUser || activePage !== 'admin') return;
+
+    const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+    let idleTimer: ReturnType<typeof setTimeout>;
+    let lastReset = Date.now();
+
+    const triggerIdleLogout = async () => {
+      try {
+        const token = localStorage.getItem('ng_token');
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        await fetch('/api/auth/logout', { method: 'POST', headers, credentials: 'include' });
+      } catch {
+        // ignore
+      }
+      localStorage.removeItem('ng_token');
+      setAuthToken(null);
+      setCurrentUser(null);
+      addToast('Signed out automatically after 30 minutes of inactivity for security.', 'info');
+      setActivePage('admin-login');
+    };
+
+    const resetTimer = () => {
+      const now = Date.now();
+      if (now - lastReset < 5000) return; // Throttle event churn
+      lastReset = now;
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(triggerIdleLogout, IDLE_TIMEOUT_MS);
+    };
+
+    idleTimer = setTimeout(triggerIdleLogout, IDLE_TIMEOUT_MS);
+    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'] as const;
+    events.forEach(ev => window.addEventListener(ev, resetTimer, { passive: true }));
+
+    return () => {
+      clearTimeout(idleTimer);
+      events.forEach(ev => window.removeEventListener(ev, resetTimer));
+    };
+  }, [currentUser, activePage]);
+
+  const login = async (username: string, password: string): Promise<LoginResult> => {
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -410,31 +504,41 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
       const data = await res.json();
       if (!res.ok) {
-        addToast(data.error || 'Login failed', 'error');
-        return false;
+        const errMsg = data.error || 'Login failed. Please verify your credentials.';
+        addToast(errMsg, 'error');
+        return {
+          ok: false,
+          error: errMsg,
+          retryAfterSeconds: typeof data.retryAfterSeconds === 'number' ? data.retryAfterSeconds : undefined,
+          attemptsRemaining: typeof data.attemptsRemaining === 'number' ? data.attemptsRemaining : undefined
+        };
       }
       setAuthToken(data.token);
       localStorage.setItem('ng_token', data.token);
       setCurrentUser(data.user);
       addToast(`Welcome back, ${data.user.name}!`, 'success');
       setActivePage('admin');
-      return true;
+      return { ok: true };
     } catch (err: any) {
-      addToast(err.message || 'Connection error', 'error');
-      return false;
+      const errMsg = err.message || 'Connection error';
+      addToast(errMsg, 'error');
+      return { ok: false, error: errMsg };
     }
   };
 
   const logout = async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+      const token = localStorage.getItem('ng_token');
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      await fetch('/api/auth/logout', { method: 'POST', headers, credentials: 'include' });
     } catch {
       // ignore
     }
     localStorage.removeItem('ng_token');
     setAuthToken(null);
     setCurrentUser(null);
-    addToast('You have been logged out.', 'info');
+    addToast('You have been securely logged out.', 'info');
     setActivePage('home');
   };
 

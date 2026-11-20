@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { useApp, AdminTab } from '../../context/AppContext.tsx';
+import { useApp, AdminTab, canAccessAdminTab } from '../../context/AppContext.tsx';
+import { authFetch } from '../../lib/api.ts';
 import {
   LayoutDashboard,
   FileCheck2,
@@ -17,7 +18,6 @@ import {
   Menu,
   X,
   ExternalLink,
-  ChevronRight,
   Bell,
   Search,
   Plus,
@@ -26,7 +26,11 @@ import {
   Radio,
   Code2,
   Video,
-  Send
+  Send,
+  KeyRound,
+  Eye,
+  EyeOff,
+  CheckCircle2
 } from 'lucide-react';
 
 export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -40,11 +44,50 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
     lastSyncTime,
     pendingApplicationsCount,
     unreadContactsCount,
-    triggerRealtimeSync
+    triggerRealtimeSync,
+    addToast
   } = useApp();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const [pwdForm, setPwdForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [showPwdFields, setShowPwdFields] = useState(false);
+  const [savingPwd, setSavingPwd] = useState(false);
 
-  const navManagement: { tab: AdminTab; label: string; icon: React.ElementType; badge?: number }[] = [
+  const handleChangeOwnPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (pwdForm.newPassword.length < 8) {
+      addToast('New password must be at least 8 characters long.', 'error');
+      return;
+    }
+    if (pwdForm.newPassword !== pwdForm.confirmPassword) {
+      addToast('New password and confirmation do not match.', 'error');
+      return;
+    }
+    setSavingPwd(true);
+    try {
+      const res = await authFetch('/api/auth/change-password', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentPassword: pwdForm.currentPassword,
+          newPassword: pwdForm.newPassword
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update password');
+      addToast(data.message || 'Password updated successfully!', 'success');
+      setIsPasswordModalOpen(false);
+      setPwdForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    } catch (err: any) {
+      addToast(err.message || 'Could not update password', 'error');
+    } finally {
+      setSavingPwd(false);
+    }
+  };
+
+  type NavItem = { tab: AdminTab; label: string; icon: React.ElementType; badge?: number };
+
+  const allManagementNav: NavItem[] = [
     { tab: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { tab: 'meetings', label: 'Video Meetings', icon: Video },
     { tab: 'analytics', label: 'Live Analytics', icon: Radio },
@@ -54,8 +97,9 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
     { tab: 'events', label: 'Events', icon: Calendar },
     { tab: 'news', label: 'News & CMS', icon: Newspaper }
   ];
+  const navManagement = allManagementNav.filter(item => canAccessAdminTab(item.tab, currentUser?.role));
 
-  const navOrganization: { tab: AdminTab; label: string; icon: React.ElementType; badge?: number }[] = [
+  const allOrganizationNav: NavItem[] = [
     { tab: 'team', label: 'Team', icon: UserCheck },
     { tab: 'gallery', label: 'Gallery', icon: ImageIcon },
     { tab: 'contacts', label: 'Inquiries', icon: Mail, badge: unreadContactsCount },
@@ -65,6 +109,7 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
     { tab: 'database', label: 'Database & MongoDB', icon: Database },
     { tab: 'activity', label: 'Activity Logs', icon: Activity }
   ];
+  const navOrganization = allOrganizationNav.filter(item => canAccessAdminTab(item.tab, currentUser?.role));
 
   return (
     <div className="flex h-screen w-full bg-slate-50 font-sans text-slate-900 overflow-hidden">
@@ -187,14 +232,24 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
                 {currentUser?.role || 'Super Admin'}
               </p>
             </div>
-            <button
-              onClick={logout}
-              className="text-slate-400 hover:text-rose-400 p-1.5 rounded-lg transition-colors cursor-pointer"
-              title="Sign Out"
-              aria-label="Sign out"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setIsPasswordModalOpen(true)}
+                className="text-slate-400 hover:text-amber-400 p-1.5 rounded-lg transition-colors cursor-pointer"
+                title="Change My Password"
+                aria-label="Change my password"
+              >
+                <KeyRound className="w-4 h-4" />
+              </button>
+              <button
+                onClick={logout}
+                className="text-slate-400 hover:text-rose-400 p-1.5 rounded-lg transition-colors cursor-pointer"
+                title="Sign Out"
+                aria-label="Sign out"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           {/* Developer Watermark in Sidebar */}
@@ -263,26 +318,33 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
               <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
             </button>
 
-            <button
-              onClick={() => setAdminTab('applications')}
-              className="relative p-2 text-slate-400 hover:text-slate-600 cursor-pointer"
-              title="View Applications Queue"
-              aria-label="Notifications"
-            >
-              <Bell className="w-4 h-4" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
-            </button>
+            {canAccessAdminTab('applications', currentUser?.role) && (
+              <button
+                onClick={() => setAdminTab('applications')}
+                className="relative p-2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                title="View Applications Queue"
+                aria-label="Notifications"
+              >
+                <Bell className="w-4 h-4" />
+                {pendingApplicationsCount > 0 && (
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
+                )}
+              </button>
+            )}
 
-            <div className="h-8 w-[1px] bg-slate-200 mx-1 hidden sm:block"></div>
-
-            <button
-              onClick={() => setAdminTab('programs')}
-              className="bg-blue-600 text-white text-xs sm:text-sm font-medium px-3.5 sm:px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span className="hidden sm:inline">New Program</span>
-              <span className="sm:hidden">New</span>
-            </button>
+            {canAccessAdminTab('programs', currentUser?.role) && (
+              <>
+                <div className="h-8 w-[1px] bg-slate-200 mx-1 hidden sm:block"></div>
+                <button
+                  onClick={() => setAdminTab('programs')}
+                  className="bg-blue-600 text-white text-xs sm:text-sm font-medium px-3.5 sm:px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span className="hidden sm:inline">New Program</span>
+                  <span className="sm:hidden">New</span>
+                </button>
+              </>
+            )}
           </div>
         </header>
 
@@ -301,6 +363,108 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
           </footer>
         </div>
       </main>
+
+      {/* Self-Service Password Rotation Modal */}
+      {isPasswordModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-indigo-50 text-indigo-950">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-serif font-bold text-lg text-slate-900 leading-none">
+                    Update Security Password
+                  </h3>
+                  <span className="text-[11px] text-slate-400">
+                    Rotating your password invalidates all other active tokens
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsPasswordModalOpen(false)}
+                className="text-slate-400 hover:text-slate-700 p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleChangeOwnPassword} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">
+                  Current Password *
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPwdFields ? 'text' : 'password'}
+                    required
+                    value={pwdForm.currentPassword}
+                    onChange={e => setPwdForm({ ...pwdForm, currentPassword: e.target.value })}
+                    placeholder="Enter your current password"
+                    className="w-full px-3 py-2.5 pr-9 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-900/20 text-slate-900 font-medium"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPwdFields(!showPwdFields)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                  >
+                    {showPwdFields ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">
+                  New Password * (Min 8 chars)
+                </label>
+                <input
+                  type={showPwdFields ? 'text' : 'password'}
+                  required
+                  minLength={8}
+                  value={pwdForm.newPassword}
+                  onChange={e => setPwdForm({ ...pwdForm, newPassword: e.target.value })}
+                  placeholder="Use letters, numbers & symbols"
+                  className="w-full px-3 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-900/20 text-slate-900 font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">
+                  Confirm New Password *
+                </label>
+                <input
+                  type={showPwdFields ? 'text' : 'password'}
+                  required
+                  minLength={8}
+                  value={pwdForm.confirmPassword}
+                  onChange={e => setPwdForm({ ...pwdForm, confirmPassword: e.target.value })}
+                  placeholder="Re-enter new password"
+                  className="w-full px-3 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-900/20 text-slate-900 font-medium"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsPasswordModalOpen(false)}
+                  className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-600 font-semibold hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingPwd}
+                  className="px-5 py-2.5 bg-indigo-950 text-white rounded-xl font-bold hover:bg-indigo-900 transition-colors shadow-xs cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-amber-300" />
+                  <span>{savingPwd ? 'Updating...' : 'Update Password'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

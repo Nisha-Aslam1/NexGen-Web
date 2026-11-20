@@ -63,6 +63,9 @@ meetingsRouter.post('/meetings', (req: Request, res: Response) => {
   if (!user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
+  if (user.role === 'VIEWER') {
+    return res.status(403).json({ error: 'Viewer role has read-only access and cannot create meetings.' });
+  }
 
   const {
     title,

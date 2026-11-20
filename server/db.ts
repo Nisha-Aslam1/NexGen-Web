@@ -31,6 +31,8 @@ export interface ResolvedAdminCredentials {
   username: string;
   email: string;
   password?: string;
+  passwordHash?: string;
+  salt?: string;
   source: 'env_file' | 'process_env' | 'admin_config' | 'default';
 }
 
@@ -50,14 +52,12 @@ export function readDirectEnvFile(): Record<string, string> {
           if (eqIdx !== -1) {
             const key = trimmed.slice(0, eqIdx).trim();
             let val = trimmed.slice(eqIdx + 1).trim();
-            // If inline comment exists after unquoted text, remove it
             if (!val.startsWith('"') && !val.startsWith("'")) {
               const hashIdx = val.indexOf(' #');
               if (hashIdx !== -1) {
                 val = val.slice(0, hashIdx).trim();
               }
             }
-            // Strip surrounding quotes
             if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
               val = val.slice(1, -1);
             }
@@ -75,15 +75,17 @@ export function readDirectEnvFile(): Record<string, string> {
 }
 
 export function resolveAdminCredentials(): ResolvedAdminCredentials {
-  // 1. Check UI saved credentials in admin_credentials.json
+  // 1. Check UI saved credentials in admin_credentials.json (supports hashed or legacy format)
   if (fs.existsSync(ADMIN_CONFIG_FILE)) {
     try {
       const data = JSON.parse(fs.readFileSync(ADMIN_CONFIG_FILE, 'utf-8'));
-      if (data && data.username && data.password) {
+      if (data && data.username && (data.passwordHash || data.password)) {
         return {
           username: data.username.trim(),
           email: (data.email || 'admin@nexgencouncil.org').trim().toLowerCase(),
-          password: data.password.trim(),
+          password: data.password ? data.password.trim() : undefined,
+          passwordHash: data.passwordHash,
+          salt: data.salt,
           source: 'admin_config'
         };
       }
@@ -119,7 +121,10 @@ export function resolveAdminCredentials(): ResolvedAdminCredentials {
     };
   }
 
-  // 4. Default fallback
+  // 4. Default fallback (warn loudly in production)
+  if (process.env.NODE_ENV === 'production') {
+    console.warn('[SECURITY WARNING] ADMIN_USERNAME / ADMIN_PASSWORD not set in .env — using fallback credentials. Set strong credentials in .env immediately!');
+  }
   return {
     username: 'admin',
     email: 'admin@nexgencouncil.org',
@@ -129,7 +134,7 @@ export function resolveAdminCredentials(): ResolvedAdminCredentials {
 }
 
 export interface DatabaseSchema {
-  users: (User & { passwordHash: string; salt: string })[];
+  users: (User & { passwordHash: string; salt: string; tokenVersion?: number })[];
   applications: VolunteerApplication[];
   volunteers: Volunteer[];
   programs: Program[];
@@ -144,17 +149,32 @@ export interface DatabaseSchema {
   meetings?: Meeting[];
   meetingParticipants?: MeetingParticipant[];
   meetingMessages?: MeetingMessage[];
+  minValidTokenIssuedAt?: number;
 }
 
+const PBKDF2_ITERATIONS_V2 = 120000;
+const PBKDF2_ITERATIONS_LEGACY = 1000;
+
 function hashPassword(password: string, salt?: string): { hash: string; salt: string } {
-  const s = salt || crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, s, 1000, 64, 'sha512').toString('hex');
-  return { hash, salt: s };
+  const s = salt || crypto.randomBytes(32).toString('hex');
+  const derived = crypto.pbkdf2Sync(password, s, PBKDF2_ITERATIONS_V2, 64, 'sha512').toString('hex');
+  return { hash: `v2$${derived}`, salt: s };
 }
 
 export function verifyPassword(password: string, hash: string, salt: string): boolean {
-  const computed = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
-  return computed === hash;
+  if (!password || !hash || !salt) return false;
+  try {
+    const isV2 = hash.startsWith('v2$');
+    const iterations = isV2 ? PBKDF2_ITERATIONS_V2 : PBKDF2_ITERATIONS_LEGACY;
+    const expectedHex = isV2 ? hash.slice(3) : hash;
+    const computedHex = crypto.pbkdf2Sync(password, salt, iterations, 64, 'sha512').toString('hex');
+    const a = Buffer.from(computedHex, 'hex');
+    const b = Buffer.from(expectedHex, 'hex');
+    if (a.length !== b.length || a.length === 0) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
 }
 
 const defaultSettings: WebsiteSettings = {
@@ -226,9 +246,9 @@ function getSeedData(): DatabaseSchema {
   const adminEmail = adminCreds.email;
   const adminPassword = adminCreds.password || 'admin123';
 
-  const superAdmin = hashPassword(adminPassword);
-  const volunteerMgr = hashPassword('volunteer123');
-  const contentMgr = hashPassword('editor123');
+  const superAdmin = adminCreds.passwordHash && adminCreds.salt
+    ? { hash: adminCreds.passwordHash, salt: adminCreds.salt }
+    : hashPassword(adminPassword);
 
   return {
     users: [
@@ -238,32 +258,11 @@ function getSeedData(): DatabaseSchema {
         name: 'Executive Director (Super Admin)',
         email: adminEmail,
         role: 'SUPER_ADMIN',
-        avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
+        avatar: '/logo.png',
         createdAt: '2025-01-10T10:00:00.000Z',
         passwordHash: superAdmin.hash,
-        salt: superAdmin.salt
-      },
-      {
-        id: 'usr_vol_2',
-        username: 'fatima.volunteer',
-        name: 'Fatima Zahra',
-        email: 'fatima.z@nexgencouncil.org',
-        role: 'VOLUNTEER_MANAGER',
-        avatar: 'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=150&auto=format&fit=crop&q=80',
-        createdAt: '2025-02-14T09:30:00.000Z',
-        passwordHash: volunteerMgr.hash,
-        salt: volunteerMgr.salt
-      },
-      {
-        id: 'usr_content_3',
-        username: 'sarah.content',
-        name: 'Sarah Jenkins',
-        email: 'sarah.j@nexgencouncil.org',
-        role: 'CONTENT_MANAGER',
-        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-        createdAt: '2025-03-01T11:00:00.000Z',
-        passwordHash: contentMgr.hash,
-        salt: contentMgr.salt
+        salt: superAdmin.salt,
+        tokenVersion: 1
       }
     ],
     applications: [],
@@ -616,21 +615,28 @@ class Database {
     const creds = resolveAdminCredentials();
     const adminUsername = creds.username;
     const adminEmail = creds.email;
-    const adminPassword = creds.password || 'admin123';
 
-    // Find any existing super admin or user with username "admin" or id usr_super_1
     let superAdmin = this.data.users.find(
       u => u.role === 'SUPER_ADMIN' || u.id === 'usr_super_1' || u.username.toLowerCase() === adminUsername.toLowerCase()
     );
 
-    const { hash, salt } = hashPassword(adminPassword);
+    const { hash, salt } = creds.passwordHash && creds.salt
+      ? { hash: creds.passwordHash, salt: creds.salt }
+      : hashPassword(creds.password || 'admin123');
 
     if (superAdmin) {
+      const existingMatches = creds.password
+        ? verifyPassword(creds.password, superAdmin.passwordHash, superAdmin.salt)
+        : (superAdmin.passwordHash === hash && superAdmin.salt === salt);
+
       superAdmin.username = adminUsername;
       superAdmin.email = adminEmail;
       superAdmin.role = 'SUPER_ADMIN';
-      superAdmin.passwordHash = hash;
-      superAdmin.salt = salt;
+      if (!existingMatches) {
+        superAdmin.passwordHash = hash;
+        superAdmin.salt = salt;
+      }
+      if (!superAdmin.tokenVersion) superAdmin.tokenVersion = 1;
     } else {
       superAdmin = {
         id: 'usr_super_1',
@@ -638,16 +644,16 @@ class Database {
         name: 'Executive Director (Super Admin)',
         email: adminEmail,
         role: 'SUPER_ADMIN',
-        avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
+        avatar: '/logo.png',
         createdAt: new Date().toISOString(),
         passwordHash: hash,
-        salt
+        salt,
+        tokenVersion: 1
       };
       this.data.users.unshift(superAdmin);
     }
     this.save();
     mongoUpsert('users', superAdmin.id, superAdmin).catch(() => {});
-    console.log(`[Database] Super Admin credentials active (source: ${creds.source}): user="${adminUsername}", email="${adminEmail}"`);
     return superAdmin;
   }
 
@@ -708,16 +714,33 @@ class Database {
     return safeUser;
   }
 
+  getUserTokenVersion(userId: string): number {
+    const user = this.data.users.find(u => u.id === userId);
+    return user?.tokenVersion || 1;
+  }
+
+  getMinValidTokenIssuedAt(): number {
+    return this.data.minValidTokenIssuedAt || 0;
+  }
+
+  revokeAllSessions() {
+    this.data.minValidTokenIssuedAt = Date.now();
+    this.data.users.forEach(u => {
+      u.tokenVersion = (u.tokenVersion || 1) + 1;
+    });
+    this.save();
+    return this.data.minValidTokenIssuedAt;
+  }
+
   authenticate(usernameOrEmail: string, passwordPlain: string) {
     const cleanUser = (usernameOrEmail || '').trim();
     const cleanPass = (passwordPlain || '').trim();
     if (!cleanUser || !cleanPass) return null;
 
-    // Dynamically re-sync with latest .env on disk or config
+    // Sync Super Admin safely if configured
     const superAdmin = this.syncSuperAdminFromEnv();
     const creds = resolveAdminCredentials();
 
-    // Check if logging in with Super Admin credentials
     const isSuperAdminTarget = (
       cleanUser.toLowerCase() === superAdmin.username.toLowerCase() ||
       cleanUser.toLowerCase() === superAdmin.email.toLowerCase() ||
@@ -726,19 +749,27 @@ class Database {
     );
 
     if (isSuperAdminTarget) {
-      // 1. Direct plaintext match with resolved password
-      if (creds.password && cleanPass === creds.password) {
-        const { passwordHash: _, salt: __, ...safeUser } = superAdmin;
-        return safeUser;
+      let valid = verifyPassword(cleanPass, superAdmin.passwordHash, superAdmin.salt);
+      if (!valid && creds.password) {
+        const a = Buffer.from(cleanPass, 'utf8');
+        const b = Buffer.from(creds.password, 'utf8');
+        if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+          valid = true;
+        }
       }
-      // 2. PBKDF2 hash verification
-      if (verifyPassword(cleanPass, superAdmin.passwordHash, superAdmin.salt)) {
+      if (valid) {
+        if (!superAdmin.passwordHash.startsWith('v2$')) {
+          const upgraded = hashPassword(cleanPass);
+          superAdmin.passwordHash = upgraded.hash;
+          superAdmin.salt = upgraded.salt;
+          this.save();
+          mongoUpsert('users', superAdmin.id, superAdmin).catch(() => {});
+        }
         const { passwordHash: _, salt: __, ...safeUser } = superAdmin;
         return safeUser;
       }
     }
 
-    // Otherwise check among all registered users
     const user = this.data.users.find(
       u => u.username.toLowerCase() === cleanUser.toLowerCase() ||
            u.email.toLowerCase() === cleanUser.toLowerCase()
@@ -746,8 +777,24 @@ class Database {
     if (!user) return null;
     const isValid = verifyPassword(cleanPass, user.passwordHash, user.salt);
     if (!isValid) return null;
+
+    // Seamless upgrade of legacy 1k-iter PBKDF2 hashes to 120k-iter v2$ hashes on login
+    if (!user.passwordHash.startsWith('v2$')) {
+      const upgraded = hashPassword(cleanPass);
+      user.passwordHash = upgraded.hash;
+      user.salt = upgraded.salt;
+      this.save();
+      mongoUpsert('users', user.id, user).catch(() => {});
+    }
+
     const { passwordHash, salt, ...safeUser } = user;
     return safeUser;
+  }
+
+  verifyUserPassword(userId: string, passwordPlain: string): boolean {
+    const user = this.data.users.find(u => u.id === userId);
+    if (!user) return false;
+    return verifyPassword(passwordPlain, user.passwordHash, user.salt);
   }
 
   updateSuperAdminCredentials(newUsername: string, newPassword: string, newEmail?: string) {
@@ -756,15 +803,26 @@ class Database {
     if (!username || !password) {
       throw new Error('Admin username and password cannot be empty.');
     }
+    if (password.length < 8) {
+      throw new Error('Super Admin password must be at least 8 characters.');
+    }
     const email = (newEmail || 'admin@nexgencouncil.org').trim().toLowerCase();
 
     if (!fs.existsSync(PERSISTENCE_DIR)) {
       fs.mkdirSync(PERSISTENCE_DIR, { recursive: true });
     }
+    const hashed = hashPassword(password);
+    // Store salted PBKDF2 hash in admin_credentials.json (never plaintext password)
     fs.writeFileSync(
       ADMIN_CONFIG_FILE,
-      JSON.stringify({ username, password, email, updatedAt: new Date().toISOString() }, null, 2),
-      'utf-8'
+      JSON.stringify({
+        username,
+        email,
+        passwordHash: hashed.hash,
+        salt: hashed.salt,
+        updatedAt: new Date().toISOString()
+      }, null, 2),
+      { encoding: 'utf-8', mode: 0o600 }
     );
 
     // Also synchronize into .env file on disk if exists
@@ -794,22 +852,35 @@ class Database {
     }
 
     const updated = this.syncSuperAdminFromEnv();
+    updated.tokenVersion = (updated.tokenVersion || 1) + 1;
+    this.save();
     const { passwordHash: _, salt: __, ...safeAdmin } = updated;
     return safeAdmin;
   }
 
   createUser(userData: { username: string; name: string; email: string; role: any; password: string }) {
+    const cleanUsername = userData.username.trim().toLowerCase();
+    const cleanEmail = userData.email.trim().toLowerCase();
+
+    const duplicate = this.data.users.find(
+      u => u.username.toLowerCase() === cleanUsername || u.email.toLowerCase() === cleanEmail
+    );
+    if (duplicate) {
+      throw new Error('A staff account with that username or email already exists.');
+    }
+
     const { hash, salt } = hashPassword(userData.password);
     const newUser: DatabaseSchema['users'][0] = {
       id: `usr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      username: userData.username,
-      name: userData.name,
-      email: userData.email,
+      username: cleanUsername,
+      name: userData.name.trim(),
+      email: cleanEmail,
       role: userData.role,
-      avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(userData.name)}`,
+      avatar: '/logo.png',
       createdAt: new Date().toISOString(),
       passwordHash: hash,
-      salt
+      salt,
+      tokenVersion: 1
     };
     this.data.users.push(newUser);
     this.save();
@@ -819,31 +890,56 @@ class Database {
   }
 
   deleteUser(id: string) {
+    const target = this.data.users.find(u => u.id === id);
+    if (!target) return false;
+    if (target.role === 'SUPER_ADMIN') {
+      const superAdmins = this.data.users.filter(u => u.role === 'SUPER_ADMIN');
+      if (superAdmins.length <= 1) {
+        throw new Error('Cannot delete the last remaining Super Admin account.');
+      }
+    }
     this.data.users = this.data.users.filter(u => u.id !== id);
     this.save();
     mongoDelete('users', id).catch(() => {});
+    return true;
   }
 
   updateUser(id: string, updates: { username?: string; name?: string; email?: string; role?: any; password?: string }) {
     const user = this.data.users.find(u => u.id === id);
     if (!user) return null;
 
+    if (updates.email && updates.email.trim()) {
+      const nextEmail = updates.email.trim().toLowerCase();
+      if (this.data.users.some(u => u.id !== id && u.email.toLowerCase() === nextEmail)) {
+        throw new Error('Email is already assigned to another staff account.');
+      }
+      user.email = nextEmail;
+    }
+    if (updates.username && updates.username.trim()) {
+      const nextUsername = updates.username.trim().toLowerCase();
+      if (this.data.users.some(u => u.id !== id && u.username.toLowerCase() === nextUsername)) {
+        throw new Error('Username is already taken.');
+      }
+      user.username = nextUsername;
+    }
     if (updates.name && updates.name.trim()) {
       user.name = updates.name.trim();
     }
-    if (updates.email && updates.email.trim()) {
-      user.email = updates.email.trim().toLowerCase();
-    }
-    if (updates.username && updates.username.trim()) {
-      user.username = updates.username.trim().toLowerCase();
-    }
-    if (updates.role) {
+    if (updates.role && updates.role !== user.role) {
+      if (user.role === 'SUPER_ADMIN' && updates.role !== 'SUPER_ADMIN') {
+        const superAdmins = this.data.users.filter(u => u.role === 'SUPER_ADMIN');
+        if (superAdmins.length <= 1) {
+          throw new Error('Cannot demote the last remaining Super Admin account.');
+        }
+      }
       user.role = updates.role;
+      user.tokenVersion = (user.tokenVersion || 1) + 1; // Immediately invalidate old role tokens
     }
     if (updates.password && updates.password.trim()) {
       const { hash, salt } = hashPassword(updates.password.trim());
       user.passwordHash = hash;
       user.salt = salt;
+      user.tokenVersion = (user.tokenVersion || 1) + 1; // Immediately invalidate existing sessions on password reset
     }
 
     this.save();

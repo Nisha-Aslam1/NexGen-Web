@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
-import { AppProvider, useApp } from './context/AppContext.tsx';
+import { AppProvider, useApp, canAccessAdminTab } from './context/AppContext.tsx';
 import { ToastContainer } from './components/ToastContainer.tsx';
+import { ShieldAlert } from 'lucide-react';
 import { Navbar } from './components/Navbar.tsx';
 import { Footer } from './components/Footer.tsx';
 
@@ -40,7 +41,7 @@ import { MeetingRoomWrapper } from './components/meetings/MeetingRoomWrapper.tsx
 import { initAnalyticsHeartbeat, trackPageView } from './lib/analytics.ts';
 
 const AppContent: React.FC = () => {
-  const { activePage, setActivePage, currentUser, adminTab } = useApp();
+  const { activePage, setActivePage, currentUser, adminTab, setAdminTab } = useApp();
 
   // Initialize analytics heartbeat
   useEffect(() => {
@@ -89,24 +90,46 @@ const AppContent: React.FC = () => {
       );
     }
 
+    const hasTabAccess = canAccessAdminTab(adminTab, currentUser.role);
+
     return (
       <AdminLayout>
-        {adminTab === 'dashboard' && <AdminDashboard />}
-        {adminTab === 'meetings' && <AdminMeetings />}
-        {adminTab === 'analytics' && <AdminAnalytics />}
-        {adminTab === 'applications' && <AdminApplications />}
-        {adminTab === 'volunteers' && <AdminVolunteers />}
-        {adminTab === 'programs' && <AdminPrograms />}
-        {adminTab === 'events' && <AdminEvents />}
-        {adminTab === 'news' && <AdminNews />}
-        {adminTab === 'team' && <AdminTeam />}
-        {adminTab === 'gallery' && <AdminGallery />}
-        {adminTab === 'contacts' && <AdminContacts />}
-        {adminTab === 'email' && <AdminEmailComposer />}
-        {adminTab === 'settings' && <AdminSettings />}
-        {adminTab === 'users' && <AdminUsers />}
-        {adminTab === 'database' && <AdminDatabase />}
-        {adminTab === 'activity' && <AdminActivityLogs />}
+        {!hasTabAccess ? (
+          <div className="bg-white rounded-3xl border border-rose-200 p-8 sm:p-12 text-center max-w-lg mx-auto my-8 shadow-sm space-y-4">
+            <div className="w-14 h-14 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto border border-rose-100">
+              <ShieldAlert className="w-7 h-7" />
+            </div>
+            <h2 className="text-xl font-serif font-bold text-slate-900">Access Restricted</h2>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Your current role (<span className="font-bold text-slate-800">{currentUser.role}</span>) does not have permission to open this administrative module.
+            </p>
+            <button
+              onClick={() => setAdminTab('dashboard')}
+              className="px-5 py-2.5 bg-slate-950 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              Return to Dashboard
+            </button>
+          </div>
+        ) : (
+          <>
+            {adminTab === 'dashboard' && <AdminDashboard />}
+            {adminTab === 'meetings' && <AdminMeetings />}
+            {adminTab === 'analytics' && <AdminAnalytics />}
+            {adminTab === 'applications' && <AdminApplications />}
+            {adminTab === 'volunteers' && <AdminVolunteers />}
+            {adminTab === 'programs' && <AdminPrograms />}
+            {adminTab === 'events' && <AdminEvents />}
+            {adminTab === 'news' && <AdminNews />}
+            {adminTab === 'team' && <AdminTeam />}
+            {adminTab === 'gallery' && <AdminGallery />}
+            {adminTab === 'contacts' && <AdminContacts />}
+            {adminTab === 'email' && <AdminEmailComposer />}
+            {adminTab === 'settings' && <AdminSettings />}
+            {adminTab === 'users' && <AdminUsers />}
+            {adminTab === 'database' && <AdminDatabase />}
+            {adminTab === 'activity' && <AdminActivityLogs />}
+          </>
+        )}
       </AdminLayout>
     );
   }
