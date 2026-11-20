@@ -944,7 +944,7 @@ class Database {
     return this.toSafeUser(updated);
   }
 
-  createUser(userData: { username: string; name: string; email: string; role: any; password: string }) {
+  createUser(userData: { username: string; name: string; email: string; role: any; password: string; avatar?: string }) {
     const cleanUsername = userData.username.trim().toLowerCase();
     const cleanEmail = userData.email.trim().toLowerCase();
 
@@ -962,7 +962,7 @@ class Database {
       name: userData.name.trim(),
       email: cleanEmail,
       role: userData.role,
-      avatar: '/logo.png',
+      avatar: userData.avatar?.trim() || '/logo.png',
       createdAt: new Date().toISOString(),
       passwordHash: hash,
       salt,
@@ -991,7 +991,7 @@ class Database {
     return true;
   }
 
-  updateUser(id: string, updates: { username?: string; name?: string; email?: string; role?: any; password?: string }) {
+  updateUser(id: string, updates: { username?: string; name?: string; email?: string; role?: any; password?: string; avatar?: string }) {
     const user = this.data.users.find(u => u.id === id);
     if (!user) return null;
 
@@ -1011,6 +1011,9 @@ class Database {
     }
     if (updates.name && updates.name.trim()) {
       user.name = updates.name.trim();
+    }
+    if (typeof updates.avatar === 'string' && updates.avatar.trim()) {
+      user.avatar = updates.avatar.trim();
     }
     if (updates.role && updates.role !== user.role) {
       if (user.role === 'SUPER_ADMIN' && updates.role !== 'SUPER_ADMIN') {

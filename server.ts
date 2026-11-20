@@ -1671,7 +1671,7 @@ app.get('/api/users', requireAuth(['SUPER_ADMIN']), (req, res) => {
 });
 
 app.post('/api/users', requireAuth(['SUPER_ADMIN']), (req, res) => {
-  const { username, name, email, role, password } = req.body || {};
+  const { username, name, email, role, password, avatar } = req.body || {};
   if (!username || !name || !email || !password || !role) {
     return res.status(400).json({ error: 'All fields are required.' });
   }
@@ -1681,9 +1681,13 @@ app.post('/api/users', requireAuth(['SUPER_ADMIN']), (req, res) => {
   if (String(password).trim().length < 8) {
     return res.status(400).json({ error: 'Password must be at least 8 characters long for security.' });
   }
+  const cleanAvatar = typeof avatar === 'string' ? avatar.trim() : undefined;
+  if (cleanAvatar && !/^(\/|https?:\/\/)/i.test(cleanAvatar)) {
+    return res.status(400).json({ error: 'Invalid avatar URL. Use a relative /uploads/ path or https:// URL.' });
+  }
 
   try {
-    const user = db.createUser({ username, name, email, role, password: String(password).trim() });
+    const user = db.createUser({ username, name, email, role, password: String(password).trim(), avatar: cleanAvatar });
     const currentUser = (req as any).user;
     db.logActivity({
       userId: currentUser.userId,
@@ -1703,16 +1707,20 @@ app.post('/api/users', requireAuth(['SUPER_ADMIN']), (req, res) => {
 
 app.put('/api/users/:id', requireAuth(['SUPER_ADMIN']), (req, res) => {
   const { id } = req.params;
-  const { username, name, email, role, password } = req.body || {};
+  const { username, name, email, role, password, avatar } = req.body || {};
   if (role && !ALLOWED_ROLES.includes(String(role))) {
     return res.status(400).json({ error: 'Invalid role specified.' });
   }
   if (password && String(password).trim().length < 8) {
     return res.status(400).json({ error: 'Reset password must be at least 8 characters long.' });
   }
+  const cleanAvatar = typeof avatar === 'string' ? avatar.trim() : undefined;
+  if (cleanAvatar && !/^(\/|https?:\/\/)/i.test(cleanAvatar)) {
+    return res.status(400).json({ error: 'Invalid avatar URL. Use a relative /uploads/ path or https:// URL.' });
+  }
 
   try {
-    const updated = db.updateUser(id, { username, name, email, role, password });
+    const updated = db.updateUser(id, { username, name, email, role, password, avatar: cleanAvatar });
     if (!updated) {
       return res.status(404).json({ error: 'Staff account not found' });
     }

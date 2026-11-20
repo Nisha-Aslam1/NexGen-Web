@@ -15,7 +15,8 @@ import {
   Shield,
   LogOut,
   Eye,
-  EyeOff
+  EyeOff,
+  Upload
 } from 'lucide-react';
 import { AdminUser, Role } from '../../types.ts';
 import { TwoFactorSettingsCard } from './TwoFactorSettingsCard.tsx';
@@ -157,7 +158,7 @@ function evaluatePasswordStrength(pwd: string): {
 }
 
 export const AdminUsers: React.FC = () => {
-  const { currentUser, addToast, logout } = useApp();
+  const { currentUser, addToast, logout, refreshData } = useApp();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [securityStatus, setSecurityStatus] = useState<SecurityStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -169,7 +170,8 @@ export const AdminUsers: React.FC = () => {
     name: '',
     email: '',
     password: '',
-    role: 'VOLUNTEER_MANAGER' as Role
+    role: 'VOLUNTEER_MANAGER' as Role,
+    avatar: '/logo.png'
   });
   const [showCreatePwd, setShowCreatePwd] = useState(false);
 
@@ -181,9 +183,11 @@ export const AdminUsers: React.FC = () => {
     name: string;
     email: string;
     role: Role;
+    avatar: string;
     password?: string;
   } | null>(null);
   const [showEditPwd, setShowEditPwd] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
   // Change own password modal
   const [isOwnPwdOpen, setIsOwnPwdOpen] = useState(false);
@@ -249,7 +253,7 @@ export const AdminUsers: React.FC = () => {
 
       addToast(`Staff account for ${data.name} created successfully!`, 'success');
       setIsCreateOpen(false);
-      setNewUser({ username: '', name: '', email: '', password: '', role: 'VOLUNTEER_MANAGER' });
+      setNewUser({ username: '', name: '', email: '', password: '', role: 'VOLUNTEER_MANAGER', avatar: '/logo.png' });
       await fetchSecurityAndUsers();
     } catch (err: any) {
       addToast(err.message || 'Error creating user', 'error');
@@ -265,10 +269,45 @@ export const AdminUsers: React.FC = () => {
       name: user.name,
       email: user.email,
       role: user.role,
+      avatar: user.avatar || '/logo.png',
       password: ''
     });
     setShowEditPwd(false);
     setIsEditOpen(true);
+  };
+
+  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !editingUser) return;
+    if (file.size > 4 * 1024 * 1024) {
+      addToast('Avatar image must be smaller than 4MB.', 'error');
+      return;
+    }
+    setUploadingAvatar(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Failed to read image file'));
+        reader.readAsDataURL(file);
+      });
+      const res = await authFetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataUrl, filename: file.name })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.url) {
+        throw new Error(data.error || 'Avatar upload failed');
+      }
+      setEditingUser(prev => (prev ? { ...prev, avatar: data.url } : null));
+      addToast('Profile image uploaded! Click "Save & Update Permissions" to apply.', 'success');
+    } catch (err: any) {
+      addToast(err.message || 'Failed to upload avatar image', 'error');
+    } finally {
+      setUploadingAvatar(false);
+      e.target.value = '';
+    }
   };
 
   const handleUpdate = async (e: React.FormEvent) => {
@@ -289,6 +328,9 @@ export const AdminUsers: React.FC = () => {
         username: editingUser.username,
         role: editingUser.role
       };
+      if (editingUser.avatar?.trim()) {
+        payload.avatar = editingUser.avatar.trim();
+      }
       if (trimmedNewPwd) {
         payload.password = trimmedNewPwd;
       }
@@ -301,10 +343,14 @@ export const AdminUsers: React.FC = () => {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to update user');
 
-      addToast(`Permissions and role updated for ${data.name}!`, 'success');
+      const editedSelf = editingUser.id === currentUser?.id;
+      addToast(`Account updated for ${data.name}!`, 'success');
       setIsEditOpen(false);
       setEditingUser(null);
       await fetchSecurityAndUsers();
+      if (editedSelf) {
+        await refreshData();
+      }
     } catch (err: any) {
       addToast(err.message || 'Error updating staff account', 'error');
     } finally {
@@ -837,6 +883,40 @@ export const AdminUsers: React.FC = () => {
             </div>
 
             <form onSubmit={handleUpdate} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1.5">
+                  Profile Image / Avatar
+                </label>
+                <div className="flex items-center gap-3">
+                  <img
+                    src={editingUser.avatar || '/logo.png'}
+                    alt={editingUser.name}
+                    onError={e => { (e.currentTarget as HTMLImageElement).src = '/logo.png'; }}
+                    className="w-12 h-12 rounded-full object-cover border border-slate-200 bg-slate-50 shrink-0"
+                  />
+                  <div className="flex-1 space-y-1.5">
+                    <input
+                      type="text"
+                      value={editingUser.avatar}
+                      onChange={e => setEditingUser({ ...editingUser, avatar: e.target.value })}
+                      placeholder="https://nexgencouncil.bond/uploads/..."
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-900/20 text-slate-900 font-mono text-[11px]"
+                    />
+                    <label className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-[11px] cursor-pointer transition-colors">
+                      <Upload className="w-3 h-3" />
+                      <span>{uploadingAvatar ? 'Uploading...' : 'Upload New Photo'}</span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/gif"
+                        onChange={handleAvatarUpload}
+                        disabled={uploadingAvatar}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <label className="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">
                   Full Name
