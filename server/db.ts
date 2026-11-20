@@ -1031,6 +1031,32 @@ class Database {
 
     this.save();
     mongoUpsert('users', user.id, user).catch(() => {});
+
+    // Keep persistent admin_credentials.json in sync when Super Admin details are edited via Admin Panel
+    if (
+      (user.role === 'SUPER_ADMIN' || user.id === 'usr_super_1') &&
+      (updates.username || updates.email || updates.password)
+    ) {
+      try {
+        if (!fs.existsSync(PERSISTENCE_DIR)) {
+          fs.mkdirSync(PERSISTENCE_DIR, { recursive: true });
+        }
+        fs.writeFileSync(
+          ADMIN_CONFIG_FILE,
+          JSON.stringify({
+            username: user.username,
+            email: user.email,
+            passwordHash: user.passwordHash,
+            salt: user.salt,
+            updatedAt: new Date().toISOString()
+          }, null, 2),
+          { encoding: 'utf-8', mode: 0o600 }
+        );
+      } catch (err) {
+        console.warn('[Database] Could not sync admin_credentials.json:', err);
+      }
+    }
+
     return this.toSafeUser(user);
   }
 
