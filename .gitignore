@@ -11,3 +11,6 @@ uploads/
 public/uploads/
 *.db
 *.sqlite
+*.pk
+*.pem
+secrets/

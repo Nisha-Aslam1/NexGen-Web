@@ -285,7 +285,7 @@ export interface DashboardStats {
 }
 
 // ----------------------------------------------------
-// LIVEKIT VIDEO MEETINGS DATA MODELS
+// SELF-HOSTED JITSI VIDEO MEETINGS DATA MODELS
 // ----------------------------------------------------
 
 export type MeetingStatus = 'Scheduled' | 'Active' | 'Ended' | 'Cancelled';
@@ -310,6 +310,8 @@ export interface Meeting {
   hasPassword?: boolean;
   waitingRoomEnabled: boolean;
   screenShareEnabled: boolean;
+  startWithAudioMuted?: boolean;
+  startWithVideoMuted?: boolean;
   maxParticipants: number;
   isLocked: boolean;
   createdAt: string;

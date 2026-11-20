@@ -1507,7 +1507,7 @@ class Database {
   }
 
   // ----------------------------------------------------
-  // LIVEKIT MEETINGS ENGINE
+  // SELF-HOSTED JITSI MEETINGS ENGINE
   // ----------------------------------------------------
 
   getMeetings(statusFilter?: string, search?: string): Meeting[] {
@@ -1543,6 +1543,7 @@ class Database {
 
   createMeeting(meetingData: {
     title: string;
+    roomSlug?: string;
     description?: string;
     hostId: string;
     hostName: string;
@@ -1551,15 +1552,37 @@ class Database {
     password?: string;
     waitingRoomEnabled?: boolean;
     screenShareEnabled?: boolean;
+    startWithAudioMuted?: boolean;
+    startWithVideoMuted?: boolean;
     maxParticipants?: number;
     status?: Meeting['status'];
   }): Meeting {
     this.ensureMeetingArrays();
     const now = new Date().toISOString();
-    const randCodePart1 = Math.random().toString(36).substring(2, 6);
-    const randCodePart2 = Math.random().toString(36).substring(2, 6);
-    const meetingCode = `nex-${randCodePart1}-${randCodePart2}`;
-    const roomName = `room_${meetingCode}`;
+
+    const sanitizeSlug = (val: string) =>
+      val
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9-]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/(^-|-$)/g, '');
+
+    let baseSlug = meetingData.roomSlug ? sanitizeSlug(meetingData.roomSlug) : '';
+    if (!baseSlug) {
+      const titlePart = sanitizeSlug(meetingData.title).slice(0, 28);
+      const randSuffix = Math.random().toString(36).substring(2, 6);
+      baseSlug = titlePart ? `${titlePart}-${randSuffix}` : `nex-${Math.random().toString(36).substring(2, 6)}-${randSuffix}`;
+    }
+
+    let meetingCode = baseSlug;
+    let counter = 2;
+    while (this.data.meetings?.some(m => m.meetingCode.toLowerCase() === meetingCode.toLowerCase())) {
+      meetingCode = `${baseSlug}-${counter}`;
+      counter++;
+    }
+
+    const roomName = `nexgencouncil-${meetingCode}`;
 
     let passwordHash: string | undefined = undefined;
     let hasPassword = false;
@@ -1582,8 +1605,10 @@ class Database {
       status: meetingData.status || 'Scheduled',
       passwordHash,
       hasPassword,
-      waitingRoomEnabled: meetingData.waitingRoomEnabled !== undefined ? meetingData.waitingRoomEnabled : true,
+      waitingRoomEnabled: meetingData.waitingRoomEnabled !== undefined ? meetingData.waitingRoomEnabled : false,
       screenShareEnabled: meetingData.screenShareEnabled !== undefined ? meetingData.screenShareEnabled : true,
+      startWithAudioMuted: meetingData.startWithAudioMuted !== undefined ? meetingData.startWithAudioMuted : false,
+      startWithVideoMuted: meetingData.startWithVideoMuted !== undefined ? meetingData.startWithVideoMuted : false,
       maxParticipants: meetingData.maxParticipants && meetingData.maxParticipants > 0 ? meetingData.maxParticipants : 50,
       isLocked: false,
       createdAt: now,

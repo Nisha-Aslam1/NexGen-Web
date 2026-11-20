@@ -1,10 +1,13 @@
 import express, { Request, Response } from 'express';
-import fs from 'fs';
-import jwt from 'jsonwebtoken';
 import { db } from './db.ts';
 import { Meeting } from '../src/types.ts';
 
 export const meetingsRouter = express.Router();
+
+// Self-hosted Jitsi Meet server domain
+const JITSI_DOMAIN = (process.env.JITSI_DOMAIN || 'meet.nexgencouncil.bond')
+  .replace(/^https?:\/\//, '')
+  .replace(/\/$/, '');
 
 // Helper to strip sensitive database fields before returning public meeting object
 function toPublicMeeting(m: Meeting) {
@@ -12,100 +15,18 @@ function toPublicMeeting(m: Meeting) {
   return rest;
 }
 
-// Helper: Securely load JaaS Private Key PEM
-function getJaasPrivateKey(): string | null {
-  if (process.env.JAAS_PRIVATE_KEY) {
-    return process.env.JAAS_PRIVATE_KEY.replace(/\\n/g, '\n');
-  }
-  const keyPath = process.env.JAAS_PRIVATE_KEY_PATH;
-  if (keyPath && fs.existsSync(keyPath)) {
-    try {
-      return fs.readFileSync(keyPath, 'utf8');
-    } catch (err) {
-      console.error('[JaaS] Failed to read private key file:', (err as Error).message);
-    }
-  }
-  return null;
-}
-
-// Helper: Generate Official 8x8 JaaS JWT Token (RS256)
-function generateJaasToken(params: {
-  meetingCode: string;
-  userId: string;
-  userName: string;
-  isModerator: boolean;
-  userEmail?: string;
-}): { token: string | null; appId: string; roomName: string; domain: string; error?: string } {
-  const appId = process.env.JAAS_APP_ID || '';
-  const apiKeyId = process.env.JAAS_API_KEY_ID || '';
-  const privateKey = getJaasPrivateKey();
-
-  // Full room name format for JaaS on 8x8.vc
-  const jaasRoomName = appId ? `${appId}/${params.meetingCode}` : params.meetingCode;
-
-  if (!appId || !apiKeyId || !privateKey) {
-    return {
-      token: null,
-      appId,
-      roomName: jaasRoomName,
-      domain: '8x8.vc',
-      error: 'JaaS credentials incomplete. Please configure JAAS_APP_ID, JAAS_API_KEY_ID, and JAAS_PRIVATE_KEY_PATH in .env.'
-    };
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  const exp = now + 2 * 3600; // Token valid for 2 hours
-
-  const payload = {
-    aud: 'jitsi',
-    iss: 'chat',
-    sub: appId,
-    room: '*',
-    exp,
-    nbf: now - 10,
-    context: {
-      user: {
-        id: params.userId,
-        name: params.userName,
-        email: params.userEmail || `${params.userId}@nexgencouncil.bond`,
-        avatar: '',
-        moderator: params.isModerator ? 'true' : 'false'
-      },
-      features: {
-        livestreaming: params.isModerator ? 'true' : 'false',
-        recording: params.isModerator ? 'true' : 'false',
-        transcription: 'true',
-        'outbound-call': 'false'
-      }
-    }
+// Helper to build clean Jitsi room configuration payload for a meeting
+function buildJitsiSessionConfig(meeting: Meeting) {
+  const roomSlug = meeting.meetingCode;
+  const jitsiRoomName = meeting.roomName || `nexgencouncil-${roomSlug}`;
+  return {
+    jitsiDomain: JITSI_DOMAIN,
+    jitsiRoomName,
+    startWithAudioMuted: Boolean(meeting.startWithAudioMuted),
+    startWithVideoMuted: Boolean(meeting.startWithVideoMuted),
+    waitingRoomEnabled: Boolean(meeting.waitingRoomEnabled),
+    screenShareEnabled: meeting.screenShareEnabled !== false
   };
-
-  try {
-    const token = jwt.sign(payload, privateKey, {
-      algorithm: 'RS256',
-      header: {
-        alg: 'RS256',
-        typ: 'JWT',
-        kid: apiKeyId
-      }
-    });
-
-    return {
-      token,
-      appId,
-      roomName: jaasRoomName,
-      domain: '8x8.vc'
-    };
-  } catch (err: any) {
-    console.error('[JaaS] JWT Signing Error:', err.message);
-    return {
-      token: null,
-      appId,
-      roomName: jaasRoomName,
-      domain: '8x8.vc',
-      error: `JWT Signing Failed: ${err.message}`
-    };
-  }
 }
 
 // 1. GET /api/meetings - Admin list all meetings
@@ -119,13 +40,14 @@ meetingsRouter.get('/meetings', (req: Request, res: Response) => {
   const search = typeof req.query.search === 'string' ? req.query.search : '';
 
   const meetings = db.getMeetings(status, search).map(toPublicMeeting);
-  
+
   const activeCount = meetings.filter(m => m.status === 'Active').length;
   const scheduledCount = meetings.filter(m => m.status === 'Scheduled').length;
   const completedCount = meetings.filter(m => m.status === 'Ended').length;
 
   res.json({
     meetings,
+    jitsiDomain: JITSI_DOMAIN,
     stats: {
       total: meetings.length,
       active: activeCount,
@@ -144,12 +66,16 @@ meetingsRouter.post('/meetings', (req: Request, res: Response) => {
 
   const {
     title,
+    roomSlug,
+    meetingCode,
     description,
     scheduledStart,
     scheduledEnd,
     password,
     waitingRoomEnabled,
     screenShareEnabled,
+    startWithAudioMuted,
+    startWithVideoMuted,
     maxParticipants
   } = req.body;
 
@@ -159,14 +85,17 @@ meetingsRouter.post('/meetings', (req: Request, res: Response) => {
 
   const meeting = db.createMeeting({
     title,
+    roomSlug: roomSlug || meetingCode,
     description,
     hostId: user.userId,
     hostName: user.name || user.username,
     scheduledStart,
     scheduledEnd,
     password,
-    waitingRoomEnabled,
-    screenShareEnabled,
+    waitingRoomEnabled: waitingRoomEnabled !== undefined ? Boolean(waitingRoomEnabled) : false,
+    screenShareEnabled: screenShareEnabled !== undefined ? Boolean(screenShareEnabled) : true,
+    startWithAudioMuted: Boolean(startWithAudioMuted),
+    startWithVideoMuted: Boolean(startWithVideoMuted),
     maxParticipants: maxParticipants ? parseInt(maxParticipants, 10) : 50,
     status: 'Scheduled'
   });
@@ -174,7 +103,7 @@ meetingsRouter.post('/meetings', (req: Request, res: Response) => {
   res.status(201).json({
     message: 'Meeting created successfully',
     meeting: toPublicMeeting(meeting),
-    joinUrl: `/room/${meeting.meetingCode}`
+    joinUrl: `/meeting/${meeting.meetingCode}`
   });
 });
 
@@ -184,11 +113,12 @@ meetingsRouter.get('/meetings/:code', (req: Request, res: Response) => {
   const meeting = db.getMeetingByCode(code);
 
   if (!meeting) {
-    return res.status(404).json({ error: 'Meeting not found. Please verify meeting code.' });
+    return res.status(404).json({ error: 'Meeting not found. Please verify room link or slug.' });
   }
 
   res.json({
-    meeting: toPublicMeeting(meeting)
+    meeting: toPublicMeeting(meeting),
+    jitsiDomain: JITSI_DOMAIN
   });
 });
 
@@ -246,31 +176,37 @@ meetingsRouter.delete('/meetings/:id', (req: Request, res: Response) => {
   });
 });
 
-// 6. POST /api/meetings/:code/join - Join meeting request & JaaS Token generation
+// 6. POST /api/meetings/:code/join - Join meeting verification & Jitsi room config
 meetingsRouter.post('/meetings/:code/join', (req: Request, res: Response) => {
   const code = req.params.code;
   const meeting = db.getMeetingByCode(code);
 
   if (!meeting) {
-    return res.status(404).json({ error: 'Meeting not found. Invalid meeting code.' });
+    return res.status(404).json({ error: 'Meeting not found. Invalid room link or slug.' });
   }
 
   if (meeting.status === 'Ended' || meeting.status === 'Cancelled') {
     return res.status(410).json({ error: 'This meeting has ended or was cancelled.', meeting: toPublicMeeting(meeting) });
   }
 
-  const { password, displayName, participantId } = req.body;
+  const user = (req as any).user;
+  const dbUser = user?.userId ? db.getUserById(user.userId) : null;
+  const isHost = !!user && (
+    user.userId === meeting.hostId ||
+    user.role === 'SUPER_ADMIN' ||
+    user.role === 'ADMIN' ||
+    user.role === 'CONTENT_MANAGER' ||
+    user.role === 'VOLUNTEER_MANAGER'
+  );
 
-  // Verify Password if required
-  if (meeting.hasPassword) {
-    if (!password || !db.verifyMeetingPassword(meeting, password)) {
-      return res.status(401).json({ error: 'Invalid meeting password', requiresPassword: true });
+  const { password, displayName, email, participantId } = req.body || {};
+
+  // Verify Password / PIN for guests if required (authenticated hosts/admins bypass)
+  if (meeting.hasPassword && !isHost) {
+    if (!password || !db.verifyMeetingPassword(meeting, String(password))) {
+      return res.status(401).json({ error: 'Incorrect room password / PIN.', requiresPassword: true });
     }
   }
-
-  // Authenticated user check for Host privilege
-  const user = (req as any).user;
-  const isHost = !!user && (user.userId === meeting.hostId || user.role === 'SUPER_ADMIN' || user.role === 'ADMIN');
 
   // Lock Check
   if (meeting.isLocked && !isHost) {
@@ -283,7 +219,8 @@ meetingsRouter.post('/meetings/:code/join', (req: Request, res: Response) => {
     return res.status(403).json({ error: `Meeting has reached maximum participant limit (${meeting.maxParticipants}).` });
   }
 
-  const finalDisplayName = (user?.name || displayName || 'Guest Participant').trim();
+  const finalDisplayName = (dbUser?.name || user?.name || displayName || 'Guest Participant').trim();
+  const finalEmail = (dbUser?.email || email || '').trim();
   const identity = user?.userId || participantId || `guest_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 
   // Automatically mark meeting as Active if starting
@@ -291,10 +228,12 @@ meetingsRouter.post('/meetings/:code/join', (req: Request, res: Response) => {
     db.updateMeeting(meeting.id, { status: 'Active', actualStart: new Date().toISOString() });
   }
 
-  // Waiting Room Logic
+  // Waiting Room / Lobby Logic for unauthenticated guests if enabled
   if (meeting.waitingRoomEnabled && !isHost) {
-    const existingP = db.getMeetingParticipants(meeting.id).find(p => p.identity === identity || (user?.userId && p.userId === user.userId));
-    
+    const existingP = db.getMeetingParticipants(meeting.id).find(
+      p => p.identity === identity || (user?.userId && p.userId === user.userId)
+    );
+
     if (!existingP || existingP.admissionStatus === 'waiting') {
       const pRecord = db.upsertMeetingParticipant(meeting.id, {
         userId: user?.userId,
@@ -310,16 +249,17 @@ meetingsRouter.post('/meetings/:code/join', (req: Request, res: Response) => {
         participantId: pRecord.id,
         identity,
         displayName: finalDisplayName,
+        email: finalEmail,
         meeting: toPublicMeeting(meeting)
       });
     }
 
     if (existingP.admissionStatus === 'rejected') {
-      return res.status(403).json({ error: 'Your admission request was rejected by the meeting host.' });
+      return res.status(403).json({ error: 'Your admission request was declined by the meeting host.' });
     }
   }
 
-  // Admitted / Host / No Waiting Room -> Upsert Admitted Record
+  // Admitted / Host / Direct Entry -> Upsert Admitted Record
   const pRecord = db.upsertMeetingParticipant(meeting.id, {
     userId: user?.userId,
     displayName: finalDisplayName,
@@ -329,14 +269,7 @@ meetingsRouter.post('/meetings/:code/join', (req: Request, res: Response) => {
     identity
   });
 
-  // Generate JaaS JWT for admitted user
-  const jaasRes = generateJaasToken({
-    meetingCode: meeting.meetingCode,
-    userId: identity,
-    userName: finalDisplayName,
-    isModerator: isHost,
-    userEmail: user?.email
-  });
+  const jitsiConfig = buildJitsiSessionConfig(meeting);
 
   res.json({
     meeting: toPublicMeeting(meeting),
@@ -344,11 +277,8 @@ meetingsRouter.post('/meetings/:code/join', (req: Request, res: Response) => {
     participantId: pRecord.id,
     identity,
     displayName: finalDisplayName,
-    jaasToken: jaasRes.token,
-    jaasAppId: jaasRes.appId,
-    jaasRoomName: jaasRes.roomName,
-    jaasDomain: jaasRes.domain,
-    jaasError: jaasRes.error
+    email: finalEmail,
+    ...jitsiConfig
   });
 });
 
@@ -460,30 +390,15 @@ meetingsRouter.get('/meetings/:id/admission-status', (req: Request, res: Respons
     return res.json({ admissionStatus: 'waiting' });
   }
 
-  // Issue JaaS JWT ONLY if participant status is confirmed 'admitted'
   if (p.admissionStatus === 'admitted') {
-    const user = (req as any).user;
-    const isHost = !!user && (user.userId === meeting.hostId || user.role === 'SUPER_ADMIN' || user.role === 'ADMIN');
-
-    const jaasRes = generateJaasToken({
-      meetingCode: meeting.meetingCode,
-      userId: p.identity || p.id,
-      userName: p.displayName,
-      isModerator: isHost,
-      userEmail: user?.email
-    });
-
+    const jitsiConfig = buildJitsiSessionConfig(meeting);
     return res.json({
       admissionStatus: 'admitted',
       meeting: toPublicMeeting(meeting),
       role: p.role,
       displayName: p.displayName,
       identity: p.identity || p.id,
-      jaasToken: jaasRes.token,
-      jaasAppId: jaasRes.appId,
-      jaasRoomName: jaasRes.roomName,
-      jaasDomain: jaasRes.domain,
-      jaasError: jaasRes.error
+      ...jitsiConfig
     });
   }
 

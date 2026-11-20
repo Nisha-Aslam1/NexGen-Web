@@ -20,23 +20,32 @@ interface MeetingJoinPageProps {
     role: string;
     identity: string;
     displayName: string;
-    jaasToken?: string | null;
-    jaasAppId?: string;
-    jaasRoomName?: string;
-    jaasDomain?: string;
-    jaasError?: string;
+    email?: string;
+    jitsiDomain?: string;
+    jitsiRoomName?: string;
+    startWithAudioMuted?: boolean;
+    startWithVideoMuted?: boolean;
   }) => void;
-  onWaiting: (data: { meeting: any; participantId: string; identity: string; displayName: string }) => void;
+  onWaiting: (data: {
+    meeting: any;
+    participantId: string;
+    identity: string;
+    displayName: string;
+    email?: string;
+    startWithAudioMuted?: boolean;
+    startWithVideoMuted?: boolean;
+  }) => void;
 }
 
 export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, onAdmitted, onWaiting }) => {
-  const { currentUser, addToast } = useApp();
+  const { currentUser, addToast, setActivePage } = useApp();
 
   const [meeting, setMeeting] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [displayName, setDisplayName] = useState(currentUser?.name || '');
+  const [guestEmail, setGuestEmail] = useState(currentUser?.email || '');
   const [password, setPassword] = useState('');
   const [isJoining, setIsJoining] = useState(false);
 
@@ -51,17 +60,18 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
 
-  // Fetch meeting metadata
   useEffect(() => {
     const fetchInfo = async () => {
       setLoading(true);
       try {
-        const res = await fetch(`/api/meetings/${meetingCode}`);
+        const res = await fetch(`/api/meetings/${encodeURIComponent(meetingCode)}`);
         const data = await res.json();
         if (!res.ok) {
           throw new Error(data.error || 'Meeting not found');
         }
         setMeeting(data.meeting);
+        if (data.meeting?.startWithAudioMuted) setMicEnabled(false);
+        if (data.meeting?.startWithVideoMuted) setCamEnabled(false);
       } catch (err: any) {
         setError(err.message || 'Could not load meeting');
       } finally {
@@ -72,7 +82,6 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
     fetchInfo();
   }, [meetingCode]);
 
-  // Request media devices preview
   const startPreview = async () => {
     try {
       if (mediaStreamRef.current) {
@@ -96,28 +105,29 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
         videoRef.current.srcObject = stream;
       }
 
-      // Enumerate available devices
       const devices = await navigator.mediaDevices.enumerateDevices();
       setAudioDevices(devices.filter(d => d.kind === 'audioinput'));
       setVideoDevices(devices.filter(d => d.kind === 'videoinput'));
-    } catch (err: any) {
-      console.warn('Camera/Mic preview warning:', err);
+    } catch {
+      // Camera or microphone permission denied or unavailable
     }
   };
 
   useEffect(() => {
-    startPreview();
+    if (!loading && meeting) {
+      startPreview();
+    }
     return () => {
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach(t => t.stop());
       }
     };
-  }, [camEnabled, micEnabled, selectedAudioId, selectedVideoId]);
+  }, [camEnabled, micEnabled, selectedAudioId, selectedVideoId, loading, meeting]);
 
   const handleJoin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!displayName.trim()) {
-      addToast('Please enter your name to join', 'error');
+      addToast('Please enter your name to join the meeting', 'error');
       return;
     }
 
@@ -127,11 +137,12 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
       const token = localStorage.getItem('ng_token');
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const res = await fetch(`/api/meetings/${meetingCode}/join`, {
+      const res = await fetch(`/api/meetings/${encodeURIComponent(meetingCode)}/join`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
           displayName: displayName.trim(),
+          email: guestEmail.trim(),
           password
         })
       });
@@ -141,17 +152,22 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
         throw new Error(data.error || 'Failed to join meeting');
       }
 
-      // Stop local preview before entering room
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach(t => t.stop());
       }
+
+      const muteAudio = Boolean(data.startWithAudioMuted) || !micEnabled;
+      const muteVideo = Boolean(data.startWithVideoMuted) || !camEnabled;
 
       if (data.waitingRoom) {
         onWaiting({
           meeting: data.meeting,
           participantId: data.participantId,
           identity: data.identity,
-          displayName: data.displayName
+          displayName: data.displayName,
+          email: data.email || guestEmail.trim(),
+          startWithAudioMuted: muteAudio,
+          startWithVideoMuted: muteVideo
         });
       } else {
         onAdmitted({
@@ -159,11 +175,11 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
           role: data.role,
           identity: data.identity,
           displayName: data.displayName,
-          jaasToken: data.jaasToken,
-          jaasAppId: data.jaasAppId,
-          jaasRoomName: data.jaasRoomName,
-          jaasDomain: data.jaasDomain,
-          jaasError: data.jaasError
+          email: data.email || guestEmail.trim(),
+          jitsiDomain: data.jitsiDomain,
+          jitsiRoomName: data.jitsiRoomName,
+          startWithAudioMuted: muteAudio,
+          startWithVideoMuted: muteVideo
         });
       }
     } catch (err: any) {
@@ -176,9 +192,9 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center">
-        <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <h2 className="text-lg font-serif font-bold">Connecting to NexGen Meeting Service...</h2>
-        <p className="text-xs text-slate-400 mt-1">Verifying room status and security credentials</p>
+        <div className="w-11 h-11 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" />
+        <h2 className="text-lg font-serif font-bold">Loading Meeting Room...</h2>
+        <p className="text-xs text-slate-400 mt-1">Checking room details and access rules</p>
       </div>
     );
   }
@@ -191,12 +207,12 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
             <ShieldAlert className="w-8 h-8" />
           </div>
           <h2 className="text-2xl font-serif font-bold text-white">Meeting Unavailable</h2>
-          <p className="text-slate-400 text-sm">{error || 'The meeting room code is invalid, expired, or removed.'}</p>
+          <p className="text-slate-400 text-sm">{error || 'The meeting room link is invalid, expired, or ended.'}</p>
           <button
-            onClick={() => window.location.href = '/'}
+            onClick={() => setActivePage('home')}
             className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-white text-sm font-semibold rounded-xl transition-colors cursor-pointer"
           >
-            Return to Main Portal
+            Return to NexGen Council
           </button>
         </div>
       </div>
@@ -206,25 +222,25 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between selection:bg-blue-600 selection:text-white">
       {/* Header */}
-      <header className="p-6 border-b border-slate-900 bg-slate-950/80 backdrop-blur-md flex items-center justify-between max-w-7xl mx-auto w-full">
+      <header className="h-16 px-6 border-b border-slate-800/80 bg-slate-950/90 backdrop-blur-md flex items-center justify-between w-full">
         <div className="flex items-center gap-3">
-          <img src="/logo.png" alt="NexGen Council" className="h-10 w-10 object-contain" />
+          <img src="/logo.png" alt="NexGen Council" className="h-9 w-9 object-contain" />
           <div>
-            <span className="font-serif font-bold text-white text-base block leading-none">NexGen Council Meetings</span>
-            <span className="text-[10px] text-amber-400 uppercase tracking-widest font-semibold">JaaS Encrypted Video Platform</span>
+            <span className="font-serif font-bold text-white text-base block leading-none">NexGen Council Conferencing</span>
+            <span className="text-[11px] text-amber-400 tracking-wide font-medium">Embedded Secure Video Portal</span>
           </div>
         </div>
 
         <button
-          onClick={() => window.location.href = '/'}
-          className="text-xs font-semibold text-slate-400 hover:text-white px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 transition-colors flex items-center gap-1.5 cursor-pointer"
+          onClick={() => setActivePage('home')}
+          className="text-xs font-semibold text-slate-300 hover:text-white px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:bg-slate-800 transition-colors flex items-center gap-1.5 cursor-pointer"
         >
           <LogOut className="w-3.5 h-3.5" />
           <span>Exit</span>
         </button>
       </header>
 
-      {/* Main Container */}
+      {/* Main Pre-Join Content */}
       <main className="max-w-6xl mx-auto w-full px-4 py-8 flex-1 flex flex-col lg:flex-row items-center justify-center gap-10">
         {/* Camera Preview Box */}
         <div className="w-full lg:w-1/2 space-y-4">
@@ -240,16 +256,16 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
             ) : (
               <div className="text-center space-y-2 text-slate-500">
                 <VideoOff className="w-12 h-12 mx-auto text-slate-600" />
-                <p className="text-xs font-medium">Camera turned off</p>
+                <p className="text-xs font-medium">Camera muted before joining</p>
               </div>
             )}
 
-            {/* Quick Toggle Controls */}
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-slate-950/80 backdrop-blur-md px-4 py-2 rounded-2xl border border-slate-800 shadow-lg">
+            {/* Quick Mic/Camera Toggles */}
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-slate-950/85 backdrop-blur-md px-4 py-2 rounded-2xl border border-slate-800 shadow-lg">
               <button
                 type="button"
                 onClick={() => setMicEnabled(!micEnabled)}
-                className={`p-3 rounded-xl transition-all cursor-pointer ${
+                className={`p-3 rounded-xl transition-colors cursor-pointer ${
                   micEnabled
                     ? 'bg-slate-800 text-white hover:bg-slate-700'
                     : 'bg-rose-600 text-white hover:bg-rose-700'
@@ -262,7 +278,7 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
               <button
                 type="button"
                 onClick={() => setCamEnabled(!camEnabled)}
-                className={`p-3 rounded-xl transition-all cursor-pointer ${
+                className={`p-3 rounded-xl transition-colors cursor-pointer ${
                   camEnabled
                     ? 'bg-slate-800 text-white hover:bg-slate-700'
                     : 'bg-rose-600 text-white hover:bg-rose-700'
@@ -278,7 +294,7 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {audioDevices.length > 0 && (
               <div>
-                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">Microphone</label>
+                <label className="block text-[11px] font-semibold text-slate-400 mb-1">Microphone</label>
                 <select
                   value={selectedAudioId}
                   onChange={(e) => setSelectedAudioId(e.target.value)}
@@ -293,7 +309,7 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
 
             {videoDevices.length > 0 && (
               <div>
-                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">Camera</label>
+                <label className="block text-[11px] font-semibold text-slate-400 mb-1">Camera</label>
                 <select
                   value={selectedVideoId}
                   onChange={(e) => setSelectedVideoId(e.target.value)}
@@ -308,23 +324,28 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
           </div>
         </div>
 
-        {/* Meeting Join Details Card */}
+        {/* Clean Guest Pre-Join Card */}
         <div className="w-full lg:w-1/2 max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl space-y-6">
           <div>
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/10 text-blue-400 text-xs font-bold border border-blue-500/20 mb-3">
-              <Video className="w-3.5 h-3.5" /> Ready to Join
-            </span>
-            <h1 className="text-2xl font-serif font-bold text-white">{meeting.title}</h1>
+            <div className="flex items-center gap-2 text-xs font-medium text-blue-400 mb-2">
+              <Video className="w-4 h-4" />
+              <span>NexGen Meeting Room</span>
+              <span aria-hidden="true">·</span>
+              <span className="font-mono text-slate-400">{meeting.meetingCode}</span>
+            </div>
+            <h1 className="text-2xl font-serif font-bold text-white leading-snug">{meeting.title}</h1>
             {meeting.description && (
               <p className="text-slate-400 text-xs mt-1.5 line-clamp-2">{meeting.description}</p>
             )}
-            <div className="text-xs text-slate-400 mt-2 font-medium">Hosted by: <span className="text-amber-400 font-semibold">{meeting.hostName}</span></div>
+            <div className="text-xs text-slate-400 mt-2.5 font-medium">
+              Hosted by <span className="text-amber-400 font-semibold">{meeting.hostName}</span>
+            </div>
           </div>
 
           <form onSubmit={handleJoin} className="space-y-4">
             <div>
-              <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
-                Your Display Name *
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                Your Name *
               </label>
               <input
                 type="text"
@@ -336,16 +357,31 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
               />
             </div>
 
+            {!currentUser && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Email Address (Optional)
+                </label>
+                <input
+                  type="email"
+                  placeholder="you@example.com"
+                  value={guestEmail}
+                  onChange={(e) => setGuestEmail(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            )}
+
             {meeting.hasPassword && (
               <div>
-                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1 flex items-center justify-between">
-                  <span>Meeting Password Required</span>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+                  <span>Room Password / Access PIN *</span>
                   <Lock className="w-3.5 h-3.5 text-rose-400" />
                 </label>
                 <input
                   type="password"
                   required
-                  placeholder="Enter meeting password..."
+                  placeholder="Enter room password or PIN..."
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
@@ -356,23 +392,23 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
             {meeting.waitingRoomEnabled && (
               <div className="p-3 bg-indigo-950/40 border border-indigo-800/50 rounded-xl text-xs text-indigo-300 flex items-start gap-2.5">
                 <UserCheck className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
-                <span>Waiting room is enabled. The meeting host will be notified to admit you.</span>
+                <span>Lobby is enabled. The host will admit you into the meeting shortly after submitting.</span>
               </div>
             )}
 
             <button
               type="submit"
               disabled={isJoining}
-              className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              className="w-full py-3.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold transition-colors shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
             >
               {isJoining ? (
                 <>
                   <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>Connecting...</span>
+                  <span>Launching Meeting...</span>
                 </>
               ) : (
                 <>
-                  <span>{meeting.waitingRoomEnabled ? 'Request Admission' : 'Join Meeting Now'}</span>
+                  <span>{meeting.waitingRoomEnabled ? 'Request Admission' : 'Join Meeting'}</span>
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}
@@ -381,9 +417,9 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
         </div>
       </main>
 
-      {/* Watermark Footer */}
+      {/* Footer */}
       <footer className="p-4 text-center text-xs text-slate-500 border-t border-slate-900">
-        NexGen Council JaaS Video Platform
+        NexGen Council Secure Video Conferencing
       </footer>
     </div>
   );

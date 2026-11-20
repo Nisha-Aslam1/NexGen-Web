@@ -61,15 +61,16 @@ export function parsePathname(pathname: string, hash?: string): {
   eventSlug?: string;
   newsSlug?: string;
   meetingCode?: string;
+  adminTab?: AdminTab;
 } {
   let clean = pathname.split('?')[0].replace(/\/$/, '').toLowerCase() || '/';
 
-  // Support hash routing fallback for admin direct links (e.g. /#admin or /#/admin)
+  // Support hash routing fallback for admin and meeting direct links
   if ((clean === '/' || clean === '') && hash) {
     const cleanHash = hash.replace(/^#\/?/, '/').split('?')[0].replace(/\/$/, '').toLowerCase();
     if (cleanHash === '/admin' || cleanHash.startsWith('/admin/') || cleanHash === '/admin-login' || cleanHash === '/login') {
       clean = cleanHash;
-    } else if (cleanHash.startsWith('/room/') || cleanHash.startsWith('/meet/')) {
+    } else if (cleanHash.startsWith('/meeting/') || cleanHash.startsWith('/room/') || cleanHash.startsWith('/meet/')) {
       clean = cleanHash;
     }
   }
@@ -94,8 +95,12 @@ export function parsePathname(pathname: string, hash?: string): {
   if (clean === '/track' || clean === '/track-application') return { page: 'track' };
   if (clean === '/contact' || clean === '/contact-us') return { page: 'contact' };
   if (clean === '/admin-login' || clean === '/login') return { page: 'admin-login' };
+  if (clean === '/admin/meetings') return { page: 'admin', adminTab: 'meetings' };
   if (clean === '/admin' || clean.startsWith('/admin/')) return { page: 'admin' };
-  if (clean === '/meetings' || clean === '/meet') return { page: 'meetings' };
+  if (clean === '/meetings' || clean === '/meeting' || clean === '/meet') return { page: 'meetings' };
+  if (clean.startsWith('/meeting/')) {
+    return { page: 'room', meetingCode: clean.replace('/meeting/', '') };
+  }
   if (clean.startsWith('/room/')) {
     return { page: 'room', meetingCode: clean.replace('/room/', '') };
   }
@@ -125,7 +130,7 @@ export function getPathForPage(
   if (page === 'admin-login') return '/admin-login';
   if (page === 'admin') return '/admin';
   if (page === 'meetings') return '/meetings';
-  if (page === 'room') return meetingCode ? `/room/${meetingCode}` : '/meetings';
+  if (page === 'room') return meetingCode ? `/meeting/${meetingCode}` : '/meetings';
   return '/404';
 }
 
@@ -181,7 +186,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     ? parsePathname(window.location.pathname, window.location.hash)
     : { page: 'home' as ActivePage };
   const [activePage, setActivePageState] = useState<ActivePage>(initialNav.page);
-  const [adminTab, setAdminTab] = useState<AdminTab>('dashboard');
+  const [adminTab, setAdminTab] = useState<AdminTab>(initialNav.adminTab || 'dashboard');
   const [selectedProgramSlug, setSelectedProgramSlug] = useState<string | null>(initialNav.programSlug || null);
   const [selectedEventSlug, setSelectedEventSlug] = useState<string | null>(initialNav.eventSlug || null);
   const [selectedNewsSlug, setSelectedNewsSlug] = useState<string | null>(initialNav.newsSlug || null);
@@ -196,6 +201,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const handlePopState = () => {
       const parsed = parsePathname(window.location.pathname, window.location.hash);
       setActivePageState(parsed.page);
+      if (parsed.adminTab) setAdminTab(parsed.adminTab);
       setSelectedProgramSlug(parsed.programSlug || null);
       setSelectedEventSlug(parsed.eventSlug || null);
       setSelectedNewsSlug(parsed.newsSlug || null);
