@@ -340,7 +340,7 @@ export const SupportWidget: React.FC = () => {
         <img
           src="/NexGen-Support-2.png"
           alt="Support"
-          className="h-16 w-16 sm:h-20 sm:w-20 object-contain drop-shadow-lg select-none"
+          className="w-28 sm:w-36 h-auto object-contain drop-shadow-xl select-none"
         />
       </button>
     </div>
