@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext.tsx';
 import {
-  MessageSquare,
   X,
   Send,
   CheckCircle2,
@@ -98,7 +97,7 @@ export const SupportWidget: React.FC = () => {
   };
 
   return (
-    <div className="fixed bottom-5 right-5 z-50 flex flex-col items-end">
+    <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end">
       {isOpen && (
         <div className="mb-3 w-[340px] sm:w-[390px] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl transition-all">
           {/* Header */}
@@ -331,21 +330,18 @@ export const SupportWidget: React.FC = () => {
         </div>
       )}
 
-      {/* Floating Toggle Button */}
+      {/* Floating Image Toggle Button (No Background, Full Uncropped Image) */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         aria-label="Open Customer Support"
-        className="group flex items-center gap-2.5 rounded-full bg-indigo-950 hover:bg-indigo-900 text-white px-4 py-3.5 shadow-xl border border-amber-400/40 transition-all hover:scale-105 cursor-pointer"
+        className="bg-transparent border-none p-0 focus:outline-none transition-transform duration-200 hover:scale-105 active:scale-95 cursor-pointer"
       >
-        {isOpen ? (
-          <X className="w-5 h-5 text-amber-300" />
-        ) : (
-          <>
-            <MessageSquare className="w-5 h-5 text-amber-300" />
-            <span className="text-xs font-bold tracking-wide pr-1">Support</span>
-          </>
-        )}
+        <img
+          src="/NexGen-Support-Chat.png"
+          alt="Support"
+          className="h-16 w-16 sm:h-20 sm:w-20 object-contain drop-shadow-lg select-none"
+        />
       </button>
     </div>
   );
