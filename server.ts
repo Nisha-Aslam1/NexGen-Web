@@ -1453,7 +1453,7 @@ app.delete('/api/gallery/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNI
 });
 
 // 10. Contact
-app.post('/api/contact', (req, res) => {
+app.post(['/api/contact', '/api/contacts'], (req, res) => {
   const { name, email, phone, subject, message } = req.body;
   if (!name || !email || !message) {
     return res.status(400).json({ error: 'Name, email, and message are required.' });
