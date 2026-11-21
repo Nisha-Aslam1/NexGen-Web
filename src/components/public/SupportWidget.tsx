@@ -51,7 +51,7 @@ export const SupportWidget: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      const res = await fetch('/api/contacts', {
+      const res = await fetch('/api/contact', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -73,7 +73,7 @@ export const SupportWidget: React.FC = () => {
         data = rawText ? JSON.parse(rawText) : {};
       } catch {
         throw new Error(
-          `API returned HTML instead of JSON (HTTP ${res.status}). Check /api/contacts route.`
+          `API returned HTML instead of JSON (HTTP ${res.status}). Check /api/contact route.`
         );
       }
 
