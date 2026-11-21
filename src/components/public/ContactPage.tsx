@@ -62,15 +62,34 @@ export const ContactPage: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      const res = await fetch('/api/contacts', {
+      const res = await fetch('/api/contact', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          name: formData.name.trim(),
+          email: formData.email.trim(),
+          phone: formData.phone.trim(),
+          subject: formData.subject,
+          message: formData.message.trim()
+        })
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to send message.');
+
+      const rawText = await res.text();
+      let data: any = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        throw new Error(`Server error (${res.status}). Unable to process inquiry.`);
       }
+
+      if (!res.ok) {
+        throw new Error(data.error || data.message || 'Failed to send message.');
+      }
+
       setSubmittedSuccess(true);
       addToast('Your message has been delivered to the council secretariat.', 'success');
       setFormData({
