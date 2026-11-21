@@ -338,7 +338,7 @@ export const SupportWidget: React.FC = () => {
         className="bg-transparent border-none p-0 focus:outline-none transition-transform duration-200 hover:scale-105 active:scale-95 cursor-pointer"
       >
         <img
-          src="/NexGen-Support-Chat.png"
+          src="/NexGen-Support-2.png"
           alt="Support"
           className="h-16 w-16 sm:h-20 sm:w-20 object-contain drop-shadow-lg select-none"
         />
