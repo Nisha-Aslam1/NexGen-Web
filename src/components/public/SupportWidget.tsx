@@ -36,7 +36,7 @@ export const SupportWidget: React.FC = () => {
     name: '',
     email: '',
     phone: '',
-    subject: 'Support & Technical Issue',
+    subject: 'General Inquiry',
     message: ''
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -53,20 +53,41 @@ export const SupportWidget: React.FC = () => {
     try {
       const res = await fetch('/api/contacts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          name: formData.name.trim(),
+          email: formData.email.trim(),
+          phone: formData.phone.trim(),
+          subject: formData.subject,
+          message: formData.message.trim()
+        })
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to submit your issue.');
+
+      const rawText = await res.text();
+      let data: any = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        throw new Error(
+          `API returned HTML instead of JSON (HTTP ${res.status}). Check /api/contacts route.`
+        );
       }
+
+      if (!res.ok) {
+        throw new Error(data.error || data.message || 'Failed to submit your issue.');
+      }
+
       setSubmittedSuccess(true);
       addToast('Your support request has been sent to the Council Secretariat.', 'success');
       setFormData({
         name: '',
         email: '',
         phone: '',
-        subject: 'Support & Technical Issue',
+        subject: 'General Inquiry',
         message: ''
       });
     } catch (err: any) {
@@ -246,11 +267,11 @@ export const SupportWidget: React.FC = () => {
                     onChange={e => setFormData({ ...formData, subject: e.target.value })}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-xs focus:ring-2 focus:ring-indigo-200 focus:border-indigo-600 focus:outline-none"
                   >
-                    <option value="Support & Technical Issue">Support &amp; Technical Issue</option>
+                    <option value="General Inquiry">General Inquiry / Support Issue</option>
                     <option value="Certificate / Cohort Verification">Certificate / Cohort Verification</option>
                     <option value="Volunteer / Fellowship Application">Volunteer / Fellowship Application</option>
                     <option value="Event / Meeting Access Issue">Event / Meeting Access Issue</option>
-                    <option value="Partnership / General Inquiry">Partnership / General Inquiry</option>
+                    <option value="University / School Partnership">University / School Partnership</option>
                   </select>
                 </div>
 
