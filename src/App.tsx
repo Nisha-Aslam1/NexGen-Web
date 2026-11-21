@@ -17,6 +17,7 @@ import { ContactPage } from './components/public/ContactPage.tsx';
 import { VolunteerForm } from './components/public/VolunteerForm.tsx';
 import { TrackApplication } from './components/public/TrackApplication.tsx';
 import { NotFoundPage } from './components/public/NotFoundPage.tsx';
+import { SupportWidget } from './components/public/SupportWidget.tsx';
 
 // Admin pages
 import { AdminLogin } from './components/admin/AdminLogin.tsx';
@@ -155,7 +156,10 @@ const AppContent: React.FC = () => {
 
       <Footer />
 
-      {/* Floating Developer Watermark across public pages */}
+      {/* Floating Customer Support Widget (Bottom Right) */}
+      <SupportWidget />
+
+      {/* Floating Developer Watermark across public pages (Bottom Left) */}
       <div
         className="fixed bottom-4 left-4 z-30 hidden sm:flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-950/85 hover:bg-slate-950 backdrop-blur-md text-white border border-slate-700/80 shadow-xl text-[11px] font-medium transition-all group select-none pointer-events-auto cursor-default"
         title="Platform Architecture & Full-Stack Development by Nisha Aslam"
