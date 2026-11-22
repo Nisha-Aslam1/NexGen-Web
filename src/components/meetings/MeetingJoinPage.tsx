@@ -162,19 +162,30 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
       const token = localStorage.getItem('ng_token');
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
+      const guestStorageKey = `ng_mtg_guest_${meetingCode}`;
+      let savedGuestId = '';
+      if (!currentUser && typeof sessionStorage !== 'undefined') {
+        savedGuestId = sessionStorage.getItem(guestStorageKey) || '';
+      }
+
       const res = await fetch(`/api/meetings/${encodeURIComponent(meetingCode)}/join`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
           displayName: displayName.trim(),
           email: guestEmail.trim(),
-          password
+          password,
+          ...(savedGuestId ? { participantId: savedGuestId } : {})
         })
       });
 
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Failed to join meeting');
+      }
+
+      if (!currentUser && data.identity && typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem(guestStorageKey, data.identity);
       }
 
       if (mediaStreamRef.current) {

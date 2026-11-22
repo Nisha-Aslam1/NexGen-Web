@@ -272,6 +272,8 @@ export interface WebsiteSettings {
   emailLogoUrl?: string;
   // Volunteer Onboarding
   volunteerWhatsappGroupLink?: string;
+  volunteerWhatsappGroupLinkMale?: string;
+  volunteerWhatsappGroupLinkFemale?: string;
 }
 
 export interface EmailImage {
@@ -375,6 +377,8 @@ export interface Meeting {
   startWithVideoMuted?: boolean;
   maxParticipants: number;
   isLocked: boolean;
+  activeParticipantCount?: number;
+  totalParticipantCount?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -410,5 +414,23 @@ export interface MeetingAttendance {
   joinedAt: string;
   leftAt?: string;
   durationSeconds?: number;
+}
+
+export interface MeetingCapture {
+  id: string;
+  meetingId: string;
+  meetingCode: string;
+  meetingTitle: string;
+  kind: 'recording' | 'screenshot';
+  filename: string;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+  durationSeconds?: number;
+  capturedBy: string;
+  hasAudio?: boolean;
+  hasVideo?: boolean;
+  createdAt: string;
+  expiresAt: string;
 }
 

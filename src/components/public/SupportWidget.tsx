@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp, ActivePage } from '../../context/AppContext.tsx';
 import { SupportChatMessage } from '../../types.ts';
+import { SupportRichText } from '../common/SupportRichText.tsx';
 import {
   X,
   Send,
@@ -21,19 +22,6 @@ import {
 } from 'lucide-react';
 
 const SUPPORT_SESSION_STORAGE_KEY = 'nexgen_support_ai_session';
-
-const VALID_NAV_PAGES: ActivePage[] = [
-  'home',
-  'about',
-  'programs',
-  'events',
-  'news',
-  'gallery',
-  'team',
-  'volunteer',
-  'track',
-  'contact'
-];
 
 const QUICK_FAQS = [
   {
@@ -237,69 +225,6 @@ export const SupportWidget: React.FC = () => {
     setHistoryLoaded(true);
   };
 
-  // Safe React text + inline bold + [[PAGE:route|Label]] parser (zero dangerouslySetInnerHTML)
-  const renderRichAiText = (rawText: string) => {
-    const pageButtons: { page: ActivePage; label: string }[] = [];
-    const cleanedText = rawText.replace(/\[\[PAGE:([a-z-]+)\|([^\]]+)\]\]/gi, (_, rawPage, label) => {
-      const normalized = String(rawPage).trim().toLowerCase() as ActivePage;
-      if (VALID_NAV_PAGES.includes(normalized)) {
-        if (!pageButtons.some(b => b.page === normalized)) {
-          pageButtons.push({ page: normalized, label: String(label).trim() });
-        }
-        return String(label).trim();
-      }
-      return String(label).trim();
-    });
-
-    const lines = cleanedText.split('\n');
-
-    const renderInlineBold = (line: string, lineKey: number) => {
-      const parts = line.split(/(\*\*[^*]+\*\*)/g);
-      return (
-        <React.Fragment key={lineKey}>
-          {parts.map((part, idx) =>
-            part.startsWith('**') && part.endsWith('**') && part.length > 4 ? (
-              <strong key={idx} className="font-bold text-slate-900">
-                {part.slice(2, -2)}
-              </strong>
-            ) : (
-              <React.Fragment key={idx}>{part}</React.Fragment>
-            )
-          )}
-        </React.Fragment>
-      );
-    };
-
-    return (
-      <div className="space-y-1.5">
-        <div className="space-y-1 leading-relaxed">
-          {lines.map((line, i) =>
-            line.trim() === '' ? (
-              <div key={i} className="h-1" />
-            ) : (
-              <p key={i}>{renderInlineBold(line, i)}</p>
-            )
-          )}
-        </div>
-        {pageButtons.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 pt-1.5">
-            {pageButtons.map(btn => (
-              <button
-                key={btn.page}
-                type="button"
-                onClick={() => handleNavigatePage(btn.page)}
-                className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-950 hover:text-white hover:border-indigo-950 px-2.5 py-1 text-[11px] font-semibold text-indigo-950 transition-colors cursor-pointer"
-              >
-                <span>{btn.label}</span>
-                <ArrowUpRight className="w-3 h-3" />
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanName = formData.name.trim();
@@ -380,6 +305,13 @@ export const SupportWidget: React.FC = () => {
                 <img
                   src="/logo.png"
                   alt="NexGen Council"
+                  onError={(e) => {
+                    const img = e.currentTarget;
+                    if (!img.dataset.fallbackApplied) {
+                      img.dataset.fallbackApplied = '1';
+                      img.style.display = 'none';
+                    }
+                  }}
                   className="h-10 w-10 rounded-full bg-white/10 p-1 object-cover border border-amber-400/40"
                 />
                 <div>
@@ -511,7 +443,11 @@ export const SupportWidget: React.FC = () => {
                         {msg.role === 'user' ? (
                           <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
                         ) : (
-                          renderRichAiText(msg.text)
+                          <SupportRichText
+                            text={msg.text}
+                            onNavigatePage={handleNavigatePage}
+                            variant="light"
+                          />
                         )}
                       </div>
 
@@ -837,6 +773,14 @@ export const SupportWidget: React.FC = () => {
         <img
           src="/NexGen-Support-2.png"
           alt="Support"
+          onError={(e) => {
+            const img = e.currentTarget;
+            if (!img.dataset.fallbackApplied) {
+              img.dataset.fallbackApplied = '1';
+              img.src = '/logo.png';
+              img.className = 'w-14 h-14 rounded-full object-contain bg-white p-1 shadow-xl border border-indigo-200 select-none';
+            }
+          }}
           className="w-28 sm:w-36 h-auto object-contain drop-shadow-xl select-none"
         />
       </button>

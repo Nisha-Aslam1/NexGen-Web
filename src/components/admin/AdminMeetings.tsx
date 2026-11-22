@@ -24,7 +24,12 @@ import {
   VideoOff,
   Monitor,
   Edit2,
-  ShieldCheck
+  ShieldCheck,
+  Minus,
+  Plus as PlusIcon,
+  Download,
+  Camera,
+  CircleDot
 } from 'lucide-react';
 
 function slugifyRoomSlug(input: string): string {
@@ -78,11 +83,124 @@ const ToggleSwitchRow: React.FC<SwitchProps> = ({ checked, onChange, label, desc
   </div>
 );
 
+interface MaxParticipantsFieldProps {
+  value: number;
+  onChange: (next: number) => void;
+}
+
+const CAPACITY_PRESETS = [10, 25, 50, 100, 250, 500, 1000];
+
+const clampCapacity = (val: number) => {
+  if (!Number.isFinite(val)) return 50;
+  return Math.max(2, Math.min(1000, Math.round(val)));
+};
+
+const MaxParticipantsField: React.FC<MaxParticipantsFieldProps> = ({ value, onChange }) => {
+  const safeVal = clampCapacity(value);
+  return (
+    <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Users className="w-4 h-4 text-slate-500 shrink-0" />
+          <div>
+            <span className="text-xs font-semibold text-slate-900 block leading-snug">
+              Max Participants Capacity
+            </span>
+            <span className="text-[11px] text-slate-500 block leading-snug">
+              Default is 50. Increase or decrease anytime (2 – 1000 seats).
+            </span>
+          </div>
+        </div>
+        <span className="px-2.5 py-1 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 text-xs font-bold tabular-nums shrink-0">
+          {safeVal} max
+        </span>
+      </div>
+
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => onChange(clampCapacity(safeVal - 10))}
+          disabled={safeVal <= 2}
+          className="px-2.5 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-40 text-xs font-semibold text-slate-700 cursor-pointer shrink-0 tabular-nums"
+          title="Decrease by 10"
+        >
+          -10
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange(clampCapacity(safeVal - 1))}
+          disabled={safeVal <= 2}
+          className="p-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-40 text-slate-700 cursor-pointer shrink-0"
+          title="Decrease by 1"
+          aria-label="Decrease max participants"
+        >
+          <Minus className="w-3.5 h-3.5" />
+        </button>
+        <input
+          type="number"
+          min={2}
+          max={1000}
+          value={value}
+          onChange={(e) => {
+            const parsed = parseInt(e.target.value, 10);
+            if (!Number.isNaN(parsed)) {
+              onChange(Math.max(1, Math.min(1000, parsed)));
+            }
+          }}
+          onBlur={() => onChange(clampCapacity(value))}
+          className="flex-1 min-w-0 px-3 py-2 text-center text-sm font-bold bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
+          aria-label="Max participants count"
+        />
+        <button
+          type="button"
+          onClick={() => onChange(clampCapacity(safeVal + 1))}
+          disabled={safeVal >= 1000}
+          className="p-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-40 text-slate-700 cursor-pointer shrink-0"
+          title="Increase by 1"
+          aria-label="Increase max participants"
+        >
+          <PlusIcon className="w-3.5 h-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange(clampCapacity(safeVal + 10))}
+          disabled={safeVal >= 1000}
+          className="px-2.5 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-40 text-xs font-semibold text-slate-700 cursor-pointer shrink-0 tabular-nums"
+          title="Increase by 10"
+        >
+          +10
+        </button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[11px] text-slate-500 mr-1">Quick set:</span>
+        {CAPACITY_PRESETS.map((preset) => (
+          <button
+            key={preset}
+            type="button"
+            onClick={() => onChange(preset)}
+            className={`px-2 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer tabular-nums border ${
+              safeVal === preset
+                ? 'bg-slate-900 text-white border-slate-900'
+                : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:bg-slate-100'
+            }`}
+          >
+            {preset}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 export const AdminMeetings: React.FC = () => {
   const { addToast, authToken, setActivePage } = useApp();
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'All' | 'Active' | 'Scheduled' | 'Ended'>('All');
+  const [activeMainTab, setActiveMainTab] = useState<'rooms' | 'captures'>('rooms');
+  const [captures, setCaptures] = useState<any[]>([]);
+  const [viewingCapture, setViewingCapture] = useState<any | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
@@ -147,11 +265,44 @@ export const AdminMeetings: React.FC = () => {
     }
   };
 
+  const fetchCaptures = async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+      const res = await fetch('/api/meetings-captures/all', { headers });
+      if (res.ok) {
+        const data = await res.json();
+        setCaptures(data.captures || []);
+      }
+    } catch {}
+  };
+
+  const handleDeleteCapture = async (captureId: string) => {
+    try {
+      const headers: Record<string, string> = {};
+      if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+      const res = await fetch(`/api/meetings/captures/${captureId}`, { method: 'DELETE', headers });
+      if (res.ok) {
+        addToast('Capture deleted successfully.', 'success');
+        fetchCaptures();
+      } else {
+        addToast('Failed to delete capture.', 'error');
+      }
+    } catch {
+      addToast('Error deleting capture.', 'error');
+    }
+  };
+
   useEffect(() => {
     fetchMeetings();
+    fetchCaptures();
     const interval = setInterval(fetchMeetings, 10000);
-    return () => clearInterval(interval);
-  }, []);
+    const cInterval = setInterval(fetchCaptures, 15000);
+    return () => {
+      clearInterval(interval);
+      clearInterval(cInterval);
+    };
+  }, [authToken]);
 
   const getInviteUrl = (roomSlug: string) => {
     const origin = typeof window !== 'undefined' ? window.location.origin : 'https://nexgencouncil.bond';
@@ -210,7 +361,7 @@ export const AdminMeetings: React.FC = () => {
         startWithVideoMuted: formData.startWithVideoMuted,
         waitingRoomEnabled: formData.waitingRoomEnabled,
         screenShareEnabled: formData.screenShareEnabled,
-        maxParticipants: formData.maxParticipants
+        maxParticipants: clampCapacity(formData.maxParticipants)
       };
 
       const res = await fetch('/api/meetings', {
@@ -358,7 +509,7 @@ export const AdminMeetings: React.FC = () => {
         startWithVideoMuted: editForm.startWithVideoMuted,
         waitingRoomEnabled: editForm.waitingRoomEnabled,
         screenShareEnabled: editForm.screenShareEnabled,
-        maxParticipants: editForm.maxParticipants || 50
+        maxParticipants: clampCapacity(editForm.maxParticipants)
       };
 
       if (!editForm.enablePassword) {
@@ -386,8 +537,7 @@ export const AdminMeetings: React.FC = () => {
     }
   };
 
-  const handleViewHistory = async (meeting: Meeting) => {
-    setViewingHistoryMeeting(meeting);
+  const fetchMeetingHistory = async (meeting: Meeting) => {
     try {
       const headers: Record<string, string> = {};
       if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
@@ -401,6 +551,40 @@ export const AdminMeetings: React.FC = () => {
       setHistoryMessages(mRes.messages || []);
     } catch (err) {
       console.error('Error loading history:', err);
+    }
+  };
+
+  const handleViewHistory = async (meeting: Meeting) => {
+    setViewingHistoryMeeting(meeting);
+    await fetchMeetingHistory(meeting);
+  };
+
+  useEffect(() => {
+    if (!viewingHistoryMeeting) return;
+    const interval = setInterval(() => {
+      fetchMeetingHistory(viewingHistoryMeeting);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [viewingHistoryMeeting?.id, authToken]);
+
+  const handleKickFromHistory = async (meetingId: string, participantIdentity: string, displayName: string) => {
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+
+      const res = await fetch(`/api/meetings/${meetingId}/kick`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ participantIdentity })
+      });
+      if (!res.ok) throw new Error('Could not remove participant');
+      addToast(`${displayName} removed from room.`, 'info');
+      if (viewingHistoryMeeting) {
+        fetchMeetingHistory(viewingHistoryMeeting);
+      }
+      fetchMeetings();
+    } catch {
+      addToast('Failed to remove participant.', 'error');
     }
   };
 
@@ -500,8 +684,38 @@ export const AdminMeetings: React.FC = () => {
         </span>
       </div>
 
-      {/* Metrics Strip */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Main View Switcher Tabs */}
+      <div className="flex items-center gap-2 bg-slate-200/80 p-1.5 rounded-2xl w-fit">
+        <button
+          type="button"
+          onClick={() => setActiveMainTab('rooms')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+            activeMainTab === 'rooms'
+              ? 'bg-white text-slate-900 shadow-sm'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Video className="w-4 h-4 text-blue-600" />
+          <span>Video Rooms ({meetings.length})</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveMainTab('captures')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+            activeMainTab === 'captures'
+              ? 'bg-white text-slate-900 shadow-sm'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Camera className="w-4 h-4 text-amber-600" />
+          <span>Recordings &amp; Screenshots Archive ({captures.length})</span>
+        </button>
+      </div>
+
+      {activeMainTab === 'rooms' && (
+        <div className="space-y-6">
+          {/* Metrics Strip */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white p-5 rounded-2xl border border-slate-200 flex items-center gap-4">
           <div className="w-11 h-11 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
             <Video className="w-5 h-5" />
@@ -611,6 +825,10 @@ export const AdminMeetings: React.FC = () => {
                         <span>Host: {m.hostName}</span>
                         <span aria-hidden="true">·</span>
                         <span className="font-mono text-slate-700">{m.meetingCode}</span>
+                        <span aria-hidden="true">·</span>
+                        <span className="tabular-nums font-medium text-slate-700">
+                          {m.activeParticipantCount ?? 0}/{m.maxParticipants || 50} live
+                        </span>
                       </div>
                     </div>
                     <span
@@ -796,7 +1014,11 @@ export const AdminMeetings: React.FC = () => {
                         <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
                           <span>Host: {m.hostName}</span>
                           <span aria-hidden="true">·</span>
-                          <span className="tabular-nums">Max {m.maxParticipants}</span>
+                          <span className="tabular-nums">
+                            {m.status === 'Ended' || m.status === 'Cancelled'
+                              ? `Max ${m.maxParticipants || 50}`
+                              : `${m.activeParticipantCount ?? 0} / ${m.maxParticipants || 50} live`}
+                          </span>
                         </div>
                       </td>
 
@@ -968,6 +1190,204 @@ export const AdminMeetings: React.FC = () => {
           </>
         )}
       </div>
+        </div>
+      )}
+
+      {activeMainTab === 'captures' && (
+        <div className="space-y-4">
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span className="w-9 h-9 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                <Clock className="w-5 h-5" />
+              </span>
+              <div>
+                <h3 className="text-xs font-bold text-amber-900">3-Day Auto-Expiry Retention Policy</h3>
+                <p className="text-[11px] text-amber-700 mt-0.5">
+                  All meeting recordings and screenshots are securely archived here and automatically purged after 3 days to preserve storage.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={fetchCaptures}
+              className="px-3 py-1.5 bg-white hover:bg-amber-100 text-amber-900 text-xs font-semibold rounded-xl border border-amber-300 cursor-pointer flex items-center gap-1.5 shrink-0"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Refresh</span>
+            </button>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+            {captures.length === 0 ? (
+              <div className="p-12 text-center text-slate-500 space-y-2">
+                <Camera className="w-10 h-10 text-slate-300 mx-auto" />
+                <h3 className="font-bold text-slate-800">No Recordings or Screenshots Captured Yet</h3>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                  Start a meeting room and click the Record or Snap button in the live call toolbar to capture and archive recordings here.
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500">
+                    <tr>
+                      <th className="px-6 py-3.5">Type &amp; Filename</th>
+                      <th className="px-6 py-3.5">Meeting Room</th>
+                      <th className="px-6 py-3.5">Size &amp; Captured At</th>
+                      <th className="px-6 py-3.5">Auto-Expiry (3 Days)</th>
+                      <th className="px-6 py-3.5 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {captures.map((cap) => {
+                      const expiresAt = new Date(cap.expiresAt).getTime();
+                      const now = Date.now();
+                      const timeLeftHours = Math.max(0, Math.round((expiresAt - now) / (1000 * 60 * 60)));
+                      const timeLeftDays = (timeLeftHours / 24).toFixed(1);
+
+                      return (
+                        <tr key={cap.id} className="hover:bg-slate-50/70 transition-colors">
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-2.5">
+                              <span
+                                className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                                  cap.kind === 'recording'
+                                    ? 'bg-rose-50 text-rose-600 border border-rose-200'
+                                    : 'bg-blue-50 text-blue-600 border border-blue-200'
+                                }`}
+                              >
+                                {cap.kind === 'recording' ? <Video className="w-4 h-4" /> : <Camera className="w-4 h-4" />}
+                              </span>
+                              <div className="min-w-0">
+                                <span className="font-semibold text-slate-900 block truncate max-w-xs">
+                                  {cap.originalName || cap.filename}
+                                </span>
+                                <span className="text-[11px] text-slate-500 capitalize">{cap.kind}</span>
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="px-6 py-4">
+                            <span className="font-semibold text-slate-800 text-xs block truncate max-w-xs">
+                              {cap.meetingTitle}
+                            </span>
+                            <span className="text-[11px] font-mono text-slate-500">{cap.meetingCode}</span>
+                          </td>
+
+                          <td className="px-6 py-4 whitespace-nowrap text-xs">
+                            <span className="font-medium text-slate-700 block">
+                              {(cap.sizeBytes / (1024 * 1024)).toFixed(2)} MB
+                            </span>
+                            <span className="text-slate-400 text-[11px]">
+                              {new Date(cap.createdAt).toLocaleString([], {
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
+                            </span>
+                          </td>
+
+                          <td className="px-6 py-4 whitespace-nowrap text-xs">
+                            <span className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-800 font-medium border border-amber-200 text-[11px]">
+                              {timeLeftHours <= 0 ? 'Expiring soon' : `${timeLeftDays} days left`}
+                            </span>
+                          </td>
+
+                          <td className="px-6 py-4 text-right whitespace-nowrap">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setViewingCapture(cap)}
+                                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>Preview</span>
+                              </button>
+                              <a
+                                href={cap.filename}
+                                download
+                                className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold inline-flex items-center gap-1 transition-colors"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                <span>Download</span>
+                              </a>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteCapture(cap.id)}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                title="Delete capture"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Capture Preview Modal */}
+      {viewingCapture && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-3xl w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-base font-serif font-bold text-slate-900 truncate">
+                  {viewingCapture.originalName}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Meeting: {viewingCapture.meetingTitle} ({viewingCapture.meetingCode})
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewingCapture(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-slate-950 rounded-2xl overflow-hidden flex items-center justify-center p-2 min-h-[320px] max-h-[60vh]">
+              {viewingCapture.kind === 'recording' ? (
+                <video src={viewingCapture.filename} controls className="max-w-full max-h-[50vh] rounded-xl" />
+              ) : (
+                <img src={viewingCapture.filename} alt="Screenshot preview" className="max-w-full max-h-[50vh] object-contain rounded-xl" />
+              )}
+            </div>
+
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-xs text-slate-500 tabular-nums">
+                Size: {(viewingCapture.sizeBytes / (1024 * 1024)).toFixed(2)} MB · Expires in 3 days
+              </span>
+              <div className="flex items-center gap-2">
+                <a
+                  href={viewingCapture.filename}
+                  download
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold inline-flex items-center gap-1.5"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Download File</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setViewingCapture(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create / Schedule Meeting Modal */}
       {showCreateModal && (
@@ -1070,6 +1490,11 @@ export const AdminMeetings: React.FC = () => {
                 </div>
               </div>
 
+              <MaxParticipantsField
+                value={formData.maxParticipants}
+                onChange={(val) => setFormData(prev => ({ ...prev, maxParticipants: val }))}
+              />
+
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   Agenda / Description (Optional)
@@ -1163,71 +1588,192 @@ export const AdminMeetings: React.FC = () => {
       )}
 
       {/* Attendance & Messages History Modal */}
-      {viewingHistoryMeeting && (
-        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto space-y-6">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div>
-                <h3 className="text-lg font-serif font-bold text-slate-900">{viewingHistoryMeeting.title}</h3>
-                <p className="text-xs text-slate-500 font-mono mt-0.5">Room Slug: {viewingHistoryMeeting.meetingCode}</p>
-              </div>
-              <button
-                onClick={() => setViewingHistoryMeeting(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 cursor-pointer"
-                aria-label="Close modal"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {viewingHistoryMeeting && (() => {
+        const isMeetingClosed =
+          viewingHistoryMeeting.status === 'Ended' || viewingHistoryMeeting.status === 'Cancelled';
+        const activeAttendees = isMeetingClosed
+          ? []
+          : historyParticipants.filter(
+              p => p.admissionStatus === 'admitted' && p.connectionStatus !== 'disconnected'
+            );
+        const pastAttendees = isMeetingClosed
+          ? historyParticipants
+          : historyParticipants.filter(
+              p => p.connectionStatus === 'disconnected' || p.admissionStatus === 'rejected'
+            );
 
-            <div className="space-y-6">
-              <div>
-                <h4 className="text-xs font-semibold text-slate-800 mb-3 flex items-center gap-2">
-                  <Users className="w-4 h-4 text-blue-600" />
-                  <span>Participant Attendance ({historyParticipants.length})</span>
-                </h4>
-                {historyParticipants.length === 0 ? (
-                  <p className="text-xs text-slate-400 italic">No attendance records logged for this session.</p>
-                ) : (
-                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                    {historyParticipants.map((p, idx) => (
-                      <div key={idx} className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl text-xs border border-slate-100">
-                        <div className="font-semibold text-slate-800">{p.displayName}</div>
-                        <div className="flex items-center gap-3 text-slate-500 text-[11px] tabular-nums">
-                          <span className="capitalize font-medium text-slate-700">{p.role}</span>
-                          <span>Joined: {new Date(p.joinedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                        </div>
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto space-y-6">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-4 gap-3">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-serif font-bold text-slate-900 truncate">
+                    {viewingHistoryMeeting.title}
+                  </h3>
+                  <p className="text-xs text-slate-500 font-mono mt-0.5 truncate">
+                    Room Slug: {viewingHistoryMeeting.meetingCode}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => fetchMeetingHistory(viewingHistoryMeeting)}
+                    className="p-1.5 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-slate-100 cursor-pointer"
+                    title="Refresh attendance"
+                    aria-label="Refresh attendance"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewingHistoryMeeting(null)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 cursor-pointer"
+                    aria-label="Close modal"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                {!isMeetingClosed && (
+                  <div>
+                    <h4 className="text-xs font-semibold text-slate-800 mb-3 flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                        <span>Currently In Room ({activeAttendees.length})</span>
+                      </span>
+                      <span className="text-[11px] font-normal text-slate-400">Auto-updates every 5s</span>
+                    </h4>
+                    {activeAttendees.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic bg-slate-50 p-3 rounded-xl border border-slate-100">
+                        No participants are currently connected in this room.
+                      </p>
+                    ) : (
+                      <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                        {activeAttendees.map((p, idx) => (
+                          <div
+                            key={p.id || idx}
+                            className="flex items-center justify-between gap-2 p-2.5 bg-emerald-50/60 rounded-xl text-xs border border-emerald-200/70"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="font-semibold text-slate-900 truncate">{p.displayName}</span>
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold shrink-0">
+                                Live
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2.5 text-slate-600 text-[11px] tabular-nums shrink-0">
+                              <span className="capitalize font-medium text-slate-700">{p.role}</span>
+                              {p.joinedAt && (
+                                <span>
+                                  Joined:{' '}
+                                  {new Date(p.joinedAt).toLocaleTimeString([], {
+                                    hour: '2-digit',
+                                    minute: '2-digit'
+                                  })}
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleKickFromHistory(
+                                    viewingHistoryMeeting.id,
+                                    p.identity || p.id,
+                                    p.displayName
+                                  )
+                                }
+                                className="px-2 py-0.5 rounded-md bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 text-[10px] font-semibold cursor-pointer"
+                                title="Disconnect participant from room"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
                   </div>
                 )}
-              </div>
 
-              <div className="border-t border-slate-100 pt-4">
-                <h4 className="text-xs font-semibold text-slate-800 mb-3 flex items-center gap-2">
-                  <MessageSquare className="w-4 h-4 text-indigo-600" />
-                  <span>Persistent Chat Messages ({historyMessages.length})</span>
-                </h4>
-                {historyMessages.length === 0 ? (
-                  <p className="text-xs text-slate-400 italic">No chat messages were recorded during this session.</p>
-                ) : (
-                  <div className="space-y-2 max-h-60 overflow-y-auto pr-1 bg-slate-900 text-slate-200 p-4 rounded-2xl text-xs">
-                    {historyMessages.map((msg, idx) => (
-                      <div key={idx} className="space-y-0.5 border-b border-slate-800 pb-2">
-                        <div className="flex items-center justify-between text-[11px] text-amber-400">
-                          <span className="font-semibold">{msg.senderName}</span>
-                          <span className="text-slate-500 text-[10px] tabular-nums">{new Date(msg.createdAt).toLocaleTimeString()}</span>
+                <div className={!isMeetingClosed ? 'border-t border-slate-100 pt-4' : ''}>
+                  <h4 className="text-xs font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                    <Users className="w-4 h-4 text-slate-500" />
+                    <span>
+                      {isMeetingClosed
+                        ? `Participant Attendance (${pastAttendees.length})`
+                        : `Left / Past Attendance (${pastAttendees.length})`}
+                    </span>
+                  </h4>
+                  {pastAttendees.length === 0 ? (
+                    <p className="text-xs text-slate-400 italic">No departed attendance records logged yet.</p>
+                  ) : (
+                    <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                      {pastAttendees.map((p, idx) => (
+                        <div
+                          key={p.id || idx}
+                          className="flex items-center justify-between gap-2 p-2.5 bg-slate-50 rounded-xl text-xs border border-slate-100"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-semibold text-slate-700 truncate">{p.displayName}</span>
+                            <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 text-[10px] font-semibold shrink-0">
+                              Left
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-0.5 text-slate-500 text-[11px] tabular-nums shrink-0">
+                            <span className="capitalize font-medium text-slate-700">{p.role}</span>
+                            {p.joinedAt && (
+                              <span>
+                                Joined:{' '}
+                                {new Date(p.joinedAt).toLocaleTimeString([], {
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                })}
+                              </span>
+                            )}
+                            {p.leftAt && (
+                              <span className="text-rose-600 font-medium">
+                                Left:{' '}
+                                {new Date(p.leftAt).toLocaleTimeString([], {
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                })}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <p className="text-slate-300 text-xs">{msg.message}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-slate-100 pt-4">
+                  <h4 className="text-xs font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                    <MessageSquare className="w-4 h-4 text-indigo-600" />
+                    <span>Persistent Chat Messages ({historyMessages.length})</span>
+                  </h4>
+                  {historyMessages.length === 0 ? (
+                    <p className="text-xs text-slate-400 italic">No chat messages were recorded during this session.</p>
+                  ) : (
+                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1 bg-slate-900 text-slate-200 p-4 rounded-2xl text-xs">
+                      {historyMessages.map((msg, idx) => (
+                        <div key={idx} className="space-y-0.5 border-b border-slate-800 pb-2">
+                          <div className="flex items-center justify-between text-[11px] text-amber-400">
+                            <span className="font-semibold">{msg.senderName}</span>
+                            <span className="text-slate-500 text-[10px] tabular-nums">
+                              {new Date(msg.createdAt).toLocaleTimeString()}
+                            </span>
+                          </div>
+                          <p className="text-slate-300 text-xs">{msg.message}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
       {/* Edit Meeting Settings Modal */}
       {editingMeeting && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
@@ -1277,18 +1823,21 @@ export const AdminMeetings: React.FC = () => {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Max Participants
+                    Scheduled End (Optional)
                   </label>
                   <input
-                    type="number"
-                    min={2}
-                    max={500}
-                    value={editForm.maxParticipants}
-                    onChange={e => setEditForm({ ...editForm, maxParticipants: Number(e.target.value) || 50 })}
+                    type="datetime-local"
+                    value={editForm.scheduledEnd}
+                    onChange={e => setEditForm({ ...editForm, scheduledEnd: e.target.value })}
                     className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
               </div>
+
+              <MaxParticipantsField
+                value={editForm.maxParticipants}
+                onChange={(val) => setEditForm(prev => ({ ...prev, maxParticipants: val }))}
+              />
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">

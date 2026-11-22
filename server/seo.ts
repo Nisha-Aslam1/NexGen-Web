@@ -893,12 +893,20 @@ function escapeHtml(unsafe: string): string {
     .replace(/'/g, '&#039;');
 }
 
+function isSearchCrawlerUserAgent(userAgent?: string): boolean {
+  if (!userAgent) return false;
+  return /bot|crawl|spider|slurp|mediapartners|adsbot|bingpreview|facebookexternalhit|twitterbot|linkedinbot|whatsapp|telegrambot|applebot|duckduckbot|yandex|baidu|lighthouse/i.test(
+    userAgent
+  );
+}
+
 export function injectSeoIntoHtml(
   html: string,
   meta: RouteMetadata,
   siteUrl: string,
   googleVerification?: string,
-  gaTrackingId?: string
+  gaTrackingId?: string,
+  userAgent?: string
 ): string {
   const safeTitle = escapeHtml(meta.title);
   const safeDesc = escapeHtml(meta.description);
@@ -1003,12 +1011,20 @@ export function injectSeoIntoHtml(
   // Insert before </head>
   result = result.replace('</head>', `    ${injectedTagsString}\n  </head>`);
 
-  // Inject semantic SSR snapshot inside <div id="root"></div> for initial bot/crawler HTML reads
-  // (React's createRoot replaces #root cleanly on hydration)
-  if (!meta.noindex && result.includes('<div id="root"></div>')) {
+  // Inject semantic SSR snapshot ONLY for search crawlers / bots (and noscript fallback),
+  // leaving <div id="root"></div> clean for browsers so zero unstyled flash or stuck splash appears.
+  if (result.includes('<div id="root"></div>')) {
     const cleanBase = escapeHtml(siteUrl.replace(/\/+$/, ''));
-    const crawlerSnapshot = `<div id="root"><main style="font-family:system-ui,sans-serif;max-width:960px;margin:0 auto;padding:24px;"><h1>${safeTitle}</h1><p>${safeDesc}</p><nav aria-label="NexGen Council Navigation"><a href="${cleanBase}/">Home</a> | <a href="${cleanBase}/about">About NexGen</a> | <a href="${cleanBase}/programs">Leadership Programs</a> | <a href="${cleanBase}/events">Events</a> | <a href="${cleanBase}/news">News</a> | <a href="${cleanBase}/team">Executive Leadership</a> | <a href="${cleanBase}/gallery">Gallery</a> | <a href="${cleanBase}/volunteer">Volunteer</a> | <a href="${cleanBase}/contact">Contact</a></nav></main></div>`;
-    result = result.replace('<div id="root"></div>', crawlerSnapshot);
+    const noscriptSemantic = !meta.noindex
+      ? `\n    <noscript><main style="font-family:system-ui,sans-serif;max-width:960px;margin:0 auto;padding:24px;"><h1>${safeTitle}</h1><p>${safeDesc}</p><nav aria-label="NexGen Council Navigation"><a href="${cleanBase}/">Home</a> | <a href="${cleanBase}/about">About NexGen</a> | <a href="${cleanBase}/programs">Leadership Programs</a> | <a href="${cleanBase}/events">Events</a> | <a href="${cleanBase}/news">News</a> | <a href="${cleanBase}/team">Executive Leadership</a> | <a href="${cleanBase}/gallery">Gallery</a> | <a href="${cleanBase}/volunteer">Volunteer</a> | <a href="${cleanBase}/contact">Contact</a></nav></main></noscript>`
+      : '';
+
+    if (!meta.noindex && isSearchCrawlerUserAgent(userAgent)) {
+      const crawlerSnapshot = `<div id="root"><main style="font-family:system-ui,sans-serif;max-width:960px;margin:0 auto;padding:24px;"><h1>${safeTitle}</h1><p>${safeDesc}</p><nav aria-label="NexGen Council Navigation"><a href="${cleanBase}/">Home</a> | <a href="${cleanBase}/about">About NexGen</a> | <a href="${cleanBase}/programs">Leadership Programs</a> | <a href="${cleanBase}/events">Events</a> | <a href="${cleanBase}/news">News</a> | <a href="${cleanBase}/team">Executive Leadership</a> | <a href="${cleanBase}/gallery">Gallery</a> | <a href="${cleanBase}/volunteer">Volunteer</a> | <a href="${cleanBase}/contact">Contact</a></nav></main></div>`;
+      result = result.replace('<div id="root"></div>', crawlerSnapshot);
+    } else if (noscriptSemantic) {
+      result = result.replace('<div id="root"></div>', `<div id="root"></div>${noscriptSemantic}`);
+    }
   }
 
   return result;

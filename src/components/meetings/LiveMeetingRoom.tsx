@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useApp } from '../../context/AppContext.tsx';
 import {
   Users,
@@ -28,8 +28,15 @@ import {
   Share2,
   UserCheck,
   Megaphone,
-  Award
+  Award,
+  Minus,
+  Plus,
+  Clock,
+  PenTool,
+  Camera,
+  CircleDot
 } from 'lucide-react';
+import { MeetingWhiteboard, WhiteboardSnapshot } from './MeetingWhiteboard.tsx';
 
 declare global {
   interface Window {
@@ -60,7 +67,12 @@ interface LiveMeetingRoomProps {
   identity: string;
   displayName: string;
   userEmail?: string;
+  whiteboardOpen?: boolean;
+  onWhiteboardOpenChange?: (open: boolean) => void;
+  whiteboardSplitMode?: 'split' | 'full';
+  onWhiteboardSplitModeChange?: (mode: 'split' | 'full') => void;
   onLeave: (durationSeconds?: number, reason?: string) => void;
+  onMovedToWaiting?: () => void;
 }
 
 type DrawerType = 'participants' | 'chat' | 'host' | null;
@@ -75,9 +87,14 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
   identity,
   displayName,
   userEmail,
-  onLeave
+  whiteboardOpen: controlledWhiteboardOpen,
+  onWhiteboardOpenChange,
+  whiteboardSplitMode: controlledSplitMode,
+  onWhiteboardSplitModeChange,
+  onLeave,
+  onMovedToWaiting
 }) => {
-  const { addToast, authToken } = useApp();
+  const { addToast, authToken, currentUser } = useApp();
 
   const [jitsiLoading, setJitsiLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -93,6 +110,9 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
   const [isHandRaised, setIsHandRaised] = useState<boolean>(false);
   const [isScreenSharing, setIsScreenSharing] = useState<boolean>(false);
   const [isTileView, setIsTileView] = useState<boolean>(false);
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
 
   // Dynamic Live Host / Co-Host & Room Security State
   const [currentRole, setCurrentRole] = useState<string>(role || 'participant');
@@ -104,6 +124,12 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
     meeting?.screenShareEnabled !== false
   );
   const [chatDisabled, setChatDisabled] = useState<boolean>(false);
+  const [micsLocked, setMicsLocked] = useState<boolean>(false);
+  const [mediaStates, setMediaStates] = useState<Record<string, { audioMuted: boolean; videoMuted: boolean }>>({});
+  const [unmutePromptFromHost, setUnmutePromptFromHost] = useState<string | null>(null);
+  const [maxParticipants, setMaxParticipants] = useState<number>(meeting?.maxParticipants || 50);
+  const [capacityDraft, setCapacityDraft] = useState<string>(String(meeting?.maxParticipants || 50));
+  const [isUpdatingCapacity, setIsUpdatingCapacity] = useState<boolean>(false);
 
   const [raisedHands, setRaisedHands] = useState<RaisedHandEntry[]>([]);
   const [announcement, setAnnouncement] = useState<RoomAnnouncement | null>(null);
@@ -130,16 +156,43 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
 
   const [realtimeConnected, setRealtimeConnected] = useState<boolean>(false);
 
+  // Interactive Whiteboard State (controlled by MeetingRoomWrapper when provided)
+  const [internalWhiteboardOpen, setInternalWhiteboardOpen] = useState<boolean>(false);
+  const [internalSplitMode, setInternalSplitMode] = useState<'split' | 'full'>('split');
+  const [whiteboardSnapshot, setWhiteboardSnapshot] = useState<WhiteboardSnapshot | null>(null);
+  const [whiteboardEvent, setWhiteboardEvent] = useState<{ seq: number; payload: any } | null>(null);
+  const [whiteboardHasContent, setWhiteboardHasContent] = useState<boolean>(false);
+  const wbEventSeqRef = useRef<number>(0);
+  const lastSyncedWbVersionRef = useRef<number>(0);
+
+  const effectiveWhiteboardOpen =
+    controlledWhiteboardOpen !== undefined ? controlledWhiteboardOpen : internalWhiteboardOpen;
+  const setWhiteboardOpen = (next: boolean) => {
+    if (onWhiteboardOpenChange) onWhiteboardOpenChange(next);
+    else setInternalWhiteboardOpen(next);
+  };
+  const effectiveSplitMode =
+    controlledSplitMode !== undefined ? controlledSplitMode : internalSplitMode;
+  const setSplitMode = (next: 'split' | 'full') => {
+    if (onWhiteboardSplitModeChange) onWhiteboardSplitModeChange(next);
+    else setInternalSplitMode(next);
+  };
+
   const jitsiContainerRef = useRef<HTMLDivElement | null>(null);
   const jitsiApiRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
   const hasExitedRef = useRef(false);
+  const hasNotifiedLeaveRef = useRef(false);
   const meetingSecondsRef = useRef(0);
   const activeDrawerRef = useRef<DrawerType>(null);
   const localJitsiIdRef = useRef<string | null>(null);
   const isAudioMutedRef = useRef<boolean>(isAudioMuted);
+  const isVideoMutedRef = useRef<boolean>(isVideoMuted);
+  const micsLockedRef = useRef<boolean>(micsLocked);
+  const hostUnmuteGrantedRef = useRef<boolean>(false);
   const lastHandledMuteAllAtRef = useRef<number>(0);
+  const lastHandledStopAllVideoAtRef = useRef<number>(0);
   const jitsiParticipantsMapRef = useRef<Map<string, string>>(new Map());
 
   const isPrimaryHost = role === 'host' || meeting?.hostId === identity;
@@ -150,8 +203,26 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
   }, [role]);
 
   useEffect(() => {
+    if (typeof meeting?.maxParticipants === 'number' && meeting.maxParticipants >= 2) {
+      setMaxParticipants(meeting.maxParticipants);
+      setCapacityDraft(String(meeting.maxParticipants));
+    }
+  }, [meeting?.maxParticipants]);
+
+  useEffect(() => {
     isAudioMutedRef.current = isAudioMuted;
+    if (!isAudioMuted) {
+      setUnmutePromptFromHost(null);
+    }
   }, [isAudioMuted]);
+
+  useEffect(() => {
+    isVideoMutedRef.current = isVideoMuted;
+  }, [isVideoMuted]);
+
+  useEffect(() => {
+    micsLockedRef.current = micsLocked;
+  }, [micsLocked]);
 
   useEffect(() => {
     activeDrawerRef.current = activeDrawer;
@@ -165,14 +236,17 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
     meetingSecondsRef.current = meetingSeconds;
   }, [meetingSeconds]);
 
-  const buildControlHeaders = (withJson = false): Record<string, string> => {
-    const headers: Record<string, string> = {
-      'x-meeting-identity': identity
-    };
-    if (withJson) headers['Content-Type'] = 'application/json';
-    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
-    return headers;
-  };
+  const buildControlHeaders = useCallback(
+    (withJson = false): Record<string, string> => {
+      const headers: Record<string, string> = {
+        'x-meeting-identity': identity
+      };
+      if (withJson) headers['Content-Type'] = 'application/json';
+      if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+      return headers;
+    },
+    [identity, authToken]
+  );
 
   // Sync fullscreenchange listener
   useEffect(() => {
@@ -201,17 +275,39 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  const notifyServerLeave = () => {
-    if (!meeting?.id) return;
+  const notifyServerLeave = (preferBeacon = false) => {
+    if (!meeting?.id || hasNotifiedLeaveRef.current) return;
+    hasNotifiedLeaveRef.current = true;
+    const url = `/api/meetings/${meeting.id}/leave`;
+    const payload = JSON.stringify({ identity });
     try {
-      fetch(`/api/meetings/${meeting.id}/leave`, {
+      if (preferBeacon && typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+        const queued = navigator.sendBeacon(url, new Blob([payload], { type: 'application/json' }));
+        if (queued) return;
+      }
+      fetch(url, {
         method: 'POST',
         headers: buildControlHeaders(true),
-        body: JSON.stringify({ identity }),
+        body: payload,
         keepalive: true
       }).catch(() => {});
     } catch {}
   };
+
+  useEffect(() => {
+    const handleUnloadExit = () => {
+      notifyServerLeave(true);
+    };
+    window.addEventListener('pagehide', handleUnloadExit);
+    window.addEventListener('beforeunload', handleUnloadExit);
+    return () => {
+      window.removeEventListener('pagehide', handleUnloadExit);
+      window.removeEventListener('beforeunload', handleUnloadExit);
+      if (!hasExitedRef.current) {
+        notifyServerLeave(true);
+      }
+    };
+  }, [meeting?.id, identity]);
 
   const triggerSafeExit = (reason?: string, notifyLeave = false) => {
     if (hasExitedRef.current) return;
@@ -227,6 +323,44 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
       jitsiApiRef.current = null;
     }
     onLeave(meetingSecondsRef.current, reason);
+  };
+
+  const triggerMoveToWaiting = (reason?: string) => {
+    if (hasExitedRef.current) return;
+    hasExitedRef.current = true;
+    hasNotifiedLeaveRef.current = true;
+    if (jitsiApiRef.current) {
+      try {
+        jitsiApiRef.current.executeCommand('hangup');
+      } catch {}
+      try {
+        jitsiApiRef.current.dispose();
+      } catch {}
+      jitsiApiRef.current = null;
+    }
+    if (onMovedToWaiting) {
+      addToast(reason || 'The host moved you to the Waiting Lobby.', 'info');
+      onMovedToWaiting();
+    } else {
+      onLeave(meetingSecondsRef.current, reason || 'The host moved you to the Waiting Lobby.');
+    }
+  };
+
+  const reportLocalMediaState = (audioMutedVal: boolean, videoMutedVal: boolean) => {
+    if (!meeting?.id || !identity || hasExitedRef.current) return;
+    setMediaStates(prev => ({
+      ...prev,
+      [identity]: { audioMuted: audioMutedVal, videoMuted: videoMutedVal }
+    }));
+    fetch(`/api/meetings/${meeting.id}/media-state`, {
+      method: 'POST',
+      headers: buildControlHeaders(true),
+      body: JSON.stringify({
+        identity,
+        audioMuted: audioMutedVal,
+        videoMuted: videoMutedVal
+      })
+    }).catch(() => {});
   };
 
   const fetchWaitingAndParticipants = async () => {
@@ -252,10 +386,42 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
   };
 
   const muteLocalMicIfNeeded = (reasonText: string) => {
+    hostUnmuteGrantedRef.current = false;
     if (jitsiApiRef.current && !isAudioMutedRef.current) {
       try {
         jitsiApiRef.current.executeCommand('toggleAudio');
         setIsAudioMuted(true);
+        reportLocalMediaState(true, isVideoMutedRef.current);
+      } catch {}
+    }
+    addToast(reasonText, 'info');
+  };
+
+  const unmuteLocalMicFromHost = (triggeredBy?: string) => {
+    hostUnmuteGrantedRef.current = true;
+    if (jitsiApiRef.current && isAudioMutedRef.current) {
+      try {
+        jitsiApiRef.current.executeCommand('toggleAudio');
+        addToast(`${triggeredBy || 'Host'} unmuted your microphone.`, 'info');
+        setTimeout(() => {
+          if (isAudioMutedRef.current && !hasExitedRef.current) {
+            setUnmutePromptFromHost(triggeredBy || 'Host');
+          }
+        }, 900);
+      } catch {
+        setUnmutePromptFromHost(triggeredBy || 'Host');
+      }
+    } else {
+      addToast(`${triggeredBy || 'Host'} allowed your microphone.`, 'info');
+    }
+  };
+
+  const muteLocalVideoIfNeeded = (reasonText: string) => {
+    if (jitsiApiRef.current && !isVideoMutedRef.current) {
+      try {
+        jitsiApiRef.current.executeCommand('toggleVideo');
+        setIsVideoMuted(true);
+        reportLocalMediaState(isAudioMutedRef.current, true);
       } catch {}
     }
     addToast(reasonText, 'info');
@@ -266,6 +432,14 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
     lastHandledMuteAllAtRef.current = atTimestamp;
     if (!isHost) {
       muteLocalMicIfNeeded('Your microphone was muted by the host.');
+    }
+  };
+
+  const applyStopAllVideoFromHost = (atTimestamp: number) => {
+    if (!atTimestamp || atTimestamp <= lastHandledStopAllVideoAtRef.current) return;
+    lastHandledStopAllVideoAtRef.current = atTimestamp;
+    if (!isHost) {
+      muteLocalVideoIfNeeded('Host turned off all participant cameras.');
     }
   };
 
@@ -290,6 +464,14 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
           setIsRoomLocked(Boolean(data.meeting.isLocked));
           setIsWaitingRoomEnabled(Boolean(data.meeting.waitingRoomEnabled));
           setScreenSharingAllowed(data.meeting.screenShareEnabled !== false);
+          if (typeof data.meeting.maxParticipants === 'number' && data.meeting.maxParticipants >= 2) {
+            setMaxParticipants(data.meeting.maxParticipants);
+            setCapacityDraft(prev =>
+              document.activeElement?.getAttribute('data-capacity-input') === 'true'
+                ? prev
+                : String(data.meeting.maxParticipants)
+            );
+          }
           if (data.meeting.status === 'Ended' || data.meeting.status === 'Cancelled') {
             addToast('The host has ended this meeting for everyone.', 'info');
             triggerSafeExit('The host has ended this meeting for everyone.');
@@ -303,8 +485,19 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
           return;
         }
 
+        if (data.isMovedToWaiting) {
+          triggerMoveToWaiting('The host moved you to the Waiting Lobby.');
+          return;
+        }
+
         if (typeof data.chatDisabled === 'boolean') {
           setChatDisabled(data.chatDisabled);
+        }
+        if (typeof data.micsLocked === 'boolean') {
+          setMicsLocked(data.micsLocked);
+        }
+        if (data.mediaStates && typeof data.mediaStates === 'object') {
+          setMediaStates(data.mediaStates);
         }
         if (data.selfRole && !isPrimaryHost) {
           setCurrentRole(data.selfRole);
@@ -328,6 +521,41 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
           } else {
             lastHandledMuteAllAtRef.current = data.muteAllAt;
           }
+        }
+        if (
+          typeof data.stopAllVideoAt === 'number' &&
+          data.stopAllVideoAt > lastHandledStopAllVideoAtRef.current
+        ) {
+          if (lastHandledStopAllVideoAtRef.current !== 0) {
+            applyStopAllVideoFromHost(data.stopAllVideoAt);
+          } else {
+            lastHandledStopAllVideoAtRef.current = data.stopAllVideoAt;
+          }
+        }
+        if (typeof data.whiteboardElementCount === 'number') {
+          setWhiteboardHasContent(data.whiteboardElementCount > 0 || Boolean(data.whiteboardPresentedByHost));
+        }
+        if (
+          typeof data.whiteboardUpdatedAt === 'number' &&
+          data.whiteboardUpdatedAt > lastSyncedWbVersionRef.current
+        ) {
+          lastSyncedWbVersionRef.current = data.whiteboardUpdatedAt;
+          try {
+            const wbRes = await fetch(`/api/meetings/${meeting.id}/whiteboard`, {
+              headers: buildControlHeaders(false)
+            });
+            if (wbRes.ok && !disposed) {
+              const wbData = await wbRes.json();
+              if (wbData.whiteboard) {
+                setWhiteboardSnapshot(wbData.whiteboard);
+                wbEventSeqRef.current += 1;
+                setWhiteboardEvent({
+                  seq: wbEventSeqRef.current,
+                  payload: { type: 'whiteboard_snapshot_sync', whiteboard: wbData.whiteboard }
+                });
+              }
+            }
+          } catch {}
         }
       } catch {}
     };
@@ -356,13 +584,29 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                     payload.muteAllAt
                   );
                 }
+                if (typeof payload.stopAllVideoAt === 'number') {
+                  lastHandledStopAllVideoAtRef.current = Math.max(
+                    lastHandledStopAllVideoAtRef.current,
+                    payload.stopAllVideoAt
+                  );
+                }
                 if (payload.meeting) {
                   setIsRoomLocked(Boolean(payload.meeting.isLocked));
                   setIsWaitingRoomEnabled(Boolean(payload.meeting.waitingRoomEnabled));
                   setScreenSharingAllowed(payload.meeting.screenShareEnabled !== false);
+                  if (typeof payload.meeting.maxParticipants === 'number' && payload.meeting.maxParticipants >= 2) {
+                    setMaxParticipants(payload.meeting.maxParticipants);
+                    setCapacityDraft(String(payload.meeting.maxParticipants));
+                  }
                 }
                 if (typeof payload.chatDisabled === 'boolean') {
                   setChatDisabled(payload.chatDisabled);
+                }
+                if (typeof payload.micsLocked === 'boolean') {
+                  setMicsLocked(payload.micsLocked);
+                }
+                if (payload.mediaStates && typeof payload.mediaStates === 'object') {
+                  setMediaStates(payload.mediaStates);
                 }
                 if (Array.isArray(payload.raisedHands)) {
                   setRaisedHands(payload.raisedHands);
@@ -376,6 +620,24 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                 if (payload.selfRole && !isPrimaryHost) {
                   setCurrentRole(payload.selfRole);
                 }
+                if (payload.whiteboard) {
+                  setWhiteboardSnapshot(payload.whiteboard);
+                  lastSyncedWbVersionRef.current = Math.max(
+                    lastSyncedWbVersionRef.current,
+                    payload.whiteboard.updatedAt || 0
+                  );
+                  setWhiteboardHasContent(
+                    (payload.whiteboard.elements?.length || 0) > 0 || Boolean(payload.whiteboard.presentedByHost)
+                  );
+                  wbEventSeqRef.current += 1;
+                  setWhiteboardEvent({
+                    seq: wbEventSeqRef.current,
+                    payload: { type: 'whiteboard_snapshot_sync', whiteboard: payload.whiteboard }
+                  });
+                  if (payload.whiteboard.presentedByHost) {
+                    setWhiteboardOpen(true);
+                  }
+                }
                 break;
               }
               case 'meeting_ended': {
@@ -386,10 +648,24 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
               case 'participant_kicked': {
                 if (
                   payload.targetIdentity === identity ||
-                  payload.targetParticipantId === identity
+                  payload.targetParticipantId === identity ||
+                  (currentUser?.id && payload.targetUserId === currentUser.id)
                 ) {
                   addToast('You were removed from the meeting by the host.', 'error');
                   triggerSafeExit(payload.reason || 'You were removed from the meeting by the host.');
+                } else {
+                  fetchWaitingAndParticipants();
+                }
+                break;
+              }
+              case 'moved_to_waiting': {
+                if (
+                  !isPrimaryHost &&
+                  (payload.targetIdentity === identity ||
+                    payload.targetParticipantId === identity ||
+                    (currentUser?.id && payload.targetUserId === currentUser.id))
+                ) {
+                  triggerMoveToWaiting(payload.reason || 'The host moved you to the Waiting Lobby.');
                 } else {
                   fetchWaitingAndParticipants();
                 }
@@ -399,9 +675,39 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                 applyMuteAllFromHost(payload.at || Date.now());
                 break;
               }
+              case 'stop_all_video': {
+                applyStopAllVideoFromHost(payload.at || Date.now());
+                break;
+              }
               case 'mute_participant': {
-                if (payload.targetIdentity === identity) {
+                if (
+                  payload.targetIdentity === identity ||
+                  payload.targetParticipantId === identity ||
+                  (currentUser?.id && payload.targetUserId === currentUser.id)
+                ) {
                   muteLocalMicIfNeeded('Host muted your microphone.');
+                }
+                break;
+              }
+              case 'media_action': {
+                const isTarget =
+                  payload.targetIdentity === identity ||
+                  payload.targetParticipantId === identity ||
+                  (currentUser?.id && payload.targetUserId === currentUser.id);
+                if (isTarget) {
+                  if (payload.action === 'mute_audio') {
+                    muteLocalMicIfNeeded(`${payload.triggeredBy || 'Host'} muted your microphone.`);
+                  } else if (payload.action === 'unmute_audio') {
+                    unmuteLocalMicFromHost(payload.triggeredBy);
+                  } else if (payload.action === 'mute_video') {
+                    muteLocalVideoIfNeeded(`${payload.triggeredBy || 'Host'} turned off your camera.`);
+                  }
+                }
+                break;
+              }
+              case 'media_state_updated': {
+                if (payload.mediaStates && typeof payload.mediaStates === 'object') {
+                  setMediaStates(payload.mediaStates);
                 }
                 break;
               }
@@ -451,10 +757,21 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                 if (typeof payload.chatDisabled === 'boolean') {
                   setChatDisabled(payload.chatDisabled);
                 }
+                if (typeof payload.micsLocked === 'boolean') {
+                  setMicsLocked(payload.micsLocked);
+                }
+                if (typeof payload.maxParticipants === 'number' && payload.maxParticipants >= 2) {
+                  setMaxParticipants(payload.maxParticipants);
+                  setCapacityDraft(String(payload.maxParticipants));
+                }
                 if (payload.meeting) {
                   setIsRoomLocked(Boolean(payload.meeting.isLocked));
                   setIsWaitingRoomEnabled(Boolean(payload.meeting.waitingRoomEnabled));
                   setScreenSharingAllowed(payload.meeting.screenShareEnabled !== false);
+                  if (typeof payload.meeting.maxParticipants === 'number' && payload.meeting.maxParticipants >= 2) {
+                    setMaxParticipants(payload.meeting.maxParticipants);
+                    setCapacityDraft(String(payload.meeting.maxParticipants));
+                  }
                 }
                 break;
               }
@@ -476,6 +793,38 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                     }
                     return next;
                   });
+                }
+                break;
+              }
+              case 'whiteboard_op':
+              case 'whiteboard_live': {
+                if (typeof payload.updatedAt === 'number') {
+                  lastSyncedWbVersionRef.current = Math.max(
+                    lastSyncedWbVersionRef.current,
+                    payload.updatedAt
+                  );
+                }
+                if (payload.type === 'whiteboard_op') {
+                  if (payload.action === 'add') setWhiteboardHasContent(true);
+                  if (payload.action === 'clear' && payload.target === 'all') setWhiteboardHasContent(false);
+                }
+                wbEventSeqRef.current += 1;
+                setWhiteboardEvent({ seq: wbEventSeqRef.current, payload });
+                break;
+              }
+              case 'whiteboard_present': {
+                if (typeof payload.updatedAt === 'number') {
+                  lastSyncedWbVersionRef.current = Math.max(
+                    lastSyncedWbVersionRef.current,
+                    payload.updatedAt
+                  );
+                }
+                wbEventSeqRef.current += 1;
+                setWhiteboardEvent({ seq: wbEventSeqRef.current, payload });
+                if (payload.presented) {
+                  setWhiteboardHasContent(true);
+                  setWhiteboardOpen(true);
+                  addToast(`${payload.triggeredBy || 'Host'} opened the collaborative whiteboard.`, 'info');
                 }
                 break;
               }
@@ -638,6 +987,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             prejoinPageEnabled: false,
             enableWelcomePage: false,
             enableClosePage: false,
+            feedbackPercentage: 0,
             disableDeepLinking: true,
             disableInviteFunctions: true,
             hideAddRoomButton: true,
@@ -685,6 +1035,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
           if (isMounted) {
             if (info?.id) localJitsiIdRef.current = info.id;
             setJitsiLoading(false);
+            reportLocalMediaState(isAudioMutedRef.current, isVideoMutedRef.current);
           }
         });
 
@@ -700,17 +1051,38 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
               if (v === info.id) jitsiParticipantsMapRef.current.delete(k);
             }
           }
+          if (isMounted) {
+            setTimeout(() => {
+              if (isMounted && !hasExitedRef.current) {
+                fetchWaitingAndParticipants();
+              }
+            }, 700);
+          }
         });
 
         api.addEventListener('audioMuteStatusChanged', (e: any) => {
           if (isMounted && typeof e?.muted === 'boolean') {
+            if (!e.muted && micsLockedRef.current && !isHost && !hostUnmuteGrantedRef.current) {
+              try {
+                api.executeCommand('toggleAudio');
+              } catch {}
+              setIsAudioMuted(true);
+              reportLocalMediaState(true, isVideoMutedRef.current);
+              addToast('Microphones are locked by the host. Raise your hand to request unmute.', 'info');
+              return;
+            }
+            if (e.muted) {
+              hostUnmuteGrantedRef.current = false;
+            }
             setIsAudioMuted(e.muted);
+            reportLocalMediaState(e.muted, isVideoMutedRef.current);
           }
         });
 
         api.addEventListener('videoMuteStatusChanged', (e: any) => {
           if (isMounted && typeof e?.muted === 'boolean') {
             setIsVideoMuted(e.muted);
+            reportLocalMediaState(isAudioMutedRef.current, e.muted);
           }
         });
 
@@ -793,7 +1165,124 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
     }
   };
 
+  const handleStartStopRecording = async () => {
+    if (isRecording) {
+      if (mediaRecorderRef.current) {
+        mediaRecorderRef.current.stop();
+      }
+      setIsRecording(false);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: 'browser' },
+        audio: true
+      });
+
+      recordedChunksRef.current = [];
+      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9,opus' });
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          recordedChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+        stream.getTracks().forEach(t => t.stop());
+
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const base64data = reader.result as string;
+          try {
+            addToast('Saving meeting recording to admin archive...', 'info');
+            const res = await fetch(`/api/meetings/${meeting.id}/captures`, {
+              method: 'POST',
+              headers: buildControlHeaders(true),
+              body: JSON.stringify({
+                kind: 'recording',
+                dataUrl: base64data,
+                filename: `recording_${meeting.meetingCode}_${Date.now()}.webm`,
+                mimeType: 'video/webm',
+                hasAudio: true,
+                hasVideo: true
+              })
+            });
+            if (res.ok) {
+              addToast('Meeting recording successfully saved to Admin Archive!', 'success');
+            } else {
+              addToast('Failed to save meeting recording on server.', 'error');
+            }
+          } catch {
+            addToast('Error uploading recording.', 'error');
+          }
+        };
+        reader.readAsDataURL(blob);
+      };
+
+      recorder.start(1000);
+      setIsRecording(true);
+      addToast('Meeting recording started (Audio + Video).', 'success');
+    } catch (err: any) {
+      console.error('Recording error:', err);
+      addToast('Could not start recording. Screen share permission required.', 'error');
+    }
+  };
+
+  const handleTakeScreenshot = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: 'browser' },
+        audio: false
+      });
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      await video.play();
+
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 1280;
+      canvas.height = video.videoHeight || 720;
+      const ctx = canvas.getContext('2d');
+      ctx?.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/png');
+
+      video.pause();
+      video.srcObject = null;
+      stream.getTracks().forEach(t => t.stop());
+
+      if (!dataUrl) throw new Error('Failed to capture frame');
+
+      const res = await fetch(`/api/meetings/${meeting.id}/captures`, {
+        method: 'POST',
+        headers: buildControlHeaders(true),
+        body: JSON.stringify({
+          kind: 'screenshot',
+          dataUrl,
+          filename: `screenshot_${meeting.meetingCode}_${Date.now()}.png`,
+          mimeType: 'image/png',
+          hasVideo: true
+        })
+      });
+
+      if (res.ok) {
+        addToast('Meeting screenshot captured & saved to Admin Archive!', 'success');
+      } else {
+        addToast('Failed to save screenshot on server.', 'error');
+      }
+    } catch (err: any) {
+      console.error('Screenshot error:', err);
+      addToast('Could not take screenshot. Permission required.', 'error');
+    }
+  };
+
   const handleToggleAudio = () => {
+    if (isAudioMutedRef.current && micsLockedRef.current && !isHost && !hostUnmuteGrantedRef.current) {
+      addToast('Microphones are locked by the host. Raise your hand to speak.', 'info');
+      return;
+    }
     executeJitsiCommand('toggleAudio');
   };
 
@@ -878,18 +1367,100 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
   const handleMuteSingleParticipant = async (targetIdentity: string, pName: string) => {
     if (!isHost || !meeting?.id) return;
     try {
-      const res = await fetch(`/api/meetings/${meeting.id}/mute-participant`, {
+      const res = await fetch(`/api/meetings/${meeting.id}/participant-action`, {
         method: 'POST',
         headers: buildControlHeaders(true),
-        body: JSON.stringify({ targetIdentity, actorIdentity: identity })
+        body: JSON.stringify({ targetIdentity, action: 'mute_audio', actorIdentity: identity })
       });
       if (res.ok) {
-        addToast(`Mute signal sent to ${pName}.`, 'info');
+        addToast(`Muted ${pName}.`, 'info');
       } else {
         throw new Error('Mute participant failed');
       }
     } catch {
       addToast(`Could not mute ${pName}.`, 'error');
+    }
+  };
+
+  const handleParticipantAction = async (
+    targetIdentity: string,
+    action: 'mute_audio' | 'unmute_audio' | 'mute_video' | 'lower_hand' | 'move_to_lobby',
+    pName: string
+  ) => {
+    if (!isHost || !meeting?.id) return;
+    try {
+      const res = await fetch(`/api/meetings/${meeting.id}/participant-action`, {
+        method: 'POST',
+        headers: buildControlHeaders(true),
+        body: JSON.stringify({ targetIdentity, action, actorIdentity: identity })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || 'Action failed');
+      }
+      if (data.mediaStates) setMediaStates(data.mediaStates);
+      if (data.raisedHands) setRaisedHands(data.raisedHands);
+      if (action === 'move_to_lobby') {
+        fetchWaitingAndParticipants();
+      }
+      const labels: Record<string, string> = {
+        mute_audio: `Muted ${pName}'s microphone.`,
+        unmute_audio: `Sent unmute to ${pName}.`,
+        mute_video: `Turned off ${pName}'s camera.`,
+        lower_hand: `Lowered ${pName}'s raised hand.`,
+        move_to_lobby: `Moved ${pName} to the Waiting Lobby.`
+      };
+      addToast(labels[action] || 'Action applied.', 'info');
+    } catch (err: any) {
+      addToast(err.message || `Could not perform action for ${pName}.`, 'error');
+    }
+  };
+
+  const handleToggleMicsLock = async () => {
+    if (!isHost || !meeting?.id) return;
+    const nextLocked = !micsLocked;
+    try {
+      if (nextLocked && jitsiApiRef.current) {
+        try {
+          jitsiApiRef.current.executeCommand('muteEveryone', 'audio');
+        } catch {}
+      }
+      const res = await fetch(`/api/meetings/${meeting.id}/mics-lock`, {
+        method: 'POST',
+        headers: buildControlHeaders(true),
+        body: JSON.stringify({ micsLocked: nextLocked, actorIdentity: identity })
+      });
+      if (res.ok) {
+        setMicsLocked(nextLocked);
+        addToast(
+          nextLocked
+            ? 'Participant mics locked — only host can unmute.'
+            : 'Participant mics unlocked.',
+          'info'
+        );
+      } else {
+        throw new Error('Failed');
+      }
+    } catch {
+      addToast('Could not update mic lock setting.', 'error');
+    }
+  };
+
+  const handleStopAllCameras = async () => {
+    if (!isHost || !meeting?.id) return;
+    try {
+      const res = await fetch(`/api/meetings/${meeting.id}/stop-all-video`, {
+        method: 'POST',
+        headers: buildControlHeaders(true),
+        body: JSON.stringify({ actorIdentity: identity })
+      });
+      if (res.ok) {
+        addToast('All participant cameras turned off.', 'success');
+      } else {
+        throw new Error('Failed');
+      }
+    } catch {
+      addToast('Could not turn off all cameras.', 'error');
     }
   };
 
@@ -1061,6 +1632,32 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
     }
   };
 
+  const handleUpdateMaxParticipants = async (nextLimit: number) => {
+    if (!isHost || !meeting?.id || isUpdatingCapacity) return;
+    const clamped = Math.max(2, Math.min(1000, Math.round(nextLimit)));
+    setIsUpdatingCapacity(true);
+    try {
+      const res = await fetch(`/api/meetings/${meeting.id}/max-participants`, {
+        method: 'POST',
+        headers: buildControlHeaders(true),
+        body: JSON.stringify({ maxParticipants: clamped, actorIdentity: identity })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || 'Could not update room capacity');
+      }
+      const updatedCap = data.maxParticipants || clamped;
+      setMaxParticipants(updatedCap);
+      setCapacityDraft(String(updatedCap));
+      addToast(`Max participants updated to ${updatedCap}.`, 'success');
+    } catch (err: any) {
+      addToast(err.message || 'Could not update room capacity.', 'error');
+      setCapacityDraft(String(maxParticipants));
+    } finally {
+      setIsUpdatingCapacity(false);
+    }
+  };
+
   const handleAdmitParticipant = async (pId: string, admitAll = false) => {
     try {
       const res = await fetch(`/api/meetings/${meeting.id}/admit`, {
@@ -1068,10 +1665,17 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
         headers: buildControlHeaders(true),
         body: JSON.stringify({ participantId: pId, admitAll, actorIdentity: identity })
       });
+      const data = await res.json().catch(() => ({}));
 
       if (res.ok) {
-        addToast(admitAll ? 'Admitted all waiting participants' : 'Participant admitted', 'success');
-        setWaitingParticipants(prev => (admitAll ? [] : prev.filter(w => w.id !== pId)));
+        addToast(data.message || (admitAll ? 'Admitted all waiting participants' : 'Participant admitted'), 'success');
+        if (admitAll) {
+          fetchWaitingAndParticipants();
+        } else {
+          setWaitingParticipants(prev => prev.filter(w => w.id !== pId));
+        }
+      } else {
+        addToast(data.error || 'Error admitting participant', 'error');
       }
     } catch {
       addToast('Error admitting participant', 'error');
@@ -1231,6 +1835,13 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                   <span className="hidden md:inline text-slate-500">{meeting.meetingCode}</span>
                 </>
               )}
+              <span aria-hidden="true" className="hidden sm:inline">·</span>
+              <span
+                className="hidden sm:inline text-slate-400"
+                title="Active Participants / Room Capacity"
+              >
+                {participantsList.length}/{maxParticipants}
+              </span>
             </div>
           </div>
         </div>
@@ -1332,9 +1943,54 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
         </div>
       )}
 
-      {/* Main Stage */}
-      <main className="flex-1 min-h-0 w-full relative flex overflow-hidden">
-        <div className="flex-1 min-w-0 min-h-0 relative bg-slate-950 w-full h-full flex flex-col">
+      {/* Live Host Unmute Request Prompt */}
+      {unmutePromptFromHost && isAudioMuted && (
+        <div className="bg-emerald-500/15 border-b border-emerald-500/30 px-3 sm:px-5 py-2 flex items-center justify-between gap-3 shrink-0 z-20">
+          <div className="flex items-center gap-2 min-w-0 text-xs text-emerald-100">
+            <Mic className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span className="font-medium truncate sm:whitespace-normal">
+              <strong>{unmutePromptFromHost}</strong> is asking to unmute your microphone.
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                hostUnmuteGrantedRef.current = true;
+                setUnmutePromptFromHost(null);
+                executeJitsiCommand('toggleAudio');
+              }}
+              className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer"
+            >
+              Unmute Mic
+            </button>
+            <button
+              type="button"
+              onClick={() => setUnmutePromptFromHost(null)}
+              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs cursor-pointer"
+            >
+              Stay Muted
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Main Stage (Always keeps Jitsi IFrame mounted in DOM while allowing Split/Full Whiteboard) */}
+      <main
+        className={`flex-1 min-h-0 w-full relative flex overflow-hidden ${
+          effectiveWhiteboardOpen && effectiveSplitMode === 'split' ? 'flex-col lg:flex-row' : ''
+        }`}
+      >
+        <div
+          key="jitsi-stage-wrapper"
+          className={
+            !effectiveWhiteboardOpen
+              ? 'flex-1 min-w-0 min-h-0 relative bg-slate-950 w-full h-full flex flex-col'
+              : effectiveSplitMode === 'split'
+              ? 'order-1 lg:order-2 w-full h-40 sm:h-48 lg:h-full lg:w-80 xl:w-96 relative bg-slate-950 border-b lg:border-b-0 lg:border-l border-slate-800 shrink-0 flex flex-col'
+              : 'fixed bottom-20 right-3 sm:right-5 w-40 h-28 sm:w-64 sm:h-40 rounded-2xl border border-slate-700 shadow-2xl z-30 bg-slate-950 overflow-hidden flex flex-col'
+          }
+        >
           {/* Connecting Overlay */}
           {jitsiLoading && (
             <div className="absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center z-10 p-6 text-center space-y-4">
@@ -1389,6 +2045,30 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
           />
         </div>
 
+        {effectiveWhiteboardOpen && (
+          <div
+            key="whiteboard-stage-wrapper"
+            className="order-2 lg:order-1 flex-1 min-w-0 min-h-0 h-full flex flex-col"
+          >
+            <MeetingWhiteboard
+              meetingId={meeting.id}
+              meetingCode={meeting.meetingCode}
+              identity={identity}
+              displayName={displayName}
+              isHost={isHost}
+              buildHeaders={buildControlHeaders}
+              onToast={addToast}
+              initialSnapshot={whiteboardSnapshot}
+              externalEvent={whiteboardEvent}
+              splitVideoMode={effectiveSplitMode}
+              onToggleSplitVideoMode={() =>
+                setSplitMode(effectiveSplitMode === 'split' ? 'full' : 'split')
+              }
+              onClose={() => setWhiteboardOpen(false)}
+            />
+          </div>
+        )}
+
         {/* Mobile Sheet Backdrop */}
         {activeDrawer && (
           <div
@@ -1408,7 +2088,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                 {activeDrawer === 'participants' && (
                   <>
                     <Users className="w-4 h-4 text-blue-400" />
-                    <span>Participants ({participantsList.length})</span>
+                    <span>Participants ({participantsList.length} / {maxParticipants})</span>
                   </>
                 )}
                 {activeDrawer === 'chat' && (
@@ -1450,6 +2130,28 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                     >
                       <VolumeX className="w-4 h-4 text-amber-400 shrink-0" />
                       <span>Mute Everyone</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleToggleMicsLock}
+                      className={`min-h-[44px] px-3 py-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-colors ${
+                        micsLocked
+                          ? 'bg-rose-500/15 border-rose-500/40 text-rose-200'
+                          : 'bg-slate-950 border-slate-800 hover:border-slate-600 text-slate-100'
+                      }`}
+                    >
+                      <MicOff className="w-4 h-4 shrink-0" />
+                      <span>Mics: {micsLocked ? 'Locked' : 'Open'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleStopAllCameras}
+                      className="min-h-[44px] px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-amber-500/50 text-xs font-semibold text-slate-100 flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <VideoOff className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>Stop All Cams</span>
                     </button>
 
                     <button
@@ -1529,7 +2231,130 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                       )}
                       <span>{copiedLink ? 'Copied' : 'Private Link'}</span>
                     </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setWhiteboardOpen(!effectiveWhiteboardOpen);
+                        setActiveDrawer(null);
+                      }}
+                      className={`col-span-2 min-h-[44px] px-3 py-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-colors ${
+                        effectiveWhiteboardOpen
+                          ? 'bg-indigo-600 border-indigo-500 text-white'
+                          : 'bg-slate-950 border-slate-800 hover:border-indigo-500/50 text-indigo-200'
+                      }`}
+                    >
+                      <PenTool className="w-4 h-4 shrink-0" />
+                      <span>{effectiveWhiteboardOpen ? 'Close Whiteboard View' : 'Open Interactive Whiteboard'}</span>
+                    </button>
                   </div>
+                </div>
+
+                {/* Room Participant Capacity (Increase / Decrease Live) */}
+                <div className="space-y-2.5 border-t border-slate-800 pt-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                      <Users className="w-3.5 h-3.5 text-blue-400" />
+                      <span>Room Capacity (Max Participants)</span>
+                    </span>
+                    <span className="px-2 py-0.5 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-mono text-amber-300 tabular-nums">
+                      {participantsList.length} / {maxParticipants}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={isUpdatingCapacity || maxParticipants <= 2}
+                      onClick={() => handleUpdateMaxParticipants(maxParticipants - 10)}
+                      className="min-h-[38px] px-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-600 disabled:opacity-40 text-xs font-semibold text-slate-200 cursor-pointer tabular-nums shrink-0"
+                      title="Decrease max capacity by 10"
+                    >
+                      -10
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isUpdatingCapacity || maxParticipants <= 2}
+                      onClick={() => handleUpdateMaxParticipants(maxParticipants - 1)}
+                      aria-label="Decrease max participants"
+                      className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-600 disabled:opacity-40 text-slate-200 cursor-pointer shrink-0"
+                    >
+                      <Minus className="w-3.5 h-3.5" />
+                    </button>
+                    <input
+                      type="number"
+                      min={2}
+                      max={1000}
+                      data-capacity-input="true"
+                      value={capacityDraft}
+                      onChange={(e) => setCapacityDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const parsed = parseInt(capacityDraft, 10);
+                          if (!Number.isNaN(parsed)) handleUpdateMaxParticipants(parsed);
+                        }
+                      }}
+                      className="flex-1 min-w-0 min-h-[38px] px-2 text-center text-xs font-bold bg-slate-950 border border-slate-800 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
+                      aria-label="Room max participants"
+                    />
+                    <button
+                      type="button"
+                      disabled={isUpdatingCapacity || maxParticipants >= 1000}
+                      onClick={() => handleUpdateMaxParticipants(maxParticipants + 1)}
+                      aria-label="Increase max participants"
+                      className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-600 disabled:opacity-40 text-slate-200 cursor-pointer shrink-0"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isUpdatingCapacity || maxParticipants >= 1000}
+                      onClick={() => handleUpdateMaxParticipants(maxParticipants + 10)}
+                      className="min-h-[38px] px-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-600 disabled:opacity-40 text-xs font-semibold text-slate-200 cursor-pointer tabular-nums shrink-0"
+                      title="Increase max capacity by 10"
+                    >
+                      +10
+                    </button>
+                  </div>
+
+                  {Number(capacityDraft) !== maxParticipants && capacityDraft.trim() !== '' && (
+                    <button
+                      type="button"
+                      disabled={isUpdatingCapacity}
+                      onClick={() => {
+                        const parsed = parseInt(capacityDraft, 10);
+                        if (!Number.isNaN(parsed)) handleUpdateMaxParticipants(parsed);
+                      }}
+                      className="w-full min-h-[36px] rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold cursor-pointer transition-colors"
+                    >
+                      Apply Limit ({Math.max(2, Math.min(1000, parseInt(capacityDraft, 10) || maxParticipants))})
+                    </button>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {[25, 50, 100, 250, 500].map(preset => (
+                      <button
+                        key={preset}
+                        type="button"
+                        disabled={isUpdatingCapacity}
+                        onClick={() => handleUpdateMaxParticipants(preset)}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer tabular-nums ${
+                          maxParticipants === preset
+                            ? 'bg-blue-600 border-blue-500 text-white'
+                            : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-600'
+                        }`}
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+
+                  {participantsList.length > maxParticipants && (
+                    <p className="text-[11px] text-amber-300 leading-snug">
+                      Active count ({participantsList.length}) is above {maxParticipants}. Existing attendees stay connected, but new joins are paused until below limit.
+                    </p>
+                  )}
                 </div>
 
                 {/* Live Room Announcement Broadcaster */}
@@ -1637,6 +2462,39 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             {/* Participants Roster Tab (with Raised Hand Queue & Moderator Individual Controls) */}
             {activeDrawer === 'participants' && (
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {isHost && (
+                  <div className="grid grid-cols-3 gap-1.5 pb-1">
+                    <button
+                      type="button"
+                      onClick={handleMuteAllParticipants}
+                      className="min-h-[36px] px-2 py-1.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-amber-500/50 text-[11px] font-semibold text-slate-200 flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <VolumeX className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>Mute All</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleToggleMicsLock}
+                      className={`min-h-[36px] px-2 py-1.5 rounded-xl border text-[11px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer ${
+                        micsLocked
+                          ? 'bg-rose-500/15 border-rose-500/40 text-rose-200'
+                          : 'bg-slate-950 border-slate-800 hover:border-slate-600 text-slate-200'
+                      }`}
+                    >
+                      <MicOff className="w-3.5 h-3.5 shrink-0" />
+                      <span>{micsLocked ? 'Unlock Mics' : 'Lock Mics'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleStopAllCameras}
+                      className="min-h-[36px] px-2 py-1.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-amber-500/50 text-[11px] font-semibold text-slate-200 flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <VideoOff className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>Stop Cams</span>
+                    </button>
+                  </div>
+                )}
+
                 {raisedHands.length > 0 && (
                   <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3 space-y-2">
                     <div className="flex items-center justify-between">
@@ -1675,40 +2533,57 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                   participantsList.map((p, idx) => {
                     const pKey = p.identity || p.id;
                     const isSelf = pKey === identity || p.displayName === displayName;
-                    const handUp = raisedHands.some(h => h.identity === pKey);
+                    const handUp = raisedHands.some(h => h.identity === pKey || h.identity === p.id);
                     const pRole = p.role || (p.displayName === meeting?.hostName ? 'host' : 'participant');
+                    const pMedia = mediaStates[pKey] || (p.identity ? mediaStates[p.identity] : undefined);
+                    const pAudioMuted = isSelf ? isAudioMuted : Boolean(pMedia?.audioMuted);
+                    const pVideoMuted = isSelf ? isVideoMuted : Boolean(pMedia?.videoMuted);
 
                     return (
                       <div
                         key={p.id || idx}
-                        className="flex items-center justify-between gap-2 p-3 bg-slate-950 rounded-xl border border-slate-800/80 text-xs"
+                        className="flex flex-col gap-2 p-3 bg-slate-950 rounded-xl border border-slate-800/80 text-xs"
                       >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <div className="w-9 h-9 rounded-full bg-slate-800 text-amber-300 font-bold flex items-center justify-center text-xs border border-slate-700 shrink-0">
-                            {p.displayName ? p.displayName.slice(0, 2).toUpperCase() : 'PT'}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="font-semibold text-white truncate flex items-center gap-1.5">
-                              <span>{p.displayName} {isSelf && '(You)'}</span>
-                              {handUp && <span title="Hand raised">✋</span>}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="w-9 h-9 rounded-full bg-slate-800 text-amber-300 font-bold flex items-center justify-center text-xs border border-slate-700 shrink-0">
+                              {p.displayName ? p.displayName.slice(0, 2).toUpperCase() : 'PT'}
                             </div>
-                            <div className="text-[11px] text-slate-500 capitalize flex items-center gap-1.5">
-                              <span className={pRole === 'co-host' ? 'text-amber-300 font-semibold' : ''}>
-                                {pRole}
-                              </span>
+                            <div className="min-w-0">
+                              <div className="font-semibold text-white truncate flex items-center gap-1.5">
+                                <span className="truncate">{p.displayName} {isSelf && '(You)'}</span>
+                                {handUp && <span title="Hand raised">✋</span>}
+                              </div>
+                              <div className="text-[11px] text-slate-500 capitalize flex items-center gap-2">
+                                <span className={pRole === 'co-host' ? 'text-amber-300 font-semibold' : ''}>
+                                  {pRole}
+                                </span>
+                                <span className={pAudioMuted ? 'text-rose-400' : 'text-emerald-400'}>
+                                  {pAudioMuted ? 'Muted' : 'Mic On'}
+                                </span>
+                                {pVideoMuted && <span className="text-slate-500">Cam Off</span>}
+                              </div>
                             </div>
                           </div>
+
+                          {!isHost && (
+                            <div className="flex items-center gap-1 shrink-0 text-slate-400">
+                              {pAudioMuted ? <MicOff className="w-3.5 h-3.5 text-rose-400" /> : <Mic className="w-3.5 h-3.5 text-emerald-400" />}
+                              {pVideoMuted ? <VideoOff className="w-3.5 h-3.5 text-slate-500" /> : <Video className="w-3.5 h-3.5 text-blue-400" />}
+                            </div>
+                          )}
                         </div>
 
                         {isHost && !isSelf && (
                           confirmKickIdentity === pKey ? (
-                            <div className="flex items-center gap-1 shrink-0">
+                            <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-slate-900">
+                              <span className="text-[11px] text-rose-300 mr-auto">Force leave room?</span>
                               <button
                                 type="button"
                                 onClick={() => handleKickParticipant(pKey, p.displayName)}
-                                className="px-2.5 py-1.5 rounded-lg bg-rose-600 text-white text-[11px] font-bold cursor-pointer"
+                                className="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-bold cursor-pointer"
                               >
-                                Remove
+                                Remove / Leave
                               </button>
                               <button
                                 type="button"
@@ -1719,23 +2594,57 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                               </button>
                             </div>
                           ) : (
-                            <div className="flex items-center gap-1 shrink-0">
+                            <div className="flex flex-wrap items-center gap-1 pt-1 border-t border-slate-900">
                               <button
                                 type="button"
-                                onClick={() => handleMuteSingleParticipant(pKey, p.displayName)}
-                                className="min-h-[34px] min-w-[34px] flex items-center justify-center rounded-lg text-slate-400 hover:text-amber-300 hover:bg-amber-500/10 cursor-pointer"
-                                title={`Mute ${p.displayName}`}
+                                onClick={() =>
+                                  pAudioMuted
+                                    ? handleParticipantAction(pKey, 'unmute_audio', p.displayName)
+                                    : handleMuteSingleParticipant(pKey, p.displayName)
+                                }
+                                className={`min-h-[30px] px-2 py-1 rounded-lg text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer transition-colors ${
+                                  pAudioMuted
+                                    ? 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25'
+                                    : 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
+                                }`}
+                                title={pAudioMuted ? `Unmute ${p.displayName}` : `Mute ${p.displayName}`}
                               >
-                                <MicOff className="w-3.5 h-3.5" />
+                                {pAudioMuted ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
+                                <span>{pAudioMuted ? 'Unmute' : 'Mute'}</span>
                               </button>
+
+                              {!pVideoMuted && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleParticipantAction(pKey, 'mute_video', p.displayName)}
+                                  className="min-h-[30px] px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-amber-300 hover:border-amber-500/40 text-[11px] font-medium inline-flex items-center gap-1 cursor-pointer"
+                                  title={`Turn off ${p.displayName}'s camera`}
+                                >
+                                  <VideoOff className="w-3 h-3" />
+                                  <span>Cam Off</span>
+                                </button>
+                              )}
+
+                              {handUp && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleParticipantAction(pKey, 'lower_hand', p.displayName)}
+                                  className="min-h-[30px] px-2 py-1 rounded-lg bg-amber-500/15 text-amber-200 hover:bg-amber-500/25 text-[11px] font-medium inline-flex items-center gap-1 cursor-pointer"
+                                  title={`Lower ${p.displayName}'s hand`}
+                                >
+                                  <Hand className="w-3 h-3" />
+                                  <span>Lower</span>
+                                </button>
+                              )}
+
                               {isPrimaryHost && pRole !== 'host' && (
                                 <button
                                   type="button"
                                   onClick={() => handleToggleCoHostRole(pKey, pRole, p.displayName)}
-                                  className={`min-h-[34px] min-w-[34px] flex items-center justify-center rounded-lg cursor-pointer ${
+                                  className={`min-h-[30px] px-2 py-1 rounded-lg text-[11px] font-medium inline-flex items-center gap-1 cursor-pointer ${
                                     pRole === 'co-host'
                                       ? 'text-amber-300 bg-amber-500/15 hover:bg-amber-500/25'
-                                      : 'text-slate-400 hover:text-amber-300 hover:bg-slate-800'
+                                      : 'bg-slate-900 border border-slate-800 text-slate-300 hover:text-amber-300'
                                   }`}
                                   title={
                                     pRole === 'co-host'
@@ -1743,16 +2652,31 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
                                       : `Promote ${p.displayName} to Co-Host`
                                   }
                                 >
-                                  <Award className="w-3.5 h-3.5" />
+                                  <Award className="w-3 h-3" />
+                                  <span>{pRole === 'co-host' ? 'Co-Host' : 'Make Host'}</span>
                                 </button>
                               )}
+
+                              {pRole !== 'host' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleParticipantAction(pKey, 'move_to_lobby', p.displayName)}
+                                  className="min-h-[30px] px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-indigo-300 hover:border-indigo-500/40 text-[11px] font-medium inline-flex items-center gap-1 cursor-pointer"
+                                  title={`Send ${p.displayName} back to Waiting Lobby`}
+                                >
+                                  <Clock className="w-3 h-3" />
+                                  <span>Lobby</span>
+                                </button>
+                              )}
+
                               <button
                                 type="button"
                                 onClick={() => setConfirmKickIdentity(pKey)}
-                                className="min-h-[34px] min-w-[34px] flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 cursor-pointer"
-                                title="Remove Participant"
+                                className="min-h-[30px] px-2 py-1 rounded-lg bg-rose-500/15 text-rose-300 hover:bg-rose-500/25 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer ml-auto"
+                                title={`Remove ${p.displayName} from meeting`}
                               >
-                                <UserX className="w-3.5 h-3.5" />
+                                <UserX className="w-3 h-3" />
+                                <span>Leave</span>
                               </button>
                             </div>
                           )
@@ -1884,6 +2808,55 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             </button>
           )}
 
+          {/* Interactive Whiteboard */}
+          <button
+            type="button"
+            onClick={() => setWhiteboardOpen(!effectiveWhiteboardOpen)}
+            aria-label="Toggle interactive whiteboard"
+            className={`relative min-h-[44px] min-w-[44px] sm:px-3.5 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
+              effectiveWhiteboardOpen
+                ? 'bg-indigo-600 text-white'
+                : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
+            }`}
+          >
+            <PenTool className="w-4 h-4 shrink-0" />
+            <span className="leading-none">Board</span>
+            {whiteboardHasContent && !effectiveWhiteboardOpen && (
+              <span
+                className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-indigo-400"
+                title="Shared whiteboard has active content"
+              />
+            )}
+          </button>
+
+          {/* Record Audio + Video */}
+          <button
+            type="button"
+            onClick={handleStartStopRecording}
+            aria-label={isRecording ? 'Stop meeting recording' : 'Start meeting recording'}
+            className={`min-h-[44px] min-w-[44px] sm:px-3.5 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
+              isRecording
+                ? 'bg-rose-600 text-white animate-pulse'
+                : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
+            }`}
+            title="Record Audio & Video (Saved to Admin Archive with 3-day TTL)"
+          >
+            <CircleDot className={`w-4 h-4 shrink-0 ${isRecording ? 'text-white' : 'text-rose-400'}`} />
+            <span className="leading-none">{isRecording ? 'Recing' : 'Record'}</span>
+          </button>
+
+          {/* Screenshot */}
+          <button
+            type="button"
+            onClick={handleTakeScreenshot}
+            aria-label="Take screenshot"
+            className="min-h-[44px] min-w-[44px] sm:px-3.5 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer"
+            title="Take Screenshot (Saved to Admin Archive)"
+          >
+            <Camera className="w-4 h-4 text-blue-400 shrink-0" />
+            <span className="leading-none">Snap</span>
+          </button>
+
           {/* Tile Grid View */}
           <button
             type="button"
@@ -1939,7 +2912,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             )}
             {participantsList.length > 0 && (
               <span className="hidden sm:inline font-mono text-[10px] opacity-80 tabular-nums">
-                ({participantsList.length})
+                ({participantsList.length}/{maxParticipants})
               </span>
             )}
           </button>

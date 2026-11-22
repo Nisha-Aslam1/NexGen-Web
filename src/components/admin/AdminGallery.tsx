@@ -144,8 +144,16 @@ export const AdminGallery: React.FC = () => {
             className="group relative rounded-2xl overflow-hidden bg-slate-900 aspect-square shadow-xs hover:shadow-lg transition-all"
           >
             <img
-              src={item.imageUrl}
+              src={item.imageUrl || '/banner.png'}
               alt={item.title}
+              referrerPolicy="no-referrer"
+              onError={(e) => {
+                const el = e.currentTarget;
+                if (!el.dataset.fallbackApplied) {
+                  el.dataset.fallbackApplied = '1';
+                  el.src = '/banner.png';
+                }
+              }}
               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-slate-950/20 to-transparent opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity p-3 flex flex-col justify-between">

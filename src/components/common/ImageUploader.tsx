@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { Upload, Link as LinkIcon, Image as ImageIcon, X, CheckCircle2, Loader2 } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Upload, Link as LinkIcon, Image as ImageIcon, X, CheckCircle2, Loader2, AlertTriangle } from 'lucide-react';
 import { authFetch } from '../../lib/api.ts';
 
 interface ImageUploaderProps {
@@ -9,20 +9,34 @@ interface ImageUploaderProps {
   helperText?: string;
 }
 
+const IMAGE_EXT_REGEX = /\.(png|jpe?g|webp|gif|svg|bmp|avif|ico)$/i;
+const RASTER_NATIVE_MIMES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']);
+
 export const ImageUploader: React.FC<ImageUploaderProps> = ({
   value,
   onChange,
   label = 'Image / Visual Asset',
   helperText = 'Upload from your device or paste an external image URL'
 }) => {
-  const [activeTab, setActiveTab] = useState<'upload' | 'url'>(value.startsWith('/uploads/') || value.startsWith('data:') ? 'upload' : 'upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'url'>(
+    value && !value.startsWith('/uploads/') && !value.startsWith('data:') && !value.startsWith('/')
+      ? 'url'
+      : 'upload'
+  );
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    setPreviewError(false);
+  }, [value]);
+
   const processFile = async (file: File) => {
-    if (!file.type.startsWith('image/')) {
+    const isImageMime = file.type.startsWith('image/');
+    const isImageExt = IMAGE_EXT_REGEX.test(file.name);
+    if (!isImageMime && !isImageExt) {
       setError('Please choose a valid image file (JPG, PNG, WebP, GIF, SVG).');
       return;
     }
@@ -45,13 +59,12 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
 
       let uploadDataUrl = rawDataUrl;
       let uploadFilename = file.name;
+      const isSvg = file.type === 'image/svg+xml' || /\.svg$/i.test(file.name);
+      const isGif = file.type === 'image/gif' || /\.gif$/i.test(file.name);
+      const isDirectlySupportedRaster = RASTER_NATIVE_MIMES.has(file.type.toLowerCase());
 
-      // Compress raster images above ~450KB so base64 payloads stay safely below Nginx's 1MB default limit
-      if (
-        rawDataUrl.length > 450_000 &&
-        file.type !== 'image/svg+xml' &&
-        file.type !== 'image/gif'
-      ) {
+      // Convert non-standard formats (SVG, BMP, AVIF, empty-MIME) or large raster files (>450KB) cleanly to PNG/JPEG via Canvas
+      if ((!isDirectlySupportedRaster && !isGif) || (rawDataUrl.length > 450_000 && !isGif)) {
         try {
           const img = await new Promise<HTMLImageElement>((resolve, reject) => {
             const el = new Image();
@@ -59,8 +72,8 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
             el.onerror = () => reject(new Error('Could not decode image'));
             el.src = rawDataUrl;
           });
-          let w = img.naturalWidth || img.width;
-          let h = img.naturalHeight || img.height;
+          let w = img.naturalWidth || img.width || 800;
+          let h = img.naturalHeight || img.height || 800;
           const maxDim = 1400;
           if (w > maxDim || h > maxDim) {
             const s = Math.min(maxDim / w, maxDim / h);
@@ -72,18 +85,38 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
           canvas.height = h;
           const ctx = canvas.getContext('2d');
           if (ctx) {
+            ctx.clearRect(0, 0, w, h);
             ctx.drawImage(img, 0, 0, w, h);
-            for (const q of [0.85, 0.72, 0.6]) {
-              const candidate = canvas.toDataURL('image/jpeg', q);
-              if (candidate.length <= 720_000 || q === 0.6) {
-                uploadDataUrl = candidate;
-                uploadFilename = file.name.replace(/\.[^.]+$/, '') + '.jpg';
-                break;
+            if (isSvg || file.type === 'image/png') {
+              const pngCandidate = canvas.toDataURL('image/png');
+              if (pngCandidate.length <= 720_000) {
+                uploadDataUrl = pngCandidate;
+                uploadFilename = file.name.replace(/\.[^.]+$/, '') + '.png';
+              } else {
+                for (const q of [0.85, 0.72, 0.6]) {
+                  const candidate = canvas.toDataURL('image/jpeg', q);
+                  if (candidate.length <= 720_000 || q === 0.6) {
+                    uploadDataUrl = candidate;
+                    uploadFilename = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+                    break;
+                  }
+                }
+              }
+            } else {
+              for (const q of [0.85, 0.72, 0.6]) {
+                const candidate = canvas.toDataURL('image/jpeg', q);
+                if (candidate.length <= 720_000 || q === 0.6) {
+                  uploadDataUrl = candidate;
+                  uploadFilename = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+                  break;
+                }
               }
             }
           }
         } catch {
-          // Fall back to original dataUrl if canvas optimization is unavailable
+          if (!isDirectlySupportedRaster) {
+            throw new Error('Could not convert this image format. Please try a PNG, JPG, or WebP file.');
+          }
         }
       }
 
@@ -110,6 +143,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
       if (!res.ok) throw new Error(data.error || 'Upload failed');
 
       onChange(data.url);
+      setPreviewError(false);
       setUploading(false);
     } catch (e: any) {
       setError(e.message || 'Upload error');
@@ -121,6 +155,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
     if (e.target.files && e.target.files[0]) {
       processFile(e.target.files[0]);
     }
+    e.target.value = '';
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -202,14 +237,31 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
               </div>
             ) : value ? (
               <div className="flex items-center gap-3">
-                <div className="w-16 h-16 rounded-xl overflow-hidden bg-slate-900 border border-slate-200 shrink-0">
-                  <img src={value} alt="Preview" className="w-full h-full object-cover" />
+                <div className="w-16 h-16 rounded-xl overflow-hidden bg-slate-900 border border-slate-200 shrink-0 flex items-center justify-center">
+                  {previewError ? (
+                    <ImageIcon className="w-6 h-6 text-slate-400" />
+                  ) : (
+                    <img
+                      src={value}
+                      alt="Preview"
+                      referrerPolicy="no-referrer"
+                      onError={() => setPreviewError(true)}
+                      className="w-full h-full object-cover"
+                    />
+                  )}
                 </div>
                 <div className="text-left flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5 text-emerald-600 font-semibold text-xs mb-0.5">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Image ready</span>
-                  </div>
+                  {previewError ? (
+                    <div className="flex items-center gap-1.5 text-amber-600 font-semibold text-xs mb-0.5">
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      <span>Preview unavailable — click to upload replacement</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 text-emerald-600 font-semibold text-xs mb-0.5">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Image ready</span>
+                    </div>
+                  )}
                   <p className="text-[11px] text-slate-500 truncate font-mono">{value}</p>
                   <p className="text-[10px] text-indigo-950 font-medium mt-1 hover:underline">
                     Click to replace with another file
@@ -221,7 +273,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
                     e.stopPropagation();
                     onChange('');
                   }}
-                  className="p-1.5 rounded-lg bg-slate-200 hover:bg-rose-100 hover:text-rose-600 text-slate-600 transition-colors"
+                  className="p-1.5 rounded-lg bg-slate-200 hover:bg-rose-100 hover:text-rose-600 text-slate-600 transition-colors cursor-pointer"
                   title="Remove image"
                 >
                   <X className="w-4 h-4" />
@@ -249,14 +301,14 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
               type="url"
               value={value}
               onChange={(e) => onChange(e.target.value)}
-              placeholder="https://images.unsplash.com/photo-... or custom URL"
+              placeholder="https://images.unsplash.com/photo-... or /uploads/..."
               className="flex-1 px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono focus:border-indigo-600 outline-none"
             />
             {value && (
               <button
                 type="button"
                 onClick={() => onChange('')}
-                className="px-2.5 py-1.5 rounded-xl border border-slate-200 hover:bg-rose-50 text-rose-600 text-xs"
+                className="px-2.5 py-1.5 rounded-xl border border-slate-200 hover:bg-rose-50 text-rose-600 text-xs cursor-pointer"
               >
                 Clear
               </button>
@@ -264,11 +316,23 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
           </div>
           {value && (
             <div className="flex items-center gap-3 p-2 bg-slate-50 rounded-xl border border-slate-200">
-              <div className="w-12 h-12 rounded-lg overflow-hidden bg-slate-900 shrink-0">
-                <img src={value} alt="Preview" className="w-full h-full object-cover" />
+              <div className="w-12 h-12 rounded-lg overflow-hidden bg-slate-900 shrink-0 flex items-center justify-center">
+                {previewError ? (
+                  <ImageIcon className="w-5 h-5 text-slate-400" />
+                ) : (
+                  <img
+                    src={value}
+                    alt="Preview"
+                    referrerPolicy="no-referrer"
+                    onError={() => setPreviewError(true)}
+                    className="w-full h-full object-cover"
+                  />
+                )}
               </div>
               <div className="text-left min-w-0 flex-1">
-                <p className="text-[11px] font-semibold text-slate-700">Preview</p>
+                <p className="text-[11px] font-semibold text-slate-700">
+                  {previewError ? 'Could not load preview from this URL' : 'Preview'}
+                </p>
                 <p className="text-[10px] text-slate-500 truncate font-mono">{value}</p>
               </div>
             </div>

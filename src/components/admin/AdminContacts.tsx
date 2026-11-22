@@ -18,6 +18,10 @@ import {
   X
 } from 'lucide-react';
 import { ContactMessage, SupportConversation } from '../../types.ts';
+import {
+  SupportRichText,
+  stripSupportFormattingForPreview
+} from '../common/SupportRichText.tsx';
 
 type SourceFilter = 'All' | 'Support Widget' | 'Contact Page';
 type MainView = 'inquiries' | 'ai_logs';
@@ -697,11 +701,13 @@ export const AdminContacts: React.FC = () => {
 
                           <td className="py-3.5 px-4 max-w-sm">
                             <div className="text-slate-800 font-medium truncate">
-                              {firstUserMsg?.text || 'Chat session'}
+                              {firstUserMsg?.text
+                                ? stripSupportFormattingForPreview(firstUserMsg.text)
+                                : 'Chat session'}
                             </div>
                             <div className="text-[11px] text-slate-500 truncate mt-0.5">
                               {conv.messages?.length || 0} messages · Last:{' '}
-                              {lastMsg?.text || ''}
+                              {lastMsg?.text ? stripSupportFormattingForPreview(lastMsg.text) : ''}
                             </div>
                           </td>
 
@@ -974,7 +980,7 @@ export const AdminContacts: React.FC = () => {
                   }`}
                 >
                   <div
-                    className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-xs leading-relaxed whitespace-pre-wrap ${
+                    className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-xs leading-relaxed ${
                       msg.role === 'user'
                         ? 'bg-indigo-950 text-white rounded-br-sm'
                         : 'bg-white border border-slate-200 text-slate-800 rounded-bl-sm'
@@ -983,7 +989,11 @@ export const AdminContacts: React.FC = () => {
                     <div className="text-[10px] font-bold uppercase tracking-wider opacity-70 mb-1">
                       {msg.role === 'user' ? 'Visitor' : 'NexGen AI Concierge'}
                     </div>
-                    {msg.text}
+                    {msg.role === 'user' ? (
+                      <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
+                    ) : (
+                      <SupportRichText text={msg.text} variant="light" />
+                    )}
                   </div>
                   {msg.escalatedTicketId && (
                     <span className="mt-1 text-[10px] font-mono font-semibold text-emerald-700">

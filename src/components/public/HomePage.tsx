@@ -234,12 +234,16 @@ export const HomePage: React.FC = () => {
                   alt="NexGen Women Empowerment and Youth Leadership Council official poster showcasing flagship community initiatives"
                   loading="eager"
                   fetchPriority="high"
+                  referrerPolicy="no-referrer"
                   className="w-full h-auto object-contain block transition-transform duration-500 group-hover:scale-[1.01] cursor-pointer"
                   onClick={() => setShowPosterModal(true)}
                   onError={(e) => {
-                    // Fallback to high quality leadership image
-                    (e.target as HTMLImageElement).src =
-                      'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=900&auto=format&fit=crop&q=80';
+                    const el = e.currentTarget;
+                    if (!el.dataset.fallbackApplied) {
+                      el.dataset.fallbackApplied = '1';
+                      el.src =
+                        'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=900&auto=format&fit=crop&q=80';
+                    }
                   }}
                 />
 
@@ -424,8 +428,16 @@ export const HomePage: React.FC = () => {
               >
                 <div className="relative aspect-16/10 overflow-hidden bg-slate-900">
                   <img
-                    src={prg.coverImage}
+                    src={prg.coverImage || '/banner.png'}
                     alt={prg.title}
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      const el = e.currentTarget;
+                      if (!el.dataset.fallbackApplied) {
+                        el.dataset.fallbackApplied = '1';
+                        el.src = '/banner.png';
+                      }
+                    }}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                   />
                   <span className="absolute top-4 left-4 px-3 py-1 bg-white/90 backdrop-blur-md rounded-full text-[11px] font-bold text-indigo-950 uppercase tracking-wider shadow-sm">
@@ -626,8 +638,17 @@ export const HomePage: React.FC = () => {
             >
               <div className="aspect-square bg-slate-100 overflow-hidden relative shrink-0">
                 <img
-                  src={mem.image}
+                  src={mem.image || '/logo.png'}
                   alt={mem.name}
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    const el = e.currentTarget;
+                    if (!el.dataset.fallbackApplied) {
+                      el.dataset.fallbackApplied = '1';
+                      el.src = '/logo.png';
+                      el.className = 'w-full h-full object-contain p-6 bg-slate-900';
+                    }
+                  }}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                 />
               </div>
@@ -684,7 +705,19 @@ export const HomePage: React.FC = () => {
               >
                 <div>
                   <div className="aspect-16/9 overflow-hidden bg-slate-900 relative">
-                    <img src={item.coverImage} alt={item.title} className="w-full h-full object-cover" />
+                    <img
+                      src={item.coverImage || '/banner.png'}
+                      alt={item.title}
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        const el = e.currentTarget;
+                        if (!el.dataset.fallbackApplied) {
+                          el.dataset.fallbackApplied = '1';
+                          el.src = '/banner.png';
+                        }
+                      }}
+                      className="w-full h-full object-cover"
+                    />
                     <span className="absolute bottom-3 left-3 px-2.5 py-0.5 rounded-full bg-slate-950/80 text-white text-[11px] font-semibold">
                       {item.category}
                     </span>
@@ -768,7 +801,19 @@ export const HomePage: React.FC = () => {
             </button>
 
             <div className="aspect-16/9 rounded-2xl overflow-hidden bg-slate-900">
-              <img src={selectedProgram.coverImage} alt={selectedProgram.title} className="w-full h-full object-cover" />
+              <img
+                src={selectedProgram.coverImage || '/banner.png'}
+                alt={selectedProgram.title}
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  const el = e.currentTarget;
+                  if (!el.dataset.fallbackApplied) {
+                    el.dataset.fallbackApplied = '1';
+                    el.src = '/banner.png';
+                  }
+                }}
+                className="w-full h-full object-cover"
+              />
             </div>
 
             <div className="space-y-2">

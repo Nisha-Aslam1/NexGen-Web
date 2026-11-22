@@ -91,7 +91,7 @@ const VERIFIED_DOMAIN = 'nexgencouncil.bond';
 function isValidEmailImageInput(url: string): boolean {
   const clean = url.trim();
   if (!clean) return false;
-  if (clean.startsWith('/uploads/')) return true;
+  if (clean.startsWith('/') && !clean.startsWith('//')) return true;
   try {
     const parsed = new URL(clean);
     return parsed.protocol === 'https:' || parsed.protocol === 'http:';
@@ -173,11 +173,18 @@ async function compressImageToDataUrl(
   const maxDataUrlLength = options.maxDataUrlLength ?? 720_000; // ~540KB binary, safely under Nginx 1MB default limit
   const rawDataUrl = await readFileAsDataUrl(file);
 
+  const isSvg = file.type === 'image/svg+xml' || /\.svg$/i.test(file.name);
+  const isDirectRaster =
+    file.type === 'image/png' ||
+    file.type === 'image/jpeg' ||
+    file.type === 'image/jpg' ||
+    file.type === 'image/gif';
+
   // Keep small GIFs or already-small PNG/JPG files untouched
   if (file.type === 'image/gif' && rawDataUrl.length <= maxDataUrlLength) {
     return { dataUrl: rawDataUrl, filename: file.name };
   }
-  if (rawDataUrl.length <= 450_000 && file.type !== 'image/webp' && file.type !== 'image/svg+xml') {
+  if (rawDataUrl.length <= 450_000 && isDirectRaster) {
     return { dataUrl: rawDataUrl, filename: file.name };
   }
 
@@ -188,8 +195,8 @@ async function compressImageToDataUrl(
     el.src = rawDataUrl;
   });
 
-  let width = img.naturalWidth || img.width;
-  let height = img.naturalHeight || img.height;
+  let width = img.naturalWidth || img.width || 600;
+  let height = img.naturalHeight || img.height || 600;
   const maxDim = options.maxDimension;
 
   if (width > maxDim || height > maxDim) {
@@ -213,8 +220,8 @@ async function compressImageToDataUrl(
 
   drawAtSize(width, height);
 
-  // If logo/transparent PNG preferred, try PNG first
-  if (options.preferPng && file.type === 'image/png') {
+  // If logo/transparent PNG or SVG preferred, try PNG first
+  if ((options.preferPng && file.type === 'image/png') || isSvg) {
     const pngUrl = canvas.toDataURL('image/png');
     if (pngUrl.length <= maxDataUrlLength) {
       return { dataUrl: pngUrl, filename: file.name.replace(/\.[^.]+$/, '') + '.png' };
@@ -691,8 +698,10 @@ export const AdminEmailComposer: React.FC = () => {
   };
 
   const uploadImageFile = async (file: File, kind: 'logo' | 'body'): Promise<string> => {
-    if (!file.type.startsWith('image/')) {
-      throw new Error('Please choose a valid image file (PNG, JPG, WebP, GIF).');
+    const isImageMime = file.type.startsWith('image/');
+    const isImageExt = /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(file.name);
+    if (!isImageMime && !isImageExt) {
+      throw new Error('Please choose a valid image file (PNG, JPG, WebP, GIF, SVG).');
     }
     if (file.size > 15 * 1024 * 1024) {
       throw new Error('Image is too large. Please select an image under 15MB.');
@@ -2460,7 +2469,7 @@ export const AdminEmailComposer: React.FC = () => {
                       <input
                         ref={bodyImageFileInputRef}
                         type="file"
-                        accept="image/png,image/jpeg,image/webp,image/gif"
+                        accept="image/*"
                         multiple
                         className="hidden"
                         onChange={handleUploadBodyImages}
@@ -2522,6 +2531,15 @@ export const AdminEmailComposer: React.FC = () => {
                             <img
                               src={img.url}
                               alt={img.alt || 'Attached visual'}
+                              referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                const el = e.currentTarget;
+                                if (!el.dataset.fallbackApplied) {
+                                  el.dataset.fallbackApplied = '1';
+                                  el.src = '/logo.png';
+                                  el.className = 'w-full h-full object-contain opacity-60 p-1';
+                                }
+                              }}
                               className="w-full h-full object-cover"
                             />
                           </div>
@@ -2722,6 +2740,14 @@ export const AdminEmailComposer: React.FC = () => {
                         <img
                           src={logoUrl.trim()}
                           alt="Header Logo Preview"
+                          referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            const el = e.currentTarget;
+                            if (!el.dataset.fallbackApplied) {
+                              el.dataset.fallbackApplied = '1';
+                              el.src = '/logo.png';
+                            }
+                          }}
                           className="w-full h-full object-contain"
                         />
                       ) : (
@@ -2743,7 +2769,7 @@ export const AdminEmailComposer: React.FC = () => {
                     <input
                       ref={logoFileInputRef}
                       type="file"
-                      accept="image/png,image/jpeg,image/webp,image/gif"
+                      accept="image/*"
                       className="hidden"
                       onChange={handleUploadLogoFile}
                     />

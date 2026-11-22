@@ -45,6 +45,8 @@ export const MeetingRoomWrapper: React.FC<MeetingRoomWrapperProps> = ({
   const [initialVideoMuted, setInitialVideoMuted] = useState<boolean | undefined>(undefined);
   const [sessionDurationSeconds, setSessionDurationSeconds] = useState<number>(0);
   const [endReason, setEndReason] = useState<string | undefined>(undefined);
+  const [isWhiteboardOpen, setIsWhiteboardOpen] = useState<boolean>(false);
+  const [whiteboardSplitMode, setWhiteboardSplitMode] = useState<'split' | 'full'>('split');
 
   // Redirect logged-in admins hitting /meetings to Admin Meetings Dashboard; never expose public list or demo room
   useEffect(() => {
@@ -99,6 +101,7 @@ export const MeetingRoomWrapper: React.FC<MeetingRoomWrapperProps> = ({
         } else {
           setMeeting(data.meeting);
           setRole(data.role || 'host');
+          setParticipantId(data.participantId || '');
           setIdentity(data.identity || currentUser.id);
           setDisplayName(data.displayName || currentUser.name);
           setUserEmail(data.email || currentUser.email || '');
@@ -167,12 +170,19 @@ export const MeetingRoomWrapper: React.FC<MeetingRoomWrapperProps> = ({
     if (typeof durationSeconds === 'number') {
       setSessionDurationSeconds(durationSeconds);
     }
+    setIsWhiteboardOpen(false);
     setEndReason(reason);
     setStep('ended');
   };
 
+  const handleMovedToWaiting = () => {
+    setIsWhiteboardOpen(false);
+    setStep('waiting');
+  };
+
   const handleRejoin = () => {
     autoJoinAttemptedRef.current = null;
+    setIsWhiteboardOpen(false);
     setEndReason(undefined);
     setStep('join');
   };
@@ -256,7 +266,12 @@ export const MeetingRoomWrapper: React.FC<MeetingRoomWrapperProps> = ({
         identity={identity}
         displayName={displayName}
         userEmail={userEmail || currentUser?.email}
+        whiteboardOpen={isWhiteboardOpen}
+        onWhiteboardOpenChange={setIsWhiteboardOpen}
+        whiteboardSplitMode={whiteboardSplitMode}
+        onWhiteboardSplitModeChange={setWhiteboardSplitMode}
         onLeave={handleLeave}
+        onMovedToWaiting={handleMovedToWaiting}
       />
     );
   }

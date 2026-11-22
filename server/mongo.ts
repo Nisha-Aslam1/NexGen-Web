@@ -420,9 +420,10 @@ export async function mongoRestoreAllMediaToDisk(targetDirs: string[]): Promise<
     while (await cursor.hasNext()) {
       const doc = await cursor.next();
       if (doc && doc.filename && doc.dataUrl) {
-        const matches = doc.dataUrl.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
+        const matches = String(doc.dataUrl).match(/^data:image\/([a-zA-Z0-9.+-]+)(?:;[^;,=]+=[^;,]+)*;base64,([\s\S]+)$/i);
         if (matches) {
-          const buffer = Buffer.from(matches[2], 'base64');
+          const cleanBase64 = matches[2].replace(/\s+/g, '');
+          const buffer = Buffer.from(cleanBase64, 'base64');
           for (const d of targetDirs) {
             const dest = path.join(d, doc.filename);
             if (!fs.existsSync(dest)) {

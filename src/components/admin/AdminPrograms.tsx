@@ -120,7 +120,19 @@ export const AdminPrograms: React.FC = () => {
           >
             <div>
               <div className="aspect-16/9 bg-slate-900 relative overflow-hidden">
-                <img src={prg.coverImage} alt={prg.title} className="w-full h-full object-cover" />
+                <img
+                  src={prg.coverImage || '/banner.png'}
+                  alt={prg.title}
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    const el = e.currentTarget;
+                    if (!el.dataset.fallbackApplied) {
+                      el.dataset.fallbackApplied = '1';
+                      el.src = '/banner.png';
+                    }
+                  }}
+                  className="w-full h-full object-cover"
+                />
                 <span className="absolute top-3 left-3 px-2.5 py-0.5 rounded-full bg-white/90 text-indigo-950 text-[10px] font-bold uppercase tracking-wider backdrop-blur-xs">
                   {prg.category}
                 </span>

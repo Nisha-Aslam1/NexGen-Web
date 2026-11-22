@@ -26,7 +26,7 @@ export const ContactPage: React.FC = () => {
 
   useDocumentSEO({
     title: 'Contact NexGen Secretariat | NexGen Council',
-    description: `Connect with the administrative office, partnerships desk, or media liaison of NexGen Council. Address: ${settings?.officeAddress || settings?.address || 'Sialkot, Pakistan'}.`,
+    description: `Connect with the administrative office, partnerships desk, or media liaison of NexGen Council. Address: ${settings?.officeAddress || 'Sialkot, Pakistan'}.`,
     canonicalPath: '/contact',
     ogType: 'website',
     ogImage: '/banner.png',
@@ -40,11 +40,11 @@ export const ContactPage: React.FC = () => {
         mainEntity: {
           '@type': 'NGO',
           name: settings?.organizationName || 'NexGen Council',
-          telephone: settings?.phone || '+92 300 1234567',
+          telephone: settings?.contactPhone || '+92 300 1234567',
           email: settings?.contactEmail || 'info@nexgencouncil.org',
           address: {
             '@type': 'PostalAddress',
-            streetAddress: settings?.address || 'Sector F-7, Blue Area',
+            streetAddress: settings?.officeAddress || 'Sector F-7, Blue Area',
             addressLocality: 'Islamabad',
             addressCountry: 'PK'
           }

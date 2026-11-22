@@ -152,8 +152,16 @@ export const NewsPage: React.FC = () => {
           <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-md grid grid-cols-1 lg:grid-cols-12">
             <div className="lg:col-span-7 aspect-16/10 lg:aspect-auto overflow-hidden bg-slate-900">
               <img
-                src={featured.coverImage}
+                src={featured.coverImage || '/banner.png'}
                 alt={featured.title}
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  const el = e.currentTarget;
+                  if (!el.dataset.fallbackApplied) {
+                    el.dataset.fallbackApplied = '1';
+                    el.src = '/banner.png';
+                  }
+                }}
                 className="w-full h-full object-cover"
               />
             </div>
@@ -223,10 +231,18 @@ export const NewsPage: React.FC = () => {
               <div>
                 <div className="aspect-16/9 overflow-hidden bg-slate-900 relative">
                   <img
-                    src={item.coverImage}
+                    src={item.coverImage || '/banner.png'}
                     alt={`${item.title} article cover`}
                     loading="lazy"
                     decoding="async"
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      const el = e.currentTarget;
+                      if (!el.dataset.fallbackApplied) {
+                        el.dataset.fallbackApplied = '1';
+                        el.src = '/banner.png';
+                      }
+                    }}
                     className="w-full h-full object-cover"
                   />
                   <span className="absolute bottom-3 left-3 px-2.5 py-0.5 rounded-full bg-slate-950/80 text-white text-[11px] font-semibold">
@@ -280,10 +296,18 @@ export const NewsPage: React.FC = () => {
 
             <div className="aspect-16/9 rounded-2xl overflow-hidden bg-slate-900">
               <img
-                src={selectedArticle.coverImage}
+                src={selectedArticle.coverImage || '/banner.png'}
                 alt={`${selectedArticle.title} article cover`}
                 loading="lazy"
                 decoding="async"
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  const el = e.currentTarget;
+                  if (!el.dataset.fallbackApplied) {
+                    el.dataset.fallbackApplied = '1';
+                    el.src = '/banner.png';
+                  }
+                }}
                 className="w-full h-full object-cover"
               />
             </div>

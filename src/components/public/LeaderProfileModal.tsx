@@ -49,8 +49,17 @@ export const LeaderProfileModal: React.FC<LeaderProfileModalProps> = ({ member, 
           <div className="flex flex-col sm:flex-row sm:items-center gap-5 pr-8">
             <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl overflow-hidden bg-slate-800 border-2 border-amber-400/50 shrink-0 shadow-lg">
               <img
-                src={member.image}
+                src={member.image || '/logo.png'}
                 alt={`${member.name} - ${member.position}`}
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  const el = e.currentTarget;
+                  if (!el.dataset.fallbackApplied) {
+                    el.dataset.fallbackApplied = '1';
+                    el.src = '/logo.png';
+                    el.className = 'w-full h-full object-contain p-3 bg-slate-800';
+                  }
+                }}
                 className="w-full h-full object-cover"
               />
             </div>

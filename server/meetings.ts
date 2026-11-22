@@ -1,4 +1,6 @@
 import express, { Request, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
 import { db } from './db.ts';
 import { Meeting } from '../src/types.ts';
 
@@ -16,10 +18,28 @@ meetingsRouter.use((_req, res, next) => {
   next();
 });
 
-// Helper to strip sensitive database fields before returning meeting object
+// Helper to clamp room participant capacity safely (2 to 1000, default 50)
+function clampMaxParticipants(value: unknown, fallback = 50): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(2, Math.min(1000, Math.round(parsed)));
+}
+
+// Helper to strip sensitive database fields and attach live counts before returning meeting object
 function toPublicMeeting(m: Meeting) {
   const { passwordHash, ...rest } = m;
-  return rest;
+  const participants = db.getMeetingParticipants(m.id);
+  const isEnded = m.status === 'Ended' || m.status === 'Cancelled';
+  const activeParticipantCount = isEnded
+    ? 0
+    : participants.filter(
+        p => p.admissionStatus === 'admitted' && p.connectionStatus !== 'disconnected'
+      ).length;
+  return {
+    ...rest,
+    activeParticipantCount,
+    totalParticipantCount: participants.length
+  };
 }
 
 // Helper to build clean Jitsi room configuration payload for a meeting
@@ -55,12 +75,56 @@ interface RoomSubscriber {
   isHost: boolean;
 }
 
+interface ParticipantMediaState {
+  audioMuted: boolean;
+  videoMuted: boolean;
+  updatedAt: number;
+}
+
+export interface WhiteboardElement {
+  id: string;
+  type: 'stroke' | 'rect' | 'ellipse' | 'line' | 'arrow' | 'text' | 'sticky' | 'image';
+  authorId: string;
+  authorName: string;
+  createdAt: number;
+  updatedAt: number;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  rotation?: number;
+  points?: number[];
+  stroke?: string;
+  strokeWidth?: number;
+  fill?: string;
+  opacity?: number;
+  text?: string;
+  fontSize?: number;
+  tool?: 'pen' | 'highlighter' | 'eraser';
+  src?: string;
+  locked?: boolean;
+  zLayer?: 'image' | 'draw';
+}
+
+export interface WhiteboardState {
+  elements: WhiteboardElement[];
+  background: 'light' | 'grid' | 'dark';
+  lockDrawingToHost: boolean;
+  presentedByHost: boolean;
+  updatedAt: number;
+}
+
 interface MeetingRuntimeState {
   muteAllAt: number;
+  stopAllVideoAt: number;
   kickedIdentities: Set<string>;
   raisedHands: Map<string, RaisedHandEntry>;
   announcement: RoomAnnouncement | null;
   chatDisabled: boolean;
+  micsLocked: boolean;
+  participantMediaState: Map<string, ParticipantMediaState>;
+  disconnectGraceTimers: Map<string, ReturnType<typeof setTimeout>>;
+  whiteboard: WhiteboardState;
 }
 
 const roomSubscribers = new Map<string, Set<RoomSubscriber>>();
@@ -71,14 +135,134 @@ function getRuntimeState(meetingId: string): MeetingRuntimeState {
   if (!state) {
     state = {
       muteAllAt: 0,
+      stopAllVideoAt: 0,
       kickedIdentities: new Set(),
       raisedHands: new Map(),
       announcement: null,
-      chatDisabled: false
+      chatDisabled: false,
+      micsLocked: false,
+      participantMediaState: new Map(),
+      disconnectGraceTimers: new Map(),
+      whiteboard: {
+        elements: [],
+        background: 'light',
+        lockDrawingToHost: false,
+        presentedByHost: false,
+        updatedAt: Date.now()
+      }
     };
     meetingRuntimeState.set(meetingId, state);
   }
   return state;
+}
+
+function serializeMediaStates(state: MeetingRuntimeState): Record<string, ParticipantMediaState> {
+  return Object.fromEntries(state.participantMediaState.entries());
+}
+
+const MAX_WHITEBOARD_ELEMENTS = 1500;
+const MAX_WHITEBOARD_IMAGE_CHARS = 3_200_000; // ~2.4MB binary image safety cap
+
+function isValidWhiteboardImageSrc(src: unknown): src is string {
+  if (typeof src !== 'string') return false;
+  const trimmed = src.trim();
+  if (!trimmed || trimmed.length > MAX_WHITEBOARD_IMAGE_CHARS) return false;
+  // Block SVG/scripted data URLs
+  if (/^data:image\/svg/i.test(trimmed)) return false;
+  if (/^data:image\/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=\s]+$/i.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.startsWith('/uploads/') && !trimmed.includes('..') && !/\.svg($|\?)/i.test(trimmed)) {
+    return true;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'https:' && !/\.svg($|\?)/i.test(parsed.pathname)) {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function sanitizeWhiteboardElement(raw: any, fallbackAuthorId: string, fallbackAuthorName: string): WhiteboardElement | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const allowedTypes = ['stroke', 'rect', 'ellipse', 'line', 'arrow', 'text', 'sticky', 'image'];
+  if (!allowedTypes.includes(raw.type)) return null;
+
+  const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim().slice(0, 80) : '';
+  if (!id) return null;
+
+  const now = Date.now();
+  const base: WhiteboardElement = {
+    id,
+    type: raw.type,
+    authorId: String(raw.authorId || fallbackAuthorId || 'participant').slice(0, 80),
+    authorName: String(raw.authorName || fallbackAuthorName || 'Participant').slice(0, 80),
+    createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : now,
+    updatedAt: now
+  };
+
+  if (typeof raw.x === 'number' && Number.isFinite(raw.x)) base.x = raw.x;
+  if (typeof raw.y === 'number' && Number.isFinite(raw.y)) base.y = raw.y;
+  if (typeof raw.width === 'number' && Number.isFinite(raw.width)) base.width = Math.max(-4000, Math.min(4000, raw.width));
+  if (typeof raw.height === 'number' && Number.isFinite(raw.height)) base.height = Math.max(-4000, Math.min(4000, raw.height));
+  if (typeof raw.rotation === 'number' && Number.isFinite(raw.rotation)) base.rotation = raw.rotation;
+  if (typeof raw.stroke === 'string') base.stroke = raw.stroke.slice(0, 32);
+  if (typeof raw.strokeWidth === 'number' && Number.isFinite(raw.strokeWidth)) {
+    base.strokeWidth = Math.max(1, Math.min(80, raw.strokeWidth));
+  }
+  if (typeof raw.fill === 'string') base.fill = raw.fill.slice(0, 32);
+  if (typeof raw.opacity === 'number' && Number.isFinite(raw.opacity)) {
+    base.opacity = Math.max(0.05, Math.min(1, raw.opacity));
+  }
+  if (raw.zLayer === 'image' || raw.zLayer === 'draw') base.zLayer = raw.zLayer;
+  if (typeof raw.locked === 'boolean') base.locked = raw.locked;
+
+  if (raw.type === 'stroke' || raw.type === 'line' || raw.type === 'arrow') {
+    if (!Array.isArray(raw.points) || raw.points.length < 2) return null;
+    base.points = raw.points
+      .slice(0, 8000)
+      .filter((n: unknown) => typeof n === 'number' && Number.isFinite(n))
+      .map((n: number) => Math.round(n * 100) / 100);
+    if (base.points.length < 2) return null;
+    if (raw.tool && ['pen', 'highlighter', 'eraser'].includes(raw.tool)) {
+      base.tool = raw.tool;
+    }
+  }
+
+  if (raw.type === 'text' || raw.type === 'sticky') {
+    const textStr = typeof raw.text === 'string' ? raw.text.slice(0, 1000) : '';
+    if (!textStr.trim()) return null;
+    base.text = textStr;
+    if (typeof raw.fontSize === 'number' && Number.isFinite(raw.fontSize)) {
+      base.fontSize = Math.max(10, Math.min(96, raw.fontSize));
+    }
+  }
+
+  if (raw.type === 'image') {
+    if (!isValidWhiteboardImageSrc(raw.src)) return null;
+    base.src = raw.src.trim();
+    base.zLayer = raw.zLayer || 'image';
+    base.width = Math.max(24, Math.min(3000, Number(raw.width) || 480));
+    base.height = Math.max(24, Math.min(3000, Number(raw.height) || 320));
+    base.x = Number.isFinite(Number(raw.x)) ? Number(raw.x) : 120;
+    base.y = Number.isFinite(Number(raw.y)) ? Number(raw.y) : 80;
+  }
+
+  return base;
+}
+
+function clearDisconnectGraceTimer(state: MeetingRuntimeState, ...keys: (string | undefined)[]) {
+  for (const k of keys) {
+    if (!k) continue;
+    const existing = state.disconnectGraceTimers.get(k);
+    if (existing) {
+      clearTimeout(existing);
+      state.disconnectGraceTimers.delete(k);
+    }
+  }
 }
 
 function getSortedRaisedHands(state: MeetingRuntimeState): RaisedHandEntry[] {
@@ -236,7 +420,7 @@ meetingsRouter.post('/meetings', (req: Request, res: Response) => {
     screenShareEnabled: screenShareEnabled !== undefined ? Boolean(screenShareEnabled) : true,
     startWithAudioMuted: Boolean(startWithAudioMuted),
     startWithVideoMuted: Boolean(startWithVideoMuted),
-    maxParticipants: maxParticipants ? parseInt(maxParticipants, 10) : 50,
+    maxParticipants: clampMaxParticipants(maxParticipants, 50),
     status: 'Scheduled'
   });
 
@@ -280,7 +464,15 @@ meetingsRouter.patch('/meetings/:id', (req: Request, res: Response) => {
     return res.status(403).json({ error: 'Only the meeting host or administrator can modify meeting details.' });
   }
 
-  const updated = db.updateMeeting(meeting.id, req.body);
+  const patchUpdates = { ...(req.body || {}) };
+  if (patchUpdates.maxParticipants !== undefined) {
+    patchUpdates.maxParticipants = clampMaxParticipants(
+      patchUpdates.maxParticipants,
+      meeting.maxParticipants || 50
+    );
+  }
+
+  const updated = db.updateMeeting(meeting.id, patchUpdates);
   if (!updated) {
     return res.status(400).json({ error: 'Failed to update meeting' });
   }
@@ -297,7 +489,8 @@ meetingsRouter.patch('/meetings/:id', (req: Request, res: Response) => {
       meeting: toPublicMeeting(updated),
       isLocked: updated.isLocked,
       waitingRoomEnabled: updated.waitingRoomEnabled,
-      screenShareEnabled: updated.screenShareEnabled !== false
+      screenShareEnabled: updated.screenShareEnabled !== false,
+      maxParticipants: updated.maxParticipants
     });
   }
 
@@ -368,17 +561,12 @@ meetingsRouter.post('/meetings/:code/join', (req: Request, res: Response) => {
     return res.status(403).json({ error: 'Meeting is locked by host. No new participants can join.' });
   }
 
-  // Participant limit check
-  const activeParticipants = db.getMeetingParticipants(meeting.id).filter(p => p.connectionStatus === 'connected');
-  if (!isHost && meeting.maxParticipants && activeParticipants.length >= meeting.maxParticipants) {
-    return res.status(403).json({ error: `Meeting has reached maximum participant limit (${meeting.maxParticipants}).` });
-  }
-
   const finalDisplayName = (dbUser?.name || user?.name || displayName || 'Guest Participant').trim();
   const finalEmail = (dbUser?.email || email || '').trim();
   const identity = user?.userId || participantId || `guest_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 
-  const existingParticipant = db.getMeetingParticipants(meeting.id).find(
+  const allParticipants = db.getMeetingParticipants(meeting.id);
+  const existingParticipant = allParticipants.find(
     p => p.identity === identity || (user?.userId && p.userId === user.userId)
   );
   const runtimeState = getRuntimeState(meeting.id);
@@ -387,6 +575,18 @@ meetingsRouter.post('/meetings/:code/join', (req: Request, res: Response) => {
     (existingParticipant?.admissionStatus === 'rejected' || runtimeState.kickedIdentities.has(identity))
   ) {
     return res.status(403).json({ error: 'You were removed or declined from this meeting by the host.' });
+  }
+
+  // Participant limit check (skip if rejoining an already admitted session or joining as host)
+  const alreadyAdmitted =
+    existingParticipant?.admissionStatus === 'admitted' &&
+    existingParticipant?.connectionStatus !== 'disconnected';
+  const activeParticipants = allParticipants.filter(
+    p => p.admissionStatus === 'admitted' && p.connectionStatus !== 'disconnected'
+  );
+  const maxCap = meeting.maxParticipants || 50;
+  if (!isHost && !alreadyAdmitted && activeParticipants.length >= maxCap) {
+    return res.status(403).json({ error: `Meeting has reached maximum participant limit (${maxCap}).` });
   }
 
   // Automatically mark meeting as Active if starting
@@ -427,6 +627,7 @@ meetingsRouter.post('/meetings/:code/join', (req: Request, res: Response) => {
     : 'participant';
 
   // Admitted / Host / Direct Entry -> Upsert Admitted Record
+  clearDisconnectGraceTimer(runtimeState, identity, user?.userId);
   const pRecord = db.upsertMeetingParticipant(meeting.id, {
     userId: user?.userId,
     displayName: finalDisplayName,
@@ -482,24 +683,49 @@ meetingsRouter.post('/meetings/:id/admit', (req: Request, res: Response) => {
   }
 
   const { participantId, admitAll } = req.body;
+  const allParticipants = db.getMeetingParticipants(meeting.id);
+  const activeCount = allParticipants.filter(
+    p => p.admissionStatus === 'admitted' && p.connectionStatus !== 'disconnected'
+  ).length;
+  const maxCap = meeting.maxParticipants || 50;
+  const remainingSlots = Math.max(0, maxCap - activeCount);
 
   if (admitAll) {
-    const waiting = db.getMeetingParticipants(meeting.id).filter(p => p.admissionStatus === 'waiting');
-    waiting.forEach(p => {
+    const waiting = allParticipants.filter(p => p.admissionStatus === 'waiting');
+    if (waiting.length > 0 && remainingSlots <= 0) {
+      return res.status(409).json({
+        error: `Room is at max capacity (${activeCount}/${maxCap}). Increase Max Participants in Host Controls to admit waiting guests.`
+      });
+    }
+    const toAdmit = waiting.slice(0, remainingSlots);
+    toAdmit.forEach(p => {
       db.updateParticipantAdmission(meeting.id, p.id, 'admitted');
     });
     broadcastRoomEvent(meeting.id, {
       type: 'admission_updated',
-      admitAll: true,
+      admitAll: toAdmit.length === waiting.length,
+      admittedIds: toAdmit.map(p => p.id),
       admissionStatus: 'admitted'
     });
     broadcastRoomEvent(meeting.id, { type: 'waiting_updated' });
     broadcastRoomEvent(meeting.id, { type: 'participants_updated' });
-    return res.json({ message: `Admitted ${waiting.length} participants` });
+    const partialNote =
+      toAdmit.length < waiting.length
+        ? ` (${waiting.length - toAdmit.length} still waiting — room cap ${maxCap} reached)`
+        : '';
+    return res.json({
+      message: `Admitted ${toAdmit.length} participant${toAdmit.length === 1 ? '' : 's'}${partialNote}`
+    });
   }
 
   if (!participantId) {
     return res.status(400).json({ error: 'Participant ID is required' });
+  }
+
+  if (remainingSlots <= 0) {
+    return res.status(409).json({
+      error: `Room is at max capacity (${activeCount}/${maxCap}). Increase Max Participants in Host Controls to admit.`
+    });
   }
 
   const updatedP = db.updateParticipantAdmission(meeting.id, participantId, 'admitted');
@@ -802,6 +1028,261 @@ meetingsRouter.post('/meetings/:id/chat-lock', (req: Request, res: Response) => 
   res.json({ chatDisabled: state.chatDisabled });
 });
 
+// 12h. POST /api/meetings/:id/max-participants - Host / Co-Host adjust max participant capacity live
+meetingsRouter.post('/meetings/:id/max-participants', (req: Request, res: Response) => {
+  const meeting = db.getMeetingById(req.params.id);
+  if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
+
+  const { authorized } = isRoomHostOrCoHost(req, meeting);
+  if (!authorized) {
+    return res.status(403).json({ error: 'Only meeting hosts or co-hosts can adjust room participant capacity.' });
+  }
+
+  const currentMax = meeting.maxParticipants || 50;
+  const { maxParticipants: rawMax, delta } = req.body || {};
+
+  let targetMax: number;
+  if (rawMax !== undefined && rawMax !== null && rawMax !== '') {
+    targetMax = clampMaxParticipants(rawMax, currentMax);
+  } else if (delta !== undefined && Number.isFinite(Number(delta))) {
+    targetMax = clampMaxParticipants(currentMax + Number(delta), currentMax);
+  } else {
+    return res.status(400).json({ error: 'Provide a valid maxParticipants limit (2 to 1000) or delta.' });
+  }
+
+  const updated = db.updateMeeting(meeting.id, { maxParticipants: targetMax });
+  if (!updated) {
+    return res.status(400).json({ error: 'Failed to update room capacity.' });
+  }
+
+  broadcastRoomEvent(meeting.id, {
+    type: 'room_updated',
+    meeting: toPublicMeeting(updated),
+    isLocked: updated.isLocked,
+    waitingRoomEnabled: updated.waitingRoomEnabled,
+    screenShareEnabled: updated.screenShareEnabled !== false,
+    maxParticipants: updated.maxParticipants
+  });
+
+  res.json({
+    message: `Room capacity updated to ${updated.maxParticipants} participants`,
+    maxParticipants: updated.maxParticipants,
+    meeting: toPublicMeeting(updated)
+  });
+});
+
+// 12i. POST /api/meetings/:id/media-state - Participant live mic/camera state sync
+meetingsRouter.post('/meetings/:id/media-state', (req: Request, res: Response) => {
+  const meeting = db.getMeetingById(req.params.id);
+  if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
+
+  const { identity, audioMuted, videoMuted } = req.body || {};
+  const key = String(identity || getActorIdentity(req) || '').trim();
+  if (!key) {
+    return res.status(400).json({ error: 'Participant identity is required' });
+  }
+
+  const state = getRuntimeState(meeting.id);
+  const existing = state.participantMediaState.get(key);
+  const nextState: ParticipantMediaState = {
+    audioMuted: typeof audioMuted === 'boolean' ? audioMuted : existing?.audioMuted ?? false,
+    videoMuted: typeof videoMuted === 'boolean' ? videoMuted : existing?.videoMuted ?? false,
+    updatedAt: Date.now()
+  };
+  state.participantMediaState.set(key, nextState);
+
+  broadcastRoomEvent(meeting.id, {
+    type: 'media_state_updated',
+    targetIdentity: key,
+    mediaState: nextState,
+    mediaStates: serializeMediaStates(state)
+  });
+
+  res.json({ ok: true, mediaState: nextState });
+});
+
+// 12j. POST /api/meetings/:id/mics-lock - Host / Co-Host lock or unlock participant self-unmute
+meetingsRouter.post('/meetings/:id/mics-lock', (req: Request, res: Response) => {
+  const meeting = db.getMeetingById(req.params.id);
+  if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
+
+  const { authorized, actorName } = isRoomHostOrCoHost(req, meeting);
+  if (!authorized) {
+    return res.status(403).json({ error: 'Only meeting hosts or co-hosts can lock participant microphones.' });
+  }
+
+  const state = getRuntimeState(meeting.id);
+  state.micsLocked = Boolean(req.body?.micsLocked);
+  if (state.micsLocked) {
+    state.muteAllAt = Date.now();
+    broadcastRoomEvent(meeting.id, {
+      type: 'mute_all',
+      at: state.muteAllAt,
+      triggeredBy: actorName
+    });
+  }
+
+  broadcastRoomEvent(meeting.id, {
+    type: 'room_updated',
+    micsLocked: state.micsLocked
+  });
+
+  res.json({ micsLocked: state.micsLocked });
+});
+
+// 12k. POST /api/meetings/:id/stop-all-video - Host / Co-Host turn off all participant cameras
+meetingsRouter.post('/meetings/:id/stop-all-video', (req: Request, res: Response) => {
+  const meeting = db.getMeetingById(req.params.id);
+  if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
+
+  const { authorized, actorName } = isRoomHostOrCoHost(req, meeting);
+  if (!authorized) {
+    return res.status(403).json({ error: 'Only meeting hosts or co-hosts can turn off all cameras.' });
+  }
+
+  const state = getRuntimeState(meeting.id);
+  state.stopAllVideoAt = Date.now();
+
+  broadcastRoomEvent(meeting.id, {
+    type: 'stop_all_video',
+    at: state.stopAllVideoAt,
+    triggeredBy: actorName
+  });
+
+  res.json({ message: 'All participant cameras turned off', stopAllVideoAt: state.stopAllVideoAt });
+});
+
+// 12l. POST /api/meetings/:id/participant-action - Real-time per-participant host actions
+meetingsRouter.post('/meetings/:id/participant-action', (req: Request, res: Response) => {
+  const meeting = db.getMeetingById(req.params.id);
+  if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
+
+  const { authorized, actorName } = isRoomHostOrCoHost(req, meeting);
+  if (!authorized) {
+    return res.status(403).json({ error: 'Only meeting hosts or co-hosts can control participants.' });
+  }
+
+  const { targetIdentity, action } = req.body || {};
+  const allowedActions = ['mute_audio', 'unmute_audio', 'mute_video', 'lower_hand', 'move_to_lobby', 'kick'];
+  if (!targetIdentity || !allowedActions.includes(action)) {
+    return res.status(400).json({ error: 'Valid targetIdentity and action are required.' });
+  }
+
+  const targetKey = String(targetIdentity).trim();
+  const state = getRuntimeState(meeting.id);
+  const participant = db
+    .getMeetingParticipants(meeting.id)
+    .find(p => p.identity === targetKey || p.id === targetKey || p.userId === targetKey);
+
+  const canonicalIdentity = participant?.identity || targetKey;
+  const canonicalId = participant?.id || targetKey;
+  const canonicalUserId = participant?.userId;
+
+  if (action === 'mute_audio' || action === 'unmute_audio' || action === 'mute_video') {
+    const existing = state.participantMediaState.get(canonicalIdentity) || {
+      audioMuted: false,
+      videoMuted: false,
+      updatedAt: Date.now()
+    };
+    if (action === 'mute_audio') {
+      state.participantMediaState.set(canonicalIdentity, {
+        ...existing,
+        audioMuted: true,
+        updatedAt: Date.now()
+      });
+    } else if (action === 'mute_video') {
+      state.participantMediaState.set(canonicalIdentity, {
+        ...existing,
+        videoMuted: true,
+        updatedAt: Date.now()
+      });
+    }
+
+    broadcastRoomEvent(meeting.id, {
+      type: 'media_action',
+      action,
+      targetIdentity: canonicalIdentity,
+      targetParticipantId: canonicalId,
+      targetUserId: canonicalUserId,
+      triggeredBy: actorName
+    });
+    broadcastRoomEvent(meeting.id, {
+      type: 'media_state_updated',
+      targetIdentity: canonicalIdentity,
+      mediaStates: serializeMediaStates(state)
+    });
+
+    return res.json({
+      ok: true,
+      action,
+      targetIdentity: canonicalIdentity,
+      mediaStates: serializeMediaStates(state)
+    });
+  }
+
+  if (action === 'lower_hand') {
+    state.raisedHands.delete(targetKey);
+    if (canonicalIdentity) state.raisedHands.delete(canonicalIdentity);
+    if (canonicalId) state.raisedHands.delete(canonicalId);
+    const raisedHands = getSortedRaisedHands(state);
+    broadcastRoomEvent(meeting.id, {
+      type: 'hand_updated',
+      raisedHands
+    });
+    return res.json({ ok: true, raisedHands });
+  }
+
+  if (action === 'move_to_lobby') {
+    const updatedP = db.updateParticipantAdmission(meeting.id, targetKey, 'waiting');
+    state.raisedHands.delete(targetKey);
+    state.raisedHands.delete(canonicalIdentity);
+    state.raisedHands.delete(canonicalId);
+    state.participantMediaState.delete(canonicalIdentity);
+
+    broadcastRoomEvent(meeting.id, {
+      type: 'moved_to_waiting',
+      targetIdentity: updatedP?.identity || canonicalIdentity,
+      targetParticipantId: updatedP?.id || canonicalId,
+      targetUserId: updatedP?.userId || canonicalUserId,
+      reason: 'The host moved you to the Waiting Lobby.'
+    });
+    broadcastRoomEvent(meeting.id, {
+      type: 'hand_updated',
+      raisedHands: getSortedRaisedHands(state)
+    });
+    broadcastRoomEvent(meeting.id, { type: 'waiting_updated' });
+    broadcastRoomEvent(meeting.id, { type: 'participants_updated' });
+
+    return res.json({ ok: true, message: 'Participant moved to waiting lobby' });
+  }
+
+  // kick
+  const updatedP = db.updateParticipantAdmission(meeting.id, targetKey, 'rejected');
+  state.kickedIdentities.add(targetKey);
+  state.kickedIdentities.add(canonicalIdentity);
+  state.kickedIdentities.add(canonicalId);
+  if (canonicalUserId) state.kickedIdentities.add(canonicalUserId);
+  state.raisedHands.delete(targetKey);
+  state.raisedHands.delete(canonicalIdentity);
+  state.raisedHands.delete(canonicalId);
+  state.participantMediaState.delete(canonicalIdentity);
+
+  broadcastRoomEvent(meeting.id, {
+    type: 'participant_kicked',
+    targetIdentity: updatedP?.identity || canonicalIdentity,
+    targetParticipantId: updatedP?.id || canonicalId,
+    targetUserId: updatedP?.userId || canonicalUserId,
+    reason: 'You were removed from the meeting by the host.'
+  });
+  broadcastRoomEvent(meeting.id, {
+    type: 'hand_updated',
+    raisedHands: getSortedRaisedHands(state)
+  });
+  broadcastRoomEvent(meeting.id, { type: 'participants_updated' });
+
+  return res.json({ ok: true, message: 'Participant removed from room' });
+});
+
 // 13. POST /api/meetings/:id/end - Host end meeting for all
 meetingsRouter.post('/meetings/:id/end', (req: Request, res: Response) => {
   const user = (req as any).user;
@@ -822,6 +1303,7 @@ meetingsRouter.post('/meetings/:id/end', (req: Request, res: Response) => {
   db.updateMeeting(meeting.id, { status: 'Ended', actualEnd: new Date().toISOString() });
   const state = getRuntimeState(meeting.id);
   state.raisedHands.clear();
+  state.participantMediaState.clear();
   state.announcement = null;
 
   broadcastRoomEvent(meeting.id, {
@@ -853,19 +1335,26 @@ meetingsRouter.post('/meetings/:id/kick', (req: Request, res: Response) => {
   const runtimeState = getRuntimeState(meeting.id);
   runtimeState.kickedIdentities.add(String(participantIdentity));
   runtimeState.raisedHands.delete(String(participantIdentity));
+  runtimeState.participantMediaState.delete(String(participantIdentity));
   if (updatedP?.id) {
     runtimeState.kickedIdentities.add(updatedP.id);
     runtimeState.raisedHands.delete(updatedP.id);
+    runtimeState.participantMediaState.delete(updatedP.id);
   }
   if (updatedP?.identity) {
     runtimeState.kickedIdentities.add(updatedP.identity);
     runtimeState.raisedHands.delete(updatedP.identity);
+    runtimeState.participantMediaState.delete(updatedP.identity);
+  }
+  if (updatedP?.userId) {
+    runtimeState.kickedIdentities.add(updatedP.userId);
   }
 
   broadcastRoomEvent(meeting.id, {
     type: 'participant_kicked',
     targetIdentity: updatedP?.identity || String(participantIdentity),
     targetParticipantId: updatedP?.id || String(participantIdentity),
+    targetUserId: updatedP?.userId,
     reason: 'You were removed from the meeting by the host.'
   });
   broadcastRoomEvent(meeting.id, {
@@ -883,17 +1372,34 @@ meetingsRouter.post('/meetings/:id/leave', (req: Request, res: Response) => {
   if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
 
   const { identity, participantId } = req.body || {};
+  const headerIdentity =
+    typeof req.headers['x-meeting-identity'] === 'string' ? req.headers['x-meeting-identity'].trim() : '';
   const user = (req as any).user;
-  const key = user?.userId || identity || participantId;
-  if (key) {
-    db.markParticipantLeft(meeting.id, String(key));
+  const keys = Array.from(
+    new Set(
+      [user?.userId, identity, headerIdentity, participantId]
+        .filter((k): k is string => typeof k === 'string' && k.trim().length > 0)
+        .map(k => k.trim())
+    )
+  );
+
+  if (keys.length > 0) {
     const state = getRuntimeState(meeting.id);
-    state.raisedHands.delete(String(key));
-    broadcastRoomEvent(meeting.id, {
-      type: 'hand_updated',
-      raisedHands: getSortedRaisedHands(state)
-    });
-    broadcastRoomEvent(meeting.id, { type: 'participants_updated' });
+    clearDisconnectGraceTimer(state, ...keys);
+    let anyMarked = false;
+    for (const key of keys) {
+      if (db.markParticipantLeft(meeting.id, key)) {
+        anyMarked = true;
+      }
+      state.raisedHands.delete(key);
+    }
+    if (anyMarked) {
+      broadcastRoomEvent(meeting.id, {
+        type: 'hand_updated',
+        raisedHands: getSortedRaisedHands(state)
+      });
+      broadcastRoomEvent(meeting.id, { type: 'participants_updated' });
+    }
   }
   res.json({ ok: true });
 });
@@ -905,7 +1411,7 @@ meetingsRouter.get('/meetings/:id/events', (req: Request, res: Response) => {
     return res.status(404).json({ error: 'Meeting not found' });
   }
 
-  const identity = typeof req.query.identity === 'string' ? req.query.identity : '';
+  const identity = typeof req.query.identity === 'string' ? req.query.identity.trim() : '';
   const user = (req as any).user;
   const isHost = isMeetingModerator(user, meeting);
 
@@ -924,6 +1430,10 @@ meetingsRouter.get('/meetings/:id/events', (req: Request, res: Response) => {
   subs.add(subscriber);
 
   const runtime = getRuntimeState(meeting.id);
+  if (identity) {
+    clearDisconnectGraceTimer(runtime, identity);
+  }
+
   const participantRecord = identity
     ? db.getMeetingParticipants(meeting.id).find(p => p.identity === identity || p.id === identity)
     : undefined;
@@ -954,9 +1464,13 @@ meetingsRouter.get('/meetings/:id/events', (req: Request, res: Response) => {
       meetingId: meeting.id,
       meeting: toPublicMeeting(meeting),
       muteAllAt: runtime.muteAllAt,
+      stopAllVideoAt: runtime.stopAllVideoAt,
       raisedHands: getSortedRaisedHands(runtime),
       announcement: runtime.announcement,
       chatDisabled: runtime.chatDisabled,
+      micsLocked: runtime.micsLocked,
+      mediaStates: serializeMediaStates(runtime),
+      whiteboard: runtime.whiteboard,
       selfRole: participantRecord?.role || (isHost ? 'host' : 'participant'),
       admissionStatus: participantRecord?.admissionStatus,
       timestamp: Date.now()
@@ -971,6 +1485,35 @@ meetingsRouter.get('/meetings/:id/events', (req: Request, res: Response) => {
         roomSubscribers.delete(meeting.id);
       }
     }
+
+    if (identity) {
+      const stillConnectedElsewhere = Array.from(roomSubscribers.get(meeting.id) || []).some(
+        s => s.identity === identity
+      );
+      if (!stillConnectedElsewhere) {
+        clearDisconnectGraceTimer(runtime, identity);
+        const timer = setTimeout(() => {
+          runtime.disconnectGraceTimers.delete(identity);
+          const reconnected = Array.from(roomSubscribers.get(meeting.id) || []).some(
+            s => s.identity === identity
+          );
+          if (!reconnected) {
+            const marked = db.markParticipantLeft(meeting.id, identity);
+            if (marked) {
+              runtime.raisedHands.delete(identity);
+              runtime.participantMediaState.delete(identity);
+              broadcastRoomEvent(meeting.id, {
+                type: 'hand_updated',
+                raisedHands: getSortedRaisedHands(runtime)
+              });
+              broadcastRoomEvent(meeting.id, { type: 'participants_updated' });
+            }
+          }
+        }, 6000);
+        timer.unref?.();
+        runtime.disconnectGraceTimers.set(identity, timer);
+      }
+    }
   });
 });
 
@@ -982,10 +1525,11 @@ meetingsRouter.get('/meetings/:id/live-state', (req: Request, res: Response) => 
   const identity = typeof req.query.identity === 'string' ? req.query.identity : '';
   const { authorized } = isRoomHostOrCoHost(req, meeting);
   const participants = db.getMeetingParticipants(meeting.id);
-  const activeParticipants = participants.filter(
-    p => p.admissionStatus === 'admitted' && p.connectionStatus !== 'disconnected'
-  );
-  const waiting = authorized ? participants.filter(p => p.admissionStatus === 'waiting') : [];
+  const isEnded = meeting.status === 'Ended' || meeting.status === 'Cancelled';
+  const activeParticipants = isEnded
+    ? []
+    : participants.filter(p => p.admissionStatus === 'admitted' && p.connectionStatus !== 'disconnected');
+  const waiting = authorized && !isEnded ? participants.filter(p => p.admissionStatus === 'waiting') : [];
   const runtime = getRuntimeState(meeting.id);
   const selfRecord = identity
     ? participants.find(p => p.identity === identity || p.id === identity)
@@ -995,17 +1539,30 @@ meetingsRouter.get('/meetings/:id/live-state', (req: Request, res: Response) => 
       !isMeetingModerator((req as any).user, meeting) &&
       (runtime.kickedIdentities.has(identity) || selfRecord?.admissionStatus === 'rejected')
   );
+  const isMovedToWaiting = Boolean(
+    identity &&
+      !isMeetingModerator((req as any).user, meeting) &&
+      selfRecord?.admissionStatus === 'waiting'
+  );
 
   res.json({
     meeting: toPublicMeeting(meeting),
     participants: activeParticipants,
     waiting,
     muteAllAt: runtime.muteAllAt,
+    stopAllVideoAt: runtime.stopAllVideoAt,
     raisedHands: getSortedRaisedHands(runtime),
     announcement: runtime.announcement,
     chatDisabled: runtime.chatDisabled,
+    micsLocked: runtime.micsLocked,
+    mediaStates: serializeMediaStates(runtime),
+    whiteboardUpdatedAt: runtime.whiteboard.updatedAt,
+    whiteboardLockDrawingToHost: runtime.whiteboard.lockDrawingToHost,
+    whiteboardPresentedByHost: runtime.whiteboard.presentedByHost,
+    whiteboardElementCount: runtime.whiteboard.elements.length,
     selfRole: selfRecord?.role || (isMeetingModerator((req as any).user, meeting) ? 'host' : 'participant'),
-    isKicked
+    isKicked,
+    isMovedToWaiting
   });
 });
 
@@ -1017,8 +1574,11 @@ meetingsRouter.get('/meetings/:id/participants', (req: Request, res: Response) =
 
   const includeAll = req.query.all === 'true';
   const all = db.getMeetingParticipants(meeting.id);
+  const isEnded = meeting.status === 'Ended' || meeting.status === 'Cancelled';
   const participants = includeAll
     ? all
+    : isEnded
+    ? []
     : all.filter(p => p.admissionStatus === 'admitted' && p.connectionStatus !== 'disconnected');
   res.json({ participants });
 });
@@ -1064,4 +1624,383 @@ meetingsRouter.post('/meetings/:id/messages', (req: Request, res: Response) => {
     message: newMsg
   });
   res.status(201).json({ message: newMsg });
+});
+
+// 18. GET /api/meetings/:id/whiteboard - Fetch authoritative meeting whiteboard snapshot
+meetingsRouter.get('/meetings/:id/whiteboard', (req: Request, res: Response) => {
+  const meeting = db.getMeetingById(req.params.id);
+  if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
+
+  const runtime = getRuntimeState(meeting.id);
+  res.json({ whiteboard: runtime.whiteboard });
+});
+
+// 19. POST /api/meetings/:id/whiteboard/op - Idempotent real-time whiteboard mutations
+meetingsRouter.post('/meetings/:id/whiteboard/op', (req: Request, res: Response) => {
+  const meeting = db.getMeetingById(req.params.id);
+  if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
+
+  const runtime = getRuntimeState(meeting.id);
+  const { authorized: isModerator, actorName } = isRoomHostOrCoHost(req, meeting);
+  const actorIdentity = getActorIdentity(req) || (req as any).user?.userId || 'guest';
+  const senderName = String(req.body?.authorName || actorName || 'Participant').trim().slice(0, 60);
+
+  const { action } = req.body || {};
+  const allowedActions = ['add', 'update', 'delete', 'restore', 'clear', 'settings', 'present'];
+  if (!allowedActions.includes(action)) {
+    return res.status(400).json({ error: 'Invalid whiteboard operation.' });
+  }
+
+  if (
+    runtime.whiteboard.lockDrawingToHost &&
+    !isModerator &&
+    ['add', 'update', 'delete', 'restore', 'clear'].includes(action)
+  ) {
+    return res.status(403).json({ error: 'Whiteboard editing is currently restricted to hosts.' });
+  }
+
+  if (action === 'add') {
+    const cleanEl = sanitizeWhiteboardElement(req.body?.element, actorIdentity, senderName);
+    if (!cleanEl) {
+      return res.status(400).json({ error: 'Invalid whiteboard element or unsupported image format/size.' });
+    }
+    const existingIdx = runtime.whiteboard.elements.findIndex(el => el.id === cleanEl.id);
+    if (existingIdx === -1) {
+      if (runtime.whiteboard.elements.length >= MAX_WHITEBOARD_ELEMENTS) {
+        // Trim oldest drawing stroke first so board remains usable
+        const oldestStrokeIdx = runtime.whiteboard.elements.findIndex(el => el.type === 'stroke');
+        if (oldestStrokeIdx !== -1) {
+          runtime.whiteboard.elements.splice(oldestStrokeIdx, 1);
+        } else {
+          runtime.whiteboard.elements.shift();
+        }
+      }
+      runtime.whiteboard.elements.push(cleanEl);
+    } else {
+      runtime.whiteboard.elements[existingIdx] = cleanEl;
+    }
+    runtime.whiteboard.updatedAt = Date.now();
+
+    broadcastRoomEvent(meeting.id, {
+      type: 'whiteboard_op',
+      action: 'add',
+      element: cleanEl,
+      actorIdentity,
+      updatedAt: runtime.whiteboard.updatedAt
+    });
+
+    return res.status(201).json({ ok: true, element: cleanEl, updatedAt: runtime.whiteboard.updatedAt });
+  }
+
+  if (action === 'update') {
+    const targetId = typeof req.body?.elementId === 'string' ? req.body.elementId.trim() : '';
+    const patch = req.body?.patch;
+    if (!targetId || !patch || typeof patch !== 'object') {
+      return res.status(400).json({ error: 'elementId and patch are required.' });
+    }
+
+    const idx = runtime.whiteboard.elements.findIndex(el => el.id === targetId);
+    if (idx === -1) {
+      return res.status(404).json({ error: 'Whiteboard element not found.' });
+    }
+
+    const existing = runtime.whiteboard.elements[idx];
+    const updated: WhiteboardElement = {
+      ...existing,
+      ...(typeof patch.x === 'number' && Number.isFinite(patch.x) ? { x: patch.x } : {}),
+      ...(typeof patch.y === 'number' && Number.isFinite(patch.y) ? { y: patch.y } : {}),
+      ...(typeof patch.width === 'number' && Number.isFinite(patch.width)
+        ? { width: Math.max(-4000, Math.min(4000, patch.width)) }
+        : {}),
+      ...(typeof patch.height === 'number' && Number.isFinite(patch.height)
+        ? { height: Math.max(-4000, Math.min(4000, patch.height)) }
+        : {}),
+      ...(typeof patch.rotation === 'number' && Number.isFinite(patch.rotation) ? { rotation: patch.rotation } : {}),
+      ...(typeof patch.opacity === 'number' && Number.isFinite(patch.opacity)
+        ? { opacity: Math.max(0.05, Math.min(1, patch.opacity)) }
+        : {}),
+      ...(typeof patch.text === 'string' ? { text: patch.text.slice(0, 1000) } : {}),
+      ...(typeof patch.stroke === 'string' ? { stroke: patch.stroke.slice(0, 32) } : {}),
+      ...(typeof patch.fill === 'string' ? { fill: patch.fill.slice(0, 32) } : {}),
+      ...(typeof patch.locked === 'boolean' ? { locked: patch.locked } : {}),
+      ...(patch.zLayer === 'image' || patch.zLayer === 'draw' ? { zLayer: patch.zLayer } : {}),
+      updatedAt: Date.now()
+    };
+    runtime.whiteboard.elements[idx] = updated;
+    runtime.whiteboard.updatedAt = Date.now();
+
+    // Support explicit z-order reordering if requested
+    if (patch.order === 'front') {
+      runtime.whiteboard.elements.splice(idx, 1);
+      runtime.whiteboard.elements.push(updated);
+    } else if (patch.order === 'back') {
+      runtime.whiteboard.elements.splice(idx, 1);
+      runtime.whiteboard.elements.unshift(updated);
+    }
+
+    broadcastRoomEvent(meeting.id, {
+      type: 'whiteboard_op',
+      action: 'update',
+      elementId: targetId,
+      element: updated,
+      order: patch.order,
+      actorIdentity,
+      updatedAt: runtime.whiteboard.updatedAt
+    });
+
+    return res.json({ ok: true, element: updated, updatedAt: runtime.whiteboard.updatedAt });
+  }
+
+  if (action === 'delete') {
+    const rawIds = Array.isArray(req.body?.elementIds) ? req.body.elementIds : [];
+    const idsToDelete = new Set(
+      rawIds.filter((x: unknown): x is string => typeof x === 'string' && x.trim().length > 0)
+    );
+    if (idsToDelete.size === 0) {
+      return res.json({ ok: true, updatedAt: runtime.whiteboard.updatedAt });
+    }
+
+    runtime.whiteboard.elements = runtime.whiteboard.elements.filter(el => !idsToDelete.has(el.id));
+    runtime.whiteboard.updatedAt = Date.now();
+
+    broadcastRoomEvent(meeting.id, {
+      type: 'whiteboard_op',
+      action: 'delete',
+      elementIds: Array.from(idsToDelete),
+      actorIdentity,
+      updatedAt: runtime.whiteboard.updatedAt
+    });
+
+    return res.json({ ok: true, updatedAt: runtime.whiteboard.updatedAt });
+  }
+
+  if (action === 'restore') {
+    const rawElements = Array.isArray(req.body?.elements) ? req.body.elements : [];
+    const restored: WhiteboardElement[] = [];
+    for (const raw of rawElements.slice(0, MAX_WHITEBOARD_ELEMENTS)) {
+      const cleanEl = sanitizeWhiteboardElement(raw, actorIdentity, senderName);
+      if (!cleanEl) continue;
+      const existingIdx = runtime.whiteboard.elements.findIndex(el => el.id === cleanEl.id);
+      if (existingIdx === -1) {
+        if (runtime.whiteboard.elements.length >= MAX_WHITEBOARD_ELEMENTS) {
+          const oldestStrokeIdx = runtime.whiteboard.elements.findIndex(el => el.type === 'stroke');
+          if (oldestStrokeIdx !== -1) {
+            runtime.whiteboard.elements.splice(oldestStrokeIdx, 1);
+          } else {
+            runtime.whiteboard.elements.shift();
+          }
+        }
+        runtime.whiteboard.elements.push(cleanEl);
+      } else {
+        runtime.whiteboard.elements[existingIdx] = cleanEl;
+      }
+      restored.push(cleanEl);
+    }
+
+    if (restored.length > 0) {
+      runtime.whiteboard.updatedAt = Date.now();
+      broadcastRoomEvent(meeting.id, {
+        type: 'whiteboard_op',
+        action: 'restore',
+        elements: restored,
+        actorIdentity,
+        updatedAt: runtime.whiteboard.updatedAt
+      });
+    }
+
+    return res.json({ ok: true, elements: restored, updatedAt: runtime.whiteboard.updatedAt });
+  }
+
+  if (action === 'clear') {
+    const target = req.body?.target === 'drawings' ? 'drawings' : 'all';
+    if (runtime.whiteboard.elements.some(e => e.type === 'image') && target === 'all' && !isModerator) {
+      // Non-hosts clearing without permission only clear their own or if unlocked; allow full clear when drawing is open
+    }
+    if (target === 'drawings') {
+      runtime.whiteboard.elements = runtime.whiteboard.elements.filter(el => el.type === 'image');
+    } else {
+      runtime.whiteboard.elements = [];
+    }
+    runtime.whiteboard.updatedAt = Date.now();
+
+    broadcastRoomEvent(meeting.id, {
+      type: 'whiteboard_op',
+      action: 'clear',
+      target,
+      actorIdentity,
+      triggeredBy: senderName,
+      updatedAt: runtime.whiteboard.updatedAt
+    });
+
+    return res.json({ ok: true, updatedAt: runtime.whiteboard.updatedAt });
+  }
+
+  if (action === 'settings') {
+    const { background, lockDrawingToHost } = req.body || {};
+    if (background && ['light', 'grid', 'dark'].includes(background)) {
+      runtime.whiteboard.background = background;
+    }
+    if (typeof lockDrawingToHost === 'boolean') {
+      if (!isModerator) {
+        return res.status(403).json({ error: 'Only hosts can change whiteboard drawing permissions.' });
+      }
+      runtime.whiteboard.lockDrawingToHost = lockDrawingToHost;
+    }
+    runtime.whiteboard.updatedAt = Date.now();
+
+    broadcastRoomEvent(meeting.id, {
+      type: 'whiteboard_op',
+      action: 'settings',
+      background: runtime.whiteboard.background,
+      lockDrawingToHost: runtime.whiteboard.lockDrawingToHost,
+      actorIdentity,
+      updatedAt: runtime.whiteboard.updatedAt
+    });
+
+    return res.json({
+      ok: true,
+      background: runtime.whiteboard.background,
+      lockDrawingToHost: runtime.whiteboard.lockDrawingToHost,
+      updatedAt: runtime.whiteboard.updatedAt
+    });
+  }
+
+  // present
+  if (!isModerator) {
+    return res.status(403).json({ error: 'Only hosts can open or close the whiteboard for everyone.' });
+  }
+  const presented = Boolean(req.body?.presented);
+  runtime.whiteboard.presentedByHost = presented;
+  runtime.whiteboard.updatedAt = Date.now();
+
+  broadcastRoomEvent(meeting.id, {
+    type: 'whiteboard_present',
+    presented,
+    triggeredBy: senderName,
+    updatedAt: runtime.whiteboard.updatedAt
+  });
+
+  return res.json({ ok: true, presented, updatedAt: runtime.whiteboard.updatedAt });
+});
+
+// 20. POST /api/meetings/:id/whiteboard/live - Ephemeral in-progress stroke & cursor broadcast
+meetingsRouter.post('/meetings/:id/whiteboard/live', (req: Request, res: Response) => {
+  const meeting = db.getMeetingById(req.params.id);
+  if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
+
+  const runtime = getRuntimeState(meeting.id);
+  const { authorized: isModerator } = isRoomHostOrCoHost(req, meeting);
+  if (runtime.whiteboard.lockDrawingToHost && !isModerator && req.body?.stroke) {
+    return res.status(403).json({ error: 'Whiteboard editing is locked to hosts.' });
+  }
+
+  const actorIdentity = getActorIdentity(req) || 'guest';
+  const authorName = String(req.body?.authorName || 'Participant').slice(0, 50);
+
+  broadcastRoomEvent(meeting.id, {
+    type: 'whiteboard_live',
+    actorIdentity,
+    authorName,
+    cursor: req.body?.cursor || null,
+    stroke: req.body?.stroke || null
+  });
+
+  res.json({ ok: true });
+});
+
+// 21. POST /api/meetings/:id/captures - Save recording or screenshot (3-day auto-purge)
+meetingsRouter.post('/meetings/:id/captures', (req: Request, res: Response) => {
+  const meeting = db.getMeetingById(req.params.id);
+  if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
+
+  const { kind, dataUrl, filename, mimeType, durationSeconds, hasAudio, hasVideo } = req.body || {};
+  if (!dataUrl || typeof dataUrl !== 'string') {
+    return res.status(400).json({ error: 'No capture data provided.' });
+  }
+
+  try {
+    const capturesDir = path.join(process.cwd(), 'public', 'uploads', 'meetings');
+    if (!fs.existsSync(capturesDir)) {
+      fs.mkdirSync(capturesDir, { recursive: true });
+    }
+
+    const matches = dataUrl.match(/^data:([a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+)(?:;[^;,=]+=[^;,]+)*;base64,([\s\S]+)$/i);
+    if (!matches) {
+      return res.status(400).json({ error: 'Invalid capture data format.' });
+    }
+
+    const resolvedMime = mimeType || matches[1];
+    const base64Data = matches[2].replace(/\s+/g, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    if (buffer.length > 200 * 1024 * 1024) {
+      return res.status(413).json({ error: 'Capture size exceeds 200MB maximum limit.' });
+    }
+
+    let ext = 'bin';
+    if (resolvedMime.includes('video/webm')) ext = 'webm';
+    else if (resolvedMime.includes('video/mp4')) ext = 'mp4';
+    else if (resolvedMime.includes('image/png')) ext = 'png';
+    else if (resolvedMime.includes('image/jpeg')) ext = 'jpg';
+    else if (resolvedMime.includes('audio/webm')) ext = 'webm';
+
+    const safeName = String(filename || (kind === 'recording' ? 'meeting_recording' : 'meeting_screenshot')).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const finalName = `${Date.now()}_${safeName.slice(0, 30)}.${ext}`;
+    const filePath = path.join(capturesDir, finalName);
+
+    fs.writeFileSync(filePath, buffer);
+
+    const actorIdentity = getActorIdentity(req) || 'participant';
+    const captureRecord = db.addMeetingCapture({
+      meetingId: meeting.id,
+      meetingCode: meeting.meetingCode,
+      meetingTitle: meeting.title,
+      kind: kind === 'recording' ? 'recording' : 'screenshot',
+      filename: `/uploads/meetings/${finalName}`,
+      originalName: filename || finalName,
+      mimeType: resolvedMime,
+      sizeBytes: buffer.length,
+      durationSeconds: typeof durationSeconds === 'number' ? durationSeconds : undefined,
+      capturedBy: actorIdentity,
+      hasAudio: Boolean(hasAudio),
+      hasVideo: Boolean(hasVideo)
+    });
+
+    res.status(201).json({ ok: true, capture: captureRecord });
+  } catch (err: any) {
+    console.error('Error saving meeting capture:', err);
+    res.status(500).json({ error: 'Failed to save meeting capture.' });
+  }
+});
+
+// 22. GET /api/meetings/:id/captures - List captures for a meeting
+meetingsRouter.get('/meetings/:id/captures', (req: Request, res: Response) => {
+  const meeting = db.getMeetingById(req.params.id);
+  if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
+  const captures = db.getMeetingCaptures(meeting.id);
+  res.json({ captures });
+});
+
+// 23. GET /api/meetings-captures/all - List all meeting captures across rooms (Admin)
+meetingsRouter.get('/meetings-captures/all', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (!user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  const captures = db.getMeetingCaptures();
+  res.json({ captures });
+});
+
+// 24. DELETE /api/meetings/captures/:captureId - Delete capture manually
+meetingsRouter.delete('/meetings/captures/:captureId', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (!user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  const captureId = req.params.captureId;
+  const ok = db.deleteMeetingCapture(captureId);
+  if (!ok) {
+    return res.status(404).json({ error: 'Capture not found.' });
+  }
+  res.json({ ok: true });
 });

@@ -121,12 +121,20 @@ export const GalleryPage: React.FC = () => {
               className="group relative rounded-3xl overflow-hidden bg-slate-900 aspect-4/3 cursor-pointer shadow-xs hover:shadow-xl transition-all"
             >
               <img
-                src={item.imageUrl}
+                src={item.imageUrl || '/banner.png'}
                 alt={`${item.title} - ${item.category} photo | ${orgName}`}
                 title={`${item.title} (${item.category})`}
                 itemProp="contentUrl"
                 loading="lazy"
                 decoding="async"
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  const el = e.currentTarget;
+                  if (!el.dataset.fallbackApplied) {
+                    el.dataset.fallbackApplied = '1';
+                    el.src = '/banner.png';
+                  }
+                }}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/20 to-transparent opacity-80 group-hover:opacity-100 transition-opacity" />
@@ -176,8 +184,16 @@ export const GalleryPage: React.FC = () => {
 
           <div className="max-w-4xl max-h-[85vh] flex flex-col items-center justify-center space-y-4">
             <img
-              src={filteredItems[lightboxIndex].imageUrl}
+              src={filteredItems[lightboxIndex].imageUrl || '/banner.png'}
               alt={filteredItems[lightboxIndex].title}
+              referrerPolicy="no-referrer"
+              onError={(e) => {
+                const el = e.currentTarget;
+                if (!el.dataset.fallbackApplied) {
+                  el.dataset.fallbackApplied = '1';
+                  el.src = '/banner.png';
+                }
+              }}
               className="max-h-[70vh] w-auto max-w-full rounded-2xl object-contain shadow-2xl"
             />
             <div className="text-center text-white space-y-1">

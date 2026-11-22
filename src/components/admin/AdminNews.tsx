@@ -117,7 +117,19 @@ export const AdminNews: React.FC = () => {
           >
             <div>
               <div className="aspect-16/9 bg-slate-900 relative overflow-hidden">
-                <img src={item.coverImage} alt={item.title} className="w-full h-full object-cover" />
+                <img
+                  src={item.coverImage || '/banner.png'}
+                  alt={item.title}
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    const el = e.currentTarget;
+                    if (!el.dataset.fallbackApplied) {
+                      el.dataset.fallbackApplied = '1';
+                      el.src = '/banner.png';
+                    }
+                  }}
+                  className="w-full h-full object-cover"
+                />
                 <span className="absolute top-3 left-3 px-2 py-0.5 rounded-full bg-slate-950/80 text-white text-[10px] font-semibold">
                   {item.category}
                 </span>

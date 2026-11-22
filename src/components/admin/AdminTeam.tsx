@@ -264,7 +264,20 @@ export const AdminTeam: React.FC = () => {
             >
               <div>
                 <div className="aspect-square bg-slate-900 relative overflow-hidden">
-                  <img src={mem.image} alt={mem.name} className="w-full h-full object-cover" />
+                  <img
+                    src={mem.image || '/logo.png'}
+                    alt={mem.name}
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      const el = e.currentTarget;
+                      if (!el.dataset.fallbackApplied) {
+                        el.dataset.fallbackApplied = '1';
+                        el.src = '/logo.png';
+                        el.className = 'w-full h-full object-contain p-8 bg-slate-900';
+                      }
+                    }}
+                    className="w-full h-full object-cover"
+                  />
 
                   {/* Sequence Badge + Drag Handle */}
                   <div className="absolute top-3 left-3 flex items-center gap-1.5">

@@ -67,7 +67,7 @@ export const ProgramsPage: React.FC = () => {
             name: 'NexGen Council',
             url: window.location.origin
           },
-          timeToComplete: effectiveProgram.duration || 'P1M'
+          timeToComplete: effectiveProgram.startDate ? 'P3M' : 'P1M'
         }
       : {
           '@context': 'https://schema.org',
@@ -164,8 +164,16 @@ export const ProgramsPage: React.FC = () => {
               >
                 <div className="relative aspect-16/10 overflow-hidden bg-slate-900">
                   <img
-                    src={prg.coverImage}
+                    src={prg.coverImage || '/banner.png'}
                     alt={prg.title}
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      const el = e.currentTarget;
+                      if (!el.dataset.fallbackApplied) {
+                        el.dataset.fallbackApplied = '1';
+                        el.src = '/banner.png';
+                      }
+                    }}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                   />
                   <span className="absolute top-4 left-4 px-3 py-1 bg-white/90 backdrop-blur-md rounded-full text-[11px] font-bold text-indigo-950 uppercase tracking-wider shadow-sm">
@@ -238,10 +246,18 @@ export const ProgramsPage: React.FC = () => {
 
             <div className="aspect-16/9 rounded-2xl overflow-hidden bg-slate-900">
               <img
-                src={activeModalProgram.coverImage}
+                src={activeModalProgram.coverImage || '/banner.png'}
                 alt={`${activeModalProgram.title} cohort overview banner`}
                 loading="lazy"
                 decoding="async"
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  const el = e.currentTarget;
+                  if (!el.dataset.fallbackApplied) {
+                    el.dataset.fallbackApplied = '1';
+                    el.src = '/banner.png';
+                  }
+                }}
                 className="w-full h-full object-cover"
               />
             </div>

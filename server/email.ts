@@ -65,7 +65,7 @@ export function isValidEmailAddress(email?: string): boolean {
 export function isValidImageUrl(rawUrl?: string): boolean {
   const value = String(rawUrl || '').trim();
   if (!value) return false;
-  if (value.startsWith('/uploads/')) return true;
+  if (value.startsWith('/') && !value.startsWith('//')) return true;
   try {
     const parsed = new URL(value);
     return parsed.protocol === 'https:' || parsed.protocol === 'http:';
@@ -77,9 +77,12 @@ export function isValidImageUrl(rawUrl?: string): boolean {
 export function resolveEmailImageUrl(rawUrl?: string, siteUrl = 'https://nexgencouncil.bond'): string | undefined {
   const value = String(rawUrl || '').trim();
   if (!value) return undefined;
-  const base = String(siteUrl || 'https://nexgencouncil.bond').trim().replace(/\/+$/, '');
+  let base = String(siteUrl || 'https://nexgencouncil.bond').trim().replace(/\/+$/, '');
+  if (!base || /localhost|127\.0\.0\.1/i.test(base)) {
+    base = 'https://nexgencouncil.bond';
+  }
 
-  if (value.startsWith('/')) {
+  if (value.startsWith('/') && !value.startsWith('//')) {
     return `${base}${value}`;
   }
   if (value.startsWith('uploads/')) {
@@ -931,6 +934,7 @@ export interface VolunteerApprovalEmailOptions {
   customNote?: string;
   includeWhatsappInvite?: boolean;
   whatsappGroupLink?: string;
+  whatsappGroupLabel?: string;
   siteUrl?: string;
 }
 
@@ -945,7 +949,6 @@ export function buildVolunteerApprovalEmail(opts: VolunteerApprovalEmailOptions)
   const firstName = rawName.split(/\s+/)[0] || rawName;
   const safeFullName = escapeHtml(rawName);
   const safeRef = escapeHtml(String(opts.referenceCode || 'NG-VOL').trim());
-  const safeRole = escapeHtml(String(opts.preferredRole || 'Council Volunteer').trim());
   const safeCity = escapeHtml(String(opts.city || 'Community Chapter').trim());
   const safeCustomNote = opts.customNote && opts.customNote.trim()
     ? escapeHtml(opts.customNote.trim()).replace(/\n/g, '<br />')
@@ -957,12 +960,13 @@ export function buildVolunteerApprovalEmail(opts: VolunteerApprovalEmailOptions)
   const shouldIncludeWhatsappButton = Boolean(opts.includeWhatsappInvite && validatedWhatsappUrl);
 
   const subject = `🎉 Congratulations, ${firstName}! Welcome to NexGen Council 🌟`;
+  const buttonLabel = (opts.whatsappGroupLabel || '💬 Join Official WhatsApp Group →').trim();
 
   const buttons: EmailButton[] = [];
   if (shouldIncludeWhatsappButton && validatedWhatsappUrl) {
     buttons.push({
       id: 'whatsapp_group_invite',
-      label: '💬 Join Official WhatsApp Group →',
+      label: buttonLabel,
       url: validatedWhatsappUrl,
       style: 'amber',
       align: 'center'
@@ -989,7 +993,6 @@ export function buildVolunteerApprovalEmail(opts: VolunteerApprovalEmailOptions)
       <div style="font-size: 14px; color: #f8fafc; line-height: 1.75;">
         <div><strong>👤 Full Name:</strong> ${safeFullName}</div>
         <div><strong>🔖 Application Ref:</strong> ${safeRef}</div>
-        <div><strong>🎯 Assigned Track / Role:</strong> ${safeRole}</div>
         <div><strong>📍 Chapter / City:</strong> ${safeCity}</div>
         <div><strong>✅ Membership Status:</strong> <span style="color: #34d399; font-weight: 700;">Active Approved Volunteer</span></div>
       </div>
@@ -1032,7 +1035,6 @@ export function buildVolunteerApprovalEmail(opts: VolunteerApprovalEmailOptions)
     `📋 Onboarding Summary:`,
     `- Full Name: ${rawName}`,
     `- Reference Code: ${opts.referenceCode}`,
-    `- Role: ${opts.preferredRole || 'Council Volunteer'}`,
     `- City: ${opts.city || 'Community Chapter'}`,
     '- Status: Active Approved Volunteer ✅',
     opts.customNote?.trim() ? `\n💌 Note from Committee: ${opts.customNote.trim()}` : '',

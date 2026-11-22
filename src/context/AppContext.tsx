@@ -23,7 +23,9 @@ export type ActivePage =
   | 'gallery'
   | 'team'
   | 'volunteer'
+  | 'volunteer-apply'
   | 'track'
+  | 'track-application'
   | 'contact'
   | 'admin-login'
   | 'admin'
@@ -225,7 +227,7 @@ interface AppContextType {
   lastSyncTime: Date;
   pendingApplicationsCount: number;
   unreadContactsCount: number;
-  triggerRealtimeSync: () => Promise<void>;
+  triggerRealtimeSync: (forceFullRefresh?: boolean) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);

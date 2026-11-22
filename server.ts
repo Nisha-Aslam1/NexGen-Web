@@ -250,7 +250,14 @@ function clearLoginFailures(req: Request, username: string) {
 
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
-app.use('/api', rateLimit(240, 60 * 1000, 'global_api'));
+const generalApiLimiter = rateLimit(240, 60 * 1000, 'global_api');
+const meetingRealtimeLimiter = rateLimit(2400, 60 * 1000, 'meetings_live_api');
+app.use('/api', (req, res, next) => {
+  if (req.path.startsWith('/meetings')) {
+    return meetingRealtimeLimiter(req, res, next);
+  }
+  return generalApiLimiter(req, res, next);
+});
 
 // Origin / CSRF guard for cookie-authenticated state-changing requests
 app.use('/api', (req, res, next) => {
@@ -1113,6 +1120,7 @@ app.patch('/api/applications/:id/status', requireAuth(['ADMIN', 'VOLUNTEER_MANAG
     sendApprovalEmail,
     includeWhatsappInvite,
     whatsappGroupLink,
+    whatsappGroupTarget,
     saveWhatsappAsDefault,
     customEmailNote
   } = req.body || {};
@@ -1153,14 +1161,46 @@ app.patch('/api/applications/:id/status', requireAuth(['ADMIN', 'VOLUNTEER_MANAG
   if (status === 'Approved' && sendApprovalEmail === true) {
     const settings = db.getSettings();
     const emailConfig = db.getEmailSenderConfig();
-    const chosenWhatsappLink =
-      typeof whatsappGroupLink === 'string'
-        ? whatsappGroupLink.trim()
+
+    const inferredGender = String(updated.gender || '').trim().toLowerCase();
+    const normalizedTarget: 'male' | 'female' | 'general' =
+      whatsappGroupTarget === 'male' || whatsappGroupTarget === 'female'
+        ? whatsappGroupTarget
+        : inferredGender === 'male'
+        ? 'male'
+        : inferredGender === 'female'
+        ? 'female'
+        : 'general';
+
+    const settingLinkForTarget =
+      normalizedTarget === 'male'
+        ? (settings.volunteerWhatsappGroupLinkMale || '').trim()
+        : normalizedTarget === 'female'
+        ? (settings.volunteerWhatsappGroupLinkFemale || '').trim()
         : (settings.volunteerWhatsappGroupLink || '').trim();
 
-    if (saveWhatsappAsDefault === true && typeof whatsappGroupLink === 'string') {
-      db.updateSettings({ volunteerWhatsappGroupLink: chosenWhatsappLink });
+    const chosenWhatsappLink =
+      typeof whatsappGroupLink === 'string' && whatsappGroupLink.trim()
+        ? whatsappGroupLink.trim()
+        : settingLinkForTarget;
+
+    if (saveWhatsappAsDefault === true && typeof whatsappGroupLink === 'string' && whatsappGroupLink.trim()) {
+      const cleanSave = whatsappGroupLink.trim();
+      if (normalizedTarget === 'male') {
+        db.updateSettings({ volunteerWhatsappGroupLinkMale: cleanSave });
+      } else if (normalizedTarget === 'female') {
+        db.updateSettings({ volunteerWhatsappGroupLinkFemale: cleanSave });
+      } else {
+        db.updateSettings({ volunteerWhatsappGroupLink: cleanSave });
+      }
     }
+
+    const whatsappGroupLabel =
+      normalizedTarget === 'male'
+        ? '💬 Join Official Male Volunteers WhatsApp Group →'
+        : normalizedTarget === 'female'
+        ? '💬 Join Official Female Volunteers WhatsApp Group →'
+        : '💬 Join Official WhatsApp Group →';
 
     const template = buildVolunteerApprovalEmail({
       volunteerName: updated.fullName,
@@ -1170,6 +1210,7 @@ app.patch('/api/applications/:id/status', requireAuth(['ADMIN', 'VOLUNTEER_MANAG
       customNote: typeof customEmailNote === 'string' ? customEmailNote : undefined,
       includeWhatsappInvite: Boolean(includeWhatsappInvite && chosenWhatsappLink),
       whatsappGroupLink: chosenWhatsappLink,
+      whatsappGroupLabel,
       siteUrl: settings.siteUrl || 'https://nexgencouncil.bond'
     });
 
@@ -2088,13 +2129,14 @@ app.post('/api/upload', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANA
 
     if (payload.startsWith('data:image/')) {
       // Strictly whitelist safe raster formats only (blocks SVG XSS scripts)
-      const matches = payload.match(/^data:image\/(png|jpeg|jpg|webp|gif);base64,([A-Za-z0-9+/=]+)$/);
+      const matches = payload.match(/^data:image\/(png|jpeg|jpg|webp|gif)(?:;[^;,=]+=[^;,]+)*;base64,([\s\S]+)$/i);
       if (!matches) {
         return res.status(400).json({ error: 'Only PNG, JPG, WEBP, and GIF raster images are permitted.' });
       }
-      const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+      const rawExt = matches[1].toLowerCase();
+      const ext = rawExt === 'jpeg' ? 'jpg' : rawExt;
       const mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
-      const base64Data = matches[2];
+      const base64Data = matches[2].replace(/\s+/g, '');
       const buffer = Buffer.from(base64Data, 'base64');
 
       if (buffer.length > 5 * 1024 * 1024) {
@@ -2410,6 +2452,10 @@ async function startServer() {
     const safeFilename = path.basename(rawFilename);
     const publicPath = path.join(publicUploadsDir, safeFilename);
 
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Cache-Control', 'public, max-age=31536000');
+
     // 1. Direct file on disk
     if (fs.existsSync(publicPath)) {
       return res.sendFile(publicPath);
@@ -2430,9 +2476,9 @@ async function startServer() {
     try {
       const mediaDoc = await mongoGetMedia(safeFilename);
       if (mediaDoc && mediaDoc.dataUrl) {
-        const matches = mediaDoc.dataUrl.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
+        const matches = String(mediaDoc.dataUrl).match(/^data:image\/([a-zA-Z0-9.+-]+)(?:;[^;,=]+=[^;,]+)*;base64,([\s\S]+)$/i);
         if (matches) {
-          const buffer = Buffer.from(matches[2], 'base64');
+          const buffer = Buffer.from(matches[2].replace(/\s+/g, ''), 'base64');
           // Cache restored file to disk so future requests are instant
           try {
             fs.writeFileSync(publicPath, buffer);
@@ -2450,7 +2496,12 @@ async function startServer() {
     return res.status(404).send('Image not found');
   });
 
-  app.use('/uploads', express.static(publicUploadsDir));
+  app.use('/uploads', express.static(publicUploadsDir, {
+    setHeaders: (res) => {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    }
+  }));
 
   // Canonical URL normalization & 301 redirects for search engine crawlers
   app.use((req, res, next) => {
@@ -2536,7 +2587,14 @@ async function startServer() {
         const settings = db.getSettings();
         const gsc = process.env.GOOGLE_SITE_VERIFICATION || settings.googleSiteVerification;
         const ga = process.env.GA_TRACKING_ID || settings.googleAnalyticsId;
-        const html = injectSeoIntoHtml(template, metadata, siteUrl, gsc, ga);
+        const html = injectSeoIntoHtml(
+          template,
+          metadata,
+          siteUrl,
+          gsc,
+          ga,
+          typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : undefined
+        );
         const statusCode = metadata.title.includes('404') ? 404 : 200;
         res.status(statusCode).set({ 'Content-Type': 'text/html; charset=utf-8' }).end(html);
       } catch (e: any) {
@@ -2560,7 +2618,14 @@ async function startServer() {
         const settings = db.getSettings();
         const gsc = process.env.GOOGLE_SITE_VERIFICATION || settings.googleSiteVerification;
         const ga = process.env.GA_TRACKING_ID || settings.googleAnalyticsId;
-        const html = injectSeoIntoHtml(template, metadata, siteUrl, gsc, ga);
+        const html = injectSeoIntoHtml(
+          template,
+          metadata,
+          siteUrl,
+          gsc,
+          ga,
+          typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : undefined
+        );
         const statusCode = metadata.title.includes('404') ? 404 : 200;
         res.status(statusCode).set({
           'Content-Type': 'text/html; charset=utf-8',
@@ -2590,16 +2655,21 @@ async function startServer() {
     console.warn('[MongoDB] Init warning:', mErr?.message || mErr);
   }
 
-  // Purge any AI support conversations older than 7 days and schedule hourly cleanup
+  // Purge any AI support conversations (7 days) and meeting captures (3 days) and schedule hourly cleanup
   try {
     const purged = db.purgeExpiredSupportConversations();
     if (purged > 0) {
       console.log(`[Support AI] Purged ${purged} expired conversation(s) older than 7 days.`);
     }
+    const purgedCaps = db.purgeExpiredMeetingCaptures();
+    if (purgedCaps > 0) {
+      console.log(`[Meetings] Purged ${purgedCaps} expired meeting capture(s) older than 3 days.`);
+    }
   } catch {}
   setInterval(() => {
     try {
       db.purgeExpiredSupportConversations();
+      db.purgeExpiredMeetingCaptures();
     } catch {}
   }, 60 * 60 * 1000);
 

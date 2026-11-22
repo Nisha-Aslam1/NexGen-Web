@@ -101,10 +101,19 @@ export const TeamPage: React.FC = () => {
               >
                 <div className="aspect-square bg-slate-900 overflow-hidden relative shrink-0">
                   <img
-                    src={mem.image}
+                    src={mem.image || '/logo.png'}
                     alt={`${mem.name} - ${mem.position}`}
                     loading="lazy"
                     decoding="async"
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      const el = e.currentTarget;
+                      if (!el.dataset.fallbackApplied) {
+                        el.dataset.fallbackApplied = '1';
+                        el.src = '/logo.png';
+                        el.className = 'w-full h-full object-contain p-8 bg-slate-900';
+                      }
+                    }}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                   />
                   <span className="absolute bottom-3 left-3 px-2.5 py-0.5 rounded-full bg-slate-950/80 text-amber-300 text-[11px] font-semibold backdrop-blur-xs">
@@ -206,10 +215,19 @@ export const TeamPage: React.FC = () => {
                 >
                   <div className="aspect-square bg-slate-100 overflow-hidden relative shrink-0">
                     <img
-                      src={mem.image}
+                      src={mem.image || '/logo.png'}
                       alt={mem.name}
                       loading="lazy"
                       decoding="async"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        const el = e.currentTarget;
+                        if (!el.dataset.fallbackApplied) {
+                          el.dataset.fallbackApplied = '1';
+                          el.src = '/logo.png';
+                          el.className = 'w-full h-full object-contain p-6 bg-slate-900';
+                        }
+                      }}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                     />
                     <span className="absolute bottom-2.5 left-2.5 px-2 py-0.5 rounded-full bg-slate-950/80 text-slate-200 text-[10px] font-semibold">

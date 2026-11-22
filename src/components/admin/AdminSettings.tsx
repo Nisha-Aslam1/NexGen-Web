@@ -666,44 +666,86 @@ export const AdminSettings: React.FC = () => {
           </div>
         </div>
 
-        {/* Volunteer Onboarding & Official WhatsApp Group Link */}
+        {/* Volunteer Onboarding & Official Male / Female WhatsApp Group Links */}
         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
             <div className="flex items-center gap-2">
               <Share2 className="w-4 h-4 text-emerald-700" />
               <div>
                 <h3 className="font-serif font-bold text-base text-slate-900">
-                  Volunteer Approval &amp; WhatsApp Group Invite Link
+                  Volunteer Approval &amp; Male / Female WhatsApp Group Links
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  Default invitation link attached to Volunteer Approval Congratulations emails sent from{' '}
+                  Set separate official WhatsApp group invite links for Male and Female volunteers. Attached automatically to approval emails sent from{' '}
                   <span className="font-mono text-slate-700">admin@nexgencouncil.bond</span>.
                 </p>
               </div>
             </div>
-            <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
-              {formData.volunteerWhatsappGroupLink?.trim() ? 'Invite Link Set' : 'No Default Link (Optional)'}
-            </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span
+                className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border ${
+                  formData.volunteerWhatsappGroupLinkMale?.trim()
+                    ? 'bg-sky-50 text-sky-800 border-sky-200'
+                    : 'bg-slate-100 text-slate-500 border-slate-200'
+                }`}
+              >
+                Male: {formData.volunteerWhatsappGroupLinkMale?.trim() ? 'Set' : 'Not Set'}
+              </span>
+              <span
+                className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border ${
+                  formData.volunteerWhatsappGroupLinkFemale?.trim()
+                    ? 'bg-rose-50 text-rose-800 border-rose-200'
+                    : 'bg-slate-100 text-slate-500 border-slate-200'
+                }`}
+              >
+                Female: {formData.volunteerWhatsappGroupLinkFemale?.trim() ? 'Set' : 'Not Set'}
+              </span>
+            </div>
           </div>
 
-          <div>
-            <label className="block font-semibold text-slate-700 mb-1">
-              Official Volunteer WhatsApp Group Invitation URL (Optional)
-            </label>
-            <input
-              type="url"
-              value={formData.volunteerWhatsappGroupLink || ''}
-              onChange={e => {
-                setIsDirty(true);
-                setFormData({ ...formData, volunteerWhatsappGroupLink: e.target.value });
-              }}
-              placeholder="https://chat.whatsapp.com/YourInviteCodeHere"
-              className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono text-xs"
-            />
-            <p className="text-[11px] text-slate-500 mt-1.5">
-              Leave blank if you do not have a group link yet — you can still send clean Congratulations emails without an invite button, or override the link per approval.
-            </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">
+                Male Volunteers WhatsApp Group Invite Link
+              </label>
+              <input
+                type="url"
+                value={formData.volunteerWhatsappGroupLinkMale || ''}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, volunteerWhatsappGroupLinkMale: e.target.value });
+                }}
+                placeholder="https://chat.whatsapp.com/MaleGroupInvite..."
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono text-xs focus:ring-2 focus:ring-sky-300"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">
+                Used when approving Male volunteers with WhatsApp invitation enabled.
+              </p>
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">
+                Female Volunteers WhatsApp Group Invite Link
+              </label>
+              <input
+                type="url"
+                value={formData.volunteerWhatsappGroupLinkFemale || ''}
+                onChange={e => {
+                  setIsDirty(true);
+                  setFormData({ ...formData, volunteerWhatsappGroupLinkFemale: e.target.value });
+                }}
+                placeholder="https://chat.whatsapp.com/FemaleGroupInvite..."
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono text-xs focus:ring-2 focus:ring-rose-300"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">
+                Used when approving Female volunteers with WhatsApp invitation enabled.
+              </p>
+            </div>
           </div>
+
+          <p className="text-[11px] text-slate-500">
+            If either group link is left blank, approving a volunteer in that category will first ask for confirmation to send a Simple Congratulations Email (without any WhatsApp group link).
+          </p>
         </div>
 
         {/* About Page: Institutional Record & Directory */}

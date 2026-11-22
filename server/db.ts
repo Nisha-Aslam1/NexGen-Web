@@ -21,7 +21,8 @@ import {
   AdmissionStatus,
   EmailLog,
   SupportConversation,
-  SupportChatMessage
+  SupportChatMessage,
+  MeetingCapture
 } from '../src/types.ts';
 import { syncSchemaToMongo, loadOrSeedMongo, mongoUpsert, mongoDelete, mongoClearCollections, isMongoConnected } from './mongo.ts';
 
@@ -159,6 +160,7 @@ export interface DatabaseSchema {
   meetingParticipants?: MeetingParticipant[];
   meetingMessages?: MeetingMessage[];
   supportConversations?: SupportConversation[];
+  meetingCaptures?: MeetingCapture[];
   minValidTokenIssuedAt?: number;
 }
 
@@ -256,7 +258,9 @@ const defaultSettings: WebsiteSettings = {
   emailSenderEmail: 'admin@nexgencouncil.bond',
   emailReplyTo: '',
   emailLogoUrl: 'https://i.postimg.cc/5yM8rqz0/logo-(1).png',
-  volunteerWhatsappGroupLink: ''
+  volunteerWhatsappGroupLink: '',
+  volunteerWhatsappGroupLinkMale: '',
+  volunteerWhatsappGroupLinkFemale: ''
 };
 
 function getSeedData(): DatabaseSchema {
@@ -599,6 +603,7 @@ class Database {
     if (!this.data.meetingMessages) this.data.meetingMessages = [];
     if (!this.data.emailLogs) this.data.emailLogs = [];
     if (!this.data.supportConversations) this.data.supportConversations = [];
+    if (!this.data.meetingCaptures) this.data.meetingCaptures = [];
   }
 
   constructor() {
@@ -2154,6 +2159,9 @@ class Database {
       hasPassword = true;
     }
 
+    const rawMax = Number(meetingData.maxParticipants);
+    const maxParticipants = Number.isFinite(rawMax) && rawMax >= 2 ? Math.min(1000, Math.round(rawMax)) : 50;
+
     const newMeeting: Meeting = {
       id: `mtg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       meetingCode,
@@ -2171,7 +2179,7 @@ class Database {
       screenShareEnabled: meetingData.screenShareEnabled !== undefined ? meetingData.screenShareEnabled : true,
       startWithAudioMuted: meetingData.startWithAudioMuted !== undefined ? meetingData.startWithAudioMuted : false,
       startWithVideoMuted: meetingData.startWithVideoMuted !== undefined ? meetingData.startWithVideoMuted : false,
-      maxParticipants: meetingData.maxParticipants && meetingData.maxParticipants > 0 ? meetingData.maxParticipants : 50,
+      maxParticipants,
       isLocked: false,
       createdAt: now,
       updatedAt: now
@@ -2203,10 +2211,19 @@ class Database {
       }
     }
 
-    const { password, ...restUpdates } = updates;
+    const { password, maxParticipants: rawUpdateMax, ...restUpdates } = updates;
+    let nextMaxParticipants = current.maxParticipants || 50;
+    if (rawUpdateMax !== undefined) {
+      const parsedMax = Number(rawUpdateMax);
+      if (Number.isFinite(parsedMax)) {
+        nextMaxParticipants = Math.max(2, Math.min(1000, Math.round(parsedMax)));
+      }
+    }
+
     const updated: Meeting = {
       ...current,
       ...restUpdates,
+      maxParticipants: nextMaxParticipants,
       passwordHash,
       hasPassword,
       updatedAt: new Date().toISOString()
@@ -2255,12 +2272,18 @@ class Database {
     );
 
     if (participant) {
+      const wasDisconnected = participant.connectionStatus === 'disconnected';
       if (participantData.displayName) participant.displayName = participantData.displayName;
       if (participantData.admissionStatus) participant.admissionStatus = participantData.admissionStatus;
       if (participantData.connectionStatus) participant.connectionStatus = participantData.connectionStatus;
       if (participantData.role) participant.role = participantData.role;
       if (participantData.identity) participant.identity = participantData.identity;
-      participant.joinedAt = participant.joinedAt || now;
+      if (wasDisconnected && participantData.connectionStatus === 'connected') {
+        participant.joinedAt = now;
+        participant.leftAt = undefined;
+      } else {
+        participant.joinedAt = participant.joinedAt || now;
+      }
     } else {
       participant = {
         id: `mpt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -2283,19 +2306,29 @@ class Database {
 
   updateParticipantAdmission(meetingId: string, participantId: string, status: AdmissionStatus): MeetingParticipant | null {
     this.ensureMeetingArrays();
-    const p = this.data.meetingParticipants!.find(
-      item => item.meetingId === meetingId && (item.id === participantId || item.userId === participantId || item.identity === participantId)
+    const matches = this.data.meetingParticipants!.filter(
+      item =>
+        item.meetingId === meetingId &&
+        (item.id === participantId ||
+          (item.userId && item.userId === participantId) ||
+          item.identity === participantId)
     );
-    if (!p) return null;
+    if (matches.length === 0) return null;
 
-    p.admissionStatus = status;
-    p.connectionStatus = status === 'admitted' ? 'connected' : 'disconnected';
-    if (status === 'rejected') {
-      p.leftAt = new Date().toISOString();
+    const now = new Date().toISOString();
+    for (const p of matches) {
+      p.admissionStatus = status;
+      p.connectionStatus =
+        status === 'admitted' ? 'connected' : status === 'waiting' ? 'waiting' : 'disconnected';
+      if (status === 'rejected') {
+        p.leftAt = now;
+      } else if (status === 'admitted') {
+        p.leftAt = undefined;
+      }
+      mongoUpsert('meeting_participants', p.id, p).catch(() => {});
     }
     this.save();
-    mongoUpsert('meeting_participants', p.id, p).catch(() => {});
-    return p;
+    return matches[matches.length - 1];
   }
 
   updateParticipantRole(
@@ -2321,20 +2354,25 @@ class Database {
 
   markParticipantLeft(meetingId: string, participantIdOrIdentity: string): MeetingParticipant | null {
     this.ensureMeetingArrays();
-    const p = this.data.meetingParticipants!.find(
+    if (!participantIdOrIdentity) return null;
+    const now = new Date().toISOString();
+    const matches = this.data.meetingParticipants!.filter(
       item =>
         item.meetingId === meetingId &&
+        item.connectionStatus !== 'disconnected' &&
         (item.id === participantIdOrIdentity ||
-          item.userId === participantIdOrIdentity ||
+          (item.userId && item.userId === participantIdOrIdentity) ||
           item.identity === participantIdOrIdentity)
     );
-    if (!p) return null;
+    if (matches.length === 0) return null;
 
-    p.connectionStatus = 'disconnected';
-    p.leftAt = new Date().toISOString();
+    for (const p of matches) {
+      p.connectionStatus = 'disconnected';
+      p.leftAt = now;
+      mongoUpsert('meeting_participants', p.id, p).catch(() => {});
+    }
     this.save();
-    mongoUpsert('meeting_participants', p.id, p).catch(() => {});
-    return p;
+    return matches[matches.length - 1];
   }
 
   markAllMeetingParticipantsDisconnected(meetingId: string): void {
@@ -2377,6 +2415,98 @@ class Database {
     this.save();
     mongoUpsert('meeting_messages', newMsg.id, newMsg).catch(() => {});
     return newMsg;
+  }
+
+  // --- Meeting Captures (Recordings & Screenshots with 3-Day TTL Auto-Delete) ---
+  purgeExpiredMeetingCaptures(): number {
+    this.ensureMeetingArrays();
+    const retentionMs = 3 * 24 * 60 * 60 * 1000;
+    const cutoffMs = Date.now() - retentionMs;
+    const list = this.data.meetingCaptures || [];
+    if (list.length === 0) return 0;
+
+    const surviving: MeetingCapture[] = [];
+    let deletedCount = 0;
+
+    for (const cap of list) {
+      const t = new Date(cap.createdAt).getTime();
+      if (Number.isNaN(t) || t < cutoffMs) {
+        deletedCount++;
+        mongoDelete('meetingCaptures', cap.id).catch(() => {});
+        try {
+          const filePath = path.join(process.cwd(), 'public', cap.filename.startsWith('/') ? cap.filename.slice(1) : cap.filename);
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        } catch {}
+      } else {
+        surviving.push(cap);
+      }
+    }
+
+    if (deletedCount > 0) {
+      this.data.meetingCaptures = surviving;
+      this.save();
+    }
+    return deletedCount;
+  }
+
+  getMeetingCaptures(meetingId?: string): MeetingCapture[] {
+    this.purgeExpiredMeetingCaptures();
+    this.ensureMeetingArrays();
+    let list = [...(this.data.meetingCaptures || [])];
+    if (meetingId) {
+      list = list.filter(c => c.meetingId === meetingId);
+    }
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  addMeetingCapture(data: {
+    meetingId: string;
+    meetingCode: string;
+    meetingTitle: string;
+    kind: 'recording' | 'screenshot';
+    filename: string;
+    originalName: string;
+    mimeType: string;
+    sizeBytes: number;
+    durationSeconds?: number;
+    capturedBy: string;
+    hasAudio?: boolean;
+    hasVideo?: boolean;
+  }): MeetingCapture {
+    this.purgeExpiredMeetingCaptures();
+    this.ensureMeetingArrays();
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+    const retentionMs = 3 * 24 * 60 * 60 * 1000;
+    const expiresAt = new Date(now + retentionMs).toISOString();
+
+    const capture: MeetingCapture = {
+      id: `cap_${now}_${Math.random().toString(36).slice(2, 6)}`,
+      ...data,
+      createdAt: nowIso,
+      expiresAt
+    };
+
+    this.data.meetingCaptures!.unshift(capture);
+    this.save();
+    mongoUpsert('meetingCaptures', capture.id, capture).catch(() => {});
+    return capture;
+  }
+
+  deleteMeetingCapture(id: string): boolean {
+    this.ensureMeetingArrays();
+    const list = this.data.meetingCaptures || [];
+    const target = list.find(c => c.id === id);
+    if (!target) return false;
+
+    this.data.meetingCaptures = list.filter(c => c.id !== id);
+    this.save();
+    mongoDelete('meetingCaptures', id).catch(() => {});
+    try {
+      const filePath = path.join(process.cwd(), 'public', target.filename.startsWith('/') ? target.filename.slice(1) : target.filename);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch {}
+    return true;
   }
 }
 

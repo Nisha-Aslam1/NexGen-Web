@@ -108,23 +108,56 @@ const checkApplicationStatusDeclaration: FunctionDeclaration = {
   }
 };
 
+const searchWebsiteKnowledgeDeclaration: FunctionDeclaration = {
+  name: 'search_website_knowledge',
+  description:
+    'Queries full live website content across Programs, Events, News & Press Releases, Leadership Team Profiles, and Visual Gallery Highlights. Use this whenever a visitor asks detailed questions about a specific program curriculum, upcoming/past event schedule, news article, leader bio, or gallery event.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      section: {
+        type: Type.STRING,
+        description: 'Section to query: all, programs, events, news, team, or gallery.'
+      },
+      query: {
+        type: Type.STRING,
+        description: 'Optional search keyword (program title, leader name, topic, city, or category).'
+      }
+    },
+    required: ['section']
+  }
+};
+
+const getOrganizationOverviewDeclaration: FunctionDeclaration = {
+  name: 'get_organization_overview',
+  description:
+    'Returns complete live organizational overview: impact metrics, social media links, active announcement banner, headquarters/registration details, contact channels, office hours, and volunteer onboarding policies.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {}
+  }
+};
+
 function buildWebsiteKnowledgePrompt(): string {
   const settings = db.getSettings();
   const programs = db.getPrograms(true);
-  const events = db.getEvents();
-  const news = db.getNews(true).slice(0, 8);
-  const team = db.getTeam().filter(t => t.active !== false);
+  const events = db.getEvents().filter(e => e.status !== 'Draft');
+  const news = db.getNews(true);
+  const team = db.getTeam(true);
+  const gallery = db.getGallery();
+  const orgStats = db.getAnalyticsOrgContext();
 
   const programsText =
     programs.length > 0
       ? programs
           .map(
             p =>
-              `- ${p.title} (${p.category}${p.featured ? ', Featured' : ''}): ${p.shortDescription}` +
+              `- **${p.title}** (${p.category}${p.featured ? ', Flagship' : ''}): ${p.shortDescription}` +
+              (p.fullDescription ? ` | Details: ${p.fullDescription.slice(0, 260)}` : '') +
               (p.targetAudience ? ` | Target Audience: ${p.targetAudience}` : '') +
               (p.startDate ? ` | Dates: ${p.startDate}${p.endDate ? ` to ${p.endDate}` : ''}` : '') +
               (p.curriculumHighlights?.length
-                ? ` | Highlights: ${p.curriculumHighlights.slice(0, 4).join(', ')}`
+                ? ` | Highlights: ${p.curriculumHighlights.slice(0, 5).join(', ')}`
                 : '')
           )
           .join('\n')
@@ -133,12 +166,12 @@ function buildWebsiteKnowledgePrompt(): string {
   const eventsText =
     events.length > 0
       ? events
-          .slice(0, 10)
+          .slice(0, 15)
           .map(
             e =>
-              `- [${e.status}] ${e.title} (${e.category}) on ${e.date} at ${e.time} | Location: ${e.location}${
+              `- [${e.status}] **${e.title}** (${e.category}) on ${e.date} at ${e.time} | Location: ${e.location}${
                 e.isVirtual ? ' (Online/Virtual)' : ''
-              }: ${e.description?.slice(0, 160)}`
+              }${e.capacity ? ` | Capacity: ${e.capacity}` : ''}: ${(e.description || '').slice(0, 200)}`
           )
           .join('\n')
       : '- Check the Events page for upcoming workshops and webinars.';
@@ -146,18 +179,47 @@ function buildWebsiteKnowledgePrompt(): string {
   const newsText =
     news.length > 0
       ? news
-          .map(n => `- ${n.title} (${n.category}, ${n.publishedAt}): ${n.summary?.slice(0, 150)}`)
+          .slice(0, 10)
+          .map(
+            n =>
+              `- **${n.title}** (${n.category}, ${n.publishedAt}, by ${n.author}): ${(n.summary || '').slice(0, 200)}`
+          )
           .join('\n')
       : '- Official announcements are published on the News page.';
 
   const teamText =
     team.length > 0
-      ? team.map(m => `- ${m.name} — ${m.position} (${m.department})`).join('\n')
+      ? team
+          .map(
+            m =>
+              `- **${m.name}** — ${m.position} (${m.department})${m.bio ? `: ${m.bio.slice(0, 140)}` : ''}`
+          )
+          .join('\n')
       : '- Led by the NexGen Executive Secretariat.';
+
+  const galleryText =
+    gallery.length > 0
+      ? gallery
+          .slice(0, 10)
+          .map(g => `- ${g.title} (${g.category}, ${g.date})${g.caption ? `: ${g.caption}` : ''}`)
+          .join('\n')
+      : '- Field and summit photo archives are available on the Gallery page.';
 
   const valuesText =
     (settings.coreValues || []).map(v => `${v.title}: ${v.description}`).join(' | ') ||
     'Integrity, Inclusivity, Civic Leadership, Educational Equity.';
+
+  const socialEntries = Object.entries(settings.socialLinks || {})
+    .filter(([, url]) => typeof url === 'string' && url.trim())
+    .map(([platform, url]) => `${platform}: ${url}`)
+    .join(' | ');
+
+  const bannerInfo =
+    settings.announcementBanner?.enabled && settings.announcementBanner.text
+      ? settings.announcementBanner.text
+      : settings.announcementBannerEnabled && settings.announcementBannerText
+      ? settings.announcementBannerText
+      : 'None currently active';
 
   return `You are the official **NexGen Council AI Concierge** inside the floating Support Widget on the website of **${
     settings.organizationName || 'NexGen Women Empowerment & Youth Leadership Council'
@@ -166,47 +228,57 @@ function buildWebsiteKnowledgePrompt(): string {
 ### 1. YOUR IDENTITY & COMMUNICATION STYLE
 - Respond warmly, clearly, accurately, and concisely (ideal length: 2–5 short sentences or clean bullet points unless the user asks for detailed steps).
 - **Language Matching**: Reply in the exact language/script the visitor uses — English, Urdu, or Roman Urdu (e.g., if they write in Roman Urdu like "mujhe volunteer apply karna ha", reply naturally and professionally in Roman Urdu!).
-- **Strict Honesty**: Only state facts, schedules, policies, programs, and contact channels verified below or retrieved from tools. Never invent fake fees, dates, phone numbers, or private data.
-- **Clickable Website Guidance**: Whenever guiding the visitor to a page on this website, you may include inline navigation chips using this EXACT syntax:
-  \`[[PAGE:home|Home]]\`, \`[[PAGE:about|About Us]]\`, \`[[PAGE:programs|Explore Programs]]\`, \`[[PAGE:events|View Events]]\`, \`[[PAGE:news|Latest News]]\`, \`[[PAGE:gallery|Photo Gallery]]\`, \`[[PAGE:team|Leadership Team]]\`, \`[[PAGE:volunteer|Apply as Volunteer]]\`, \`[[PAGE:track|Track Application]]\`, \`[[PAGE:contact|Contact Page]]\`.
-  Use these tags naturally so the widget renders interactive navigation buttons for the user!
+- **Strict Honesty & Privacy**:
+  - Use the live knowledge below AND call your tools (\`search_website_knowledge\`, \`get_organization_overview\`, \`check_application_status\`) whenever someone asks deeper questions about programs, events, news, leaders, stats, or application status.
+  - NEVER invent fake fees, dates, phone numbers, or share private admin credentials, private WhatsApp group invite URLs, private meeting passwords/links, or other visitors' personal details.
+- **Clickable Website Navigation Buttons (FORMATTING RULE)**:
+  When guiding the visitor to pages on this website, place button tags on their own clean line at the end separated ONLY by spaces (NEVER join them with \`|\` pipes or commas!). Use ONLY these exact tags:
+  \`[[PAGE:home|Home]]\` \`[[PAGE:about|About Us]]\` \`[[PAGE:programs|Explore Programs]]\` \`[[PAGE:events|View Events]]\` \`[[PAGE:news|Latest News]]\` \`[[PAGE:gallery|Photo Gallery]]\` \`[[PAGE:team|Leadership Team]]\` \`[[PAGE:volunteer|Apply as Volunteer]]\` \`[[PAGE:track|Track Application]]\` \`[[PAGE:contact|Contact Page]]\`
 
-### 2. ORGANIZATION PROFILE & CONTACT DETAILS
+### 2. ORGANIZATION PROFILE, LIVE STATS & WEBSITE DIRECTORY
 - **Name**: ${settings.organizationName}
 - **Tagline**: ${settings.tagline}
+- **Active Announcement Banner**: ${bannerInfo}
 - **Mission**: ${settings.missionStatement}
 - **Vision**: ${settings.visionStatement}
 - **History**: ${settings.historyStatement}
 - **Core Values**: ${valuesText}
 - **Primary Domains**: ${settings.primaryDomains || 'Women Empowerment, Youth Leadership, Civic Policy, Educational Equity'}
+- **Headquarters / Office**: ${settings.directoryHeadquarters || settings.officeAddress || 'Pakistan'} | ${settings.officeAddress || ''}
 - **Official Contact Email**: ${settings.contactEmail || 'admin@nexgencouncil.bond'}
 - **Official Phone**: ${settings.contactPhone || 'Available via Secretariat'}
-- **Office Address**: ${settings.officeAddress || 'Headquarters'}
-- **Office Hours**: ${settings.footerOfficeHours || 'Mon–Fri, 9:00 AM – 5:00 PM'}
+- **Office Hours**: ${settings.footerOfficeHours || 'Mon–Fri, 9:00 AM – 6:00 PM'}
 - **Registration / Record**: ${settings.registrationNumber || 'Registered Non-Profit Civil Society Council'}
 - **Website URL**: ${settings.siteUrl || 'https://nexgencouncil.bond'}
+- **Official Social Channels**: ${socialEntries || 'Available in website footer'}
+- **Live Impact Figures**: ${settings.stats?.volunteersCount || orgStats.totalVolunteers || '1,450+'} Volunteers Trained | ${settings.stats?.communitiesCount || '48'} Communities Reached | ${programs.length} Published Programs | ${events.length} Listed Events | ${team.length} Active Leaders | ${gallery.length} Gallery Highlights
+- **Website Pages Guide**: Home (\`/\`), About Charter & Institutional Record (\`/about\`), Leadership Programs & Cohorts (\`/programs\`), Upcoming & Past Events (\`/events\`), News & Press Releases (\`/news\`), Visual Photo Gallery (\`/gallery\`), Executive Board & Team (\`/team\`), 4-Step Volunteer Application (\`/volunteer\`), Live Application Status Tracker (\`/track\`), Contact Secretariat (\`/contact\`).
 
-### 3. KEY POLICIES & FAQs
+### 3. KEY POLICIES, ONBOARDING & FAQs
 - **Membership & Program Fees**: 100% FREE of charge. NexGen Council never charges fees to join volunteer cohorts, workshops, or training sessions.
-- **Eligibility**: Women and youth advocates ages 16+ from all academic backgrounds and cities can apply on the Volunteer page (\`[[PAGE:volunteer|Apply as Volunteer]]\`). No prior experience is required.
-- **Certificates**: Verified digital certificates are awarded to cohort participants who meet attendance requirements and submit their practical community project.
-- **Tracking Applications**: Applicants receive a Reference Code (e.g., \`NG-XXXX\`) on submission. They can check status on the Track Application page (\`[[PAGE:track|Track Application]]\`) or share their Reference Code right here with you to check live using \`check_application_status\`.
-- **Online Meetings & Webinars**: Direct meeting room links are shared with approved/registered attendees via email/WhatsApp. Waiting room admission opens ~5 minutes before start. Note: Council meetings are private/invite-only and not listed publicly.
+- **Eligibility & Application**: Women and youth advocates ages 16+ from all cities and academic backgrounds can apply in 4 simple steps on the Volunteer page (Personal Info, Education/Skills, Volunteering Interests/Preferred Role, Verification). No prior experience is required.
+- **Separate Male & Female Community Groups**: Upon Secretariat review and approval, approved volunteers receive a congratulations email from \`admin@nexgencouncil.bond\` and (when enabled by Secretariat) an invitation button to join their dedicated **Male Volunteers** or **Female Volunteers** official WhatsApp community group. Never invent or guess WhatsApp invite URLs.
+- **Certificates**: Verified digital certificates are awarded to cohort participants who meet attendance requirements and complete their practical community project.
+- **Tracking Applications**: Applicants receive a Reference Code (e.g., \`NG-XXXX\`) on submission. They can check status on the Track Application page or share their Reference Code right here with you to check live using \`check_application_status\`.
+- **Online Meetings & Webinars**: Council meetings are private/invite-only; direct joining links are shared only with approved/registered attendees via email/WhatsApp.
 - **Partnerships**: Universities, schools, and civil-society organizations interested in partnerships can escalate via human support with their institution name and WhatsApp contact.
 
-### 4. LIVE WEBSITE PROGRAMS (${programs.length})
+### 4. PUBLISHED PROGRAMS (${programs.length})
 ${programsText}
 
-### 5. LIVE EVENTS (${events.length})
+### 5. EVENTS CALENDAR (${events.length})
 ${eventsText}
 
-### 6. LATEST NEWS & ANNOUNCEMENTS (${news.length})
+### 6. LATEST NEWS & PRESS RELEASES (${news.length})
 ${newsText}
 
-### 7. LEADERSHIP TEAM (${team.length})
+### 7. EXECUTIVE BOARD & LEADERSHIP TEAM (${team.length})
 ${teamText}
 
-### 8. HUMAN SUPPORT ESCALATION PROTOCOL (CRITICAL!)
+### 8. PHOTO GALLERY ARCHIVE HIGHLIGHTS (${gallery.length})
+${galleryText}
+
+### 9. HUMAN SUPPORT ESCALATION PROTOCOL (CRITICAL!)
 Follow these rules strictly whenever a visitor needs real human assistance (Secretariat staff / Admin / Coordinator):
 - **When to escalate**:
   1. The visitor explicitly asks to speak with a real human, admin, coordinator, or team member; OR
@@ -229,7 +301,12 @@ async function generateWithRetry(
 ): Promise<{ response: GenerateContentResponse; modelUsed: string }> {
   const tools = [
     {
-      functionDeclarations: [escalateToHumanDeclaration, checkApplicationStatusDeclaration]
+      functionDeclarations: [
+        escalateToHumanDeclaration,
+        checkApplicationStatusDeclaration,
+        searchWebsiteKnowledgeDeclaration,
+        getOrganizationOverviewDeclaration
+      ]
     }
   ];
 
@@ -336,9 +413,9 @@ export async function handleSupportAiChat(params: {
   let collectedEmail: string | undefined;
   let collectedWhatsapp: string | undefined;
 
-  // Handle up to 2 function call rounds (e.g., status check +/or escalation)
+  // Handle up to 3 function call rounds (knowledge lookup + status check +/or escalation)
   const workingContents: Content[] = [...contents];
-  for (let step = 0; step < 2; step++) {
+  for (let step = 0; step < 3; step++) {
     const fnCalls = response.functionCalls;
     const modelContent = response.candidates?.[0]?.content;
     if (!fnCalls || fnCalls.length === 0 || !modelContent) {
@@ -351,7 +428,136 @@ export async function handleSupportAiChat(params: {
     for (const call of fnCalls) {
       const args = (call.args || {}) as Record<string, any>;
 
-      if (call.name === 'check_application_status') {
+      if (call.name === 'get_organization_overview') {
+        const s = db.getSettings();
+        const orgStats = db.getAnalyticsOrgContext();
+        fnResponseParts.push({
+          functionResponse: {
+            id: call.id,
+            name: call.name,
+            response: {
+              organizationName: s.organizationName,
+              tagline: s.tagline,
+              missionStatement: s.missionStatement,
+              visionStatement: s.visionStatement,
+              historyStatement: s.historyStatement,
+              primaryDomains: s.primaryDomains,
+              headquarters: s.directoryHeadquarters || s.officeAddress,
+              officeAddress: s.officeAddress,
+              officeHours: s.footerOfficeHours,
+              contactEmail: s.contactEmail,
+              contactPhone: s.contactPhone,
+              registrationNumber: s.registrationNumber,
+              siteUrl: s.siteUrl,
+              socialLinks: s.socialLinks,
+              announcementBanner: s.announcementBanner,
+              stats: {
+                ...s.stats,
+                publishedPrograms: db.getPrograms(true).length,
+                upcomingEvents: db.getEvents('Upcoming').length,
+                activeTeamMembers: db.getTeam(true).length,
+                galleryPhotos: db.getGallery().length,
+                totalApplications: orgStats.totalApplications,
+                totalVolunteers: orgStats.totalVolunteers
+              }
+            }
+          }
+        });
+      } else if (call.name === 'search_website_knowledge') {
+        const section = String(args.section || 'all').toLowerCase();
+        const q = String(args.query || '').trim().toLowerCase();
+        const matchesQuery = (text: string) => !q || text.toLowerCase().includes(q);
+        const payload: Record<string, any> = {};
+
+        if (section === 'all' || section === 'programs') {
+          payload.programs = db
+            .getPrograms(true)
+            .filter(p => matchesQuery(`${p.title} ${p.category} ${p.shortDescription} ${p.fullDescription} ${p.targetAudience || ''}`))
+            .map(p => ({
+              title: p.title,
+              slug: p.slug,
+              category: p.category,
+              featured: p.featured,
+              shortDescription: p.shortDescription,
+              fullDescription: p.fullDescription,
+              targetAudience: p.targetAudience,
+              startDate: p.startDate,
+              endDate: p.endDate,
+              curriculumHighlights: p.curriculumHighlights
+            }));
+        }
+
+        if (section === 'all' || section === 'events') {
+          payload.events = db
+            .getEvents()
+            .filter(e => e.status !== 'Draft')
+            .filter(e => matchesQuery(`${e.title} ${e.category} ${e.location} ${e.description}`))
+            .map(e => ({
+              title: e.title,
+              status: e.status,
+              category: e.category,
+              date: e.date,
+              time: e.time,
+              location: e.location,
+              isVirtual: e.isVirtual,
+              capacity: e.capacity,
+              registeredCount: e.registeredCount,
+              registrationUrl: e.registrationUrl,
+              description: e.description
+            }));
+        }
+
+        if (section === 'all' || section === 'news') {
+          payload.news = db
+            .getNews(true)
+            .filter(n => matchesQuery(`${n.title} ${n.category} ${n.summary} ${n.content}`))
+            .slice(0, 12)
+            .map(n => ({
+              title: n.title,
+              category: n.category,
+              author: n.author,
+              authorRole: n.authorRole,
+              publishedAt: n.publishedAt,
+              summary: n.summary,
+              contentPreview: n.content?.slice(0, 600)
+            }));
+        }
+
+        if (section === 'all' || section === 'team') {
+          payload.team = db
+            .getTeam(true)
+            .filter(m => matchesQuery(`${m.name} ${m.position} ${m.department} ${m.bio}`))
+            .map(m => ({
+              name: m.name,
+              position: m.position,
+              department: m.department,
+              bio: m.bio,
+              email: m.email,
+              linkedinUrl: m.linkedinUrl
+            }));
+        }
+
+        if (section === 'all' || section === 'gallery') {
+          payload.gallery = db
+            .getGallery()
+            .filter(g => matchesQuery(`${g.title} ${g.category} ${g.caption || ''}`))
+            .slice(0, 20)
+            .map(g => ({
+              title: g.title,
+              category: g.category,
+              date: g.date,
+              caption: g.caption
+            }));
+        }
+
+        fnResponseParts.push({
+          functionResponse: {
+            id: call.id,
+            name: call.name,
+            response: payload
+          }
+        });
+      } else if (call.name === 'check_application_status') {
         const ref = String(args.referenceCode || '').trim();
         const appRecord = ref ? db.getApplicationById(ref) : null;
         fnResponseParts.push({
