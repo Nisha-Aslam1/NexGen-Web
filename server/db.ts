@@ -244,10 +244,16 @@ const defaultSettings: WebsiteSettings = {
   directoryHeading: 'Institutional Record & Directory',
   primaryDomains: 'Women Empowerment · Youth Civic Leadership · Mentorship · Policy Dialogue',
   directoryHeadquarters: 'Sialkot, PK',
+  showDirectoryCard: true,
+  showDirectoryHeading: true,
+  showDirectoryHeadquarters: true,
+  showOfficialTitle: true,
+  showPrimaryDomains: true,
   emailSenderName: 'NexGen Council',
   emailSenderEmail: 'admin@nexgencouncil.bond',
   emailReplyTo: '',
-  emailLogoUrl: 'https://i.postimg.cc/5yM8rqz0/logo-(1).png'
+  emailLogoUrl: 'https://i.postimg.cc/5yM8rqz0/logo-(1).png',
+  volunteerWhatsappGroupLink: ''
 };
 
 function getSeedData(): DatabaseSchema {
@@ -604,66 +610,115 @@ class Database {
       this.data = getSeedData();
     }
     this.ensureMeetingArrays();
-    // Always initialize Super Admin credentials from .env / config immediately
-    this.syncSuperAdminFromEnv();
+    // Only seed a Super Admin if none exists yet; NEVER overwrite already-set DB credentials
+    this.syncSuperAdminFromEnv({ persistOnInit: false });
   }
 
   public async initFromMongo(): Promise<void> {
     try {
       if (isMongoConnected()) {
         this.data = await loadOrSeedMongo(this.data);
+        this.ensureMeetingArrays();
+        this.syncSuperAdminFromEnv({ persistOnInit: true });
         this.saveToFile(this.data);
         console.log('[Database] Synchronized state with real-time MongoDB collections.');
+      } else {
+        this.syncSuperAdminFromEnv({ persistOnInit: true });
       }
-      this.syncSuperAdminFromEnv();
     } catch (err: any) {
       console.warn('[Database] Sync with MongoDB error:', err.message);
     }
   }
 
-  public syncSuperAdminFromEnv() {
-    const creds = resolveAdminCredentials();
-    const adminUsername = creds.username;
-    const adminEmail = creds.email;
+  private writeAdminConfigSnapshot(user: DatabaseSchema['users'][0]) {
+    try {
+      if (!fs.existsSync(PERSISTENCE_DIR)) {
+        fs.mkdirSync(PERSISTENCE_DIR, { recursive: true });
+      }
+      fs.writeFileSync(
+        ADMIN_CONFIG_FILE,
+        JSON.stringify(
+          {
+            username: user.username,
+            email: user.email,
+            passwordHash: user.passwordHash,
+            salt: user.salt,
+            updatedAt: new Date().toISOString()
+          },
+          null,
+          2
+        ),
+        { encoding: 'utf-8', mode: 0o600 }
+      );
+    } catch (err) {
+      console.warn('[Database] Could not sync admin_credentials.json:', err);
+    }
+  }
 
+  public getActiveSuperAdminInfo(): { username: string; email: string; source: 'database' | ResolvedAdminCredentials['source']; isCustomConfigured: boolean } {
+    const existing = this.data.users.find(u => u.role === 'SUPER_ADMIN' || u.id === 'usr_super_1');
+    if (existing) {
+      return {
+        username: existing.username,
+        email: existing.email,
+        source: 'database',
+        isCustomConfigured: true
+      };
+    }
+    const creds = resolveAdminCredentials();
+    return {
+      username: creds.username,
+      email: creds.email,
+      source: creds.source,
+      isCustomConfigured: creds.source !== 'default'
+    };
+  }
+
+  /**
+   * Non-destructive Super Admin initializer:
+   * Only seeds initial Super Admin when ZERO Super Admin exists in the database.
+   * Once set in MongoDB / persistent storage / UI, existing email & password are NEVER overwritten by .env on rebuild.
+   */
+  public syncSuperAdminFromEnv(options?: { persistOnInit?: boolean }) {
+    const persist = options?.persistOnInit !== false;
     let superAdmin = this.data.users.find(
-      u => u.role === 'SUPER_ADMIN' || u.id === 'usr_super_1' || u.username.toLowerCase() === adminUsername.toLowerCase()
+      u => u.role === 'SUPER_ADMIN' || u.id === 'usr_super_1'
     );
 
+    if (superAdmin) {
+      superAdmin.role = 'SUPER_ADMIN';
+      if (!superAdmin.tokenVersion) superAdmin.tokenVersion = 1;
+      if (persist) {
+        this.writeAdminConfigSnapshot(superAdmin);
+      }
+      return superAdmin;
+    }
+
+    // First-time bootstrap only: no Super Admin exists in DB yet
+    const creds = resolveAdminCredentials();
     const { hash, salt } = creds.passwordHash && creds.salt
       ? { hash: creds.passwordHash, salt: creds.salt }
       : hashPassword(creds.password || 'admin123');
 
-    if (superAdmin) {
-      const existingMatches = creds.password
-        ? verifyPassword(creds.password, superAdmin.passwordHash, superAdmin.salt)
-        : (superAdmin.passwordHash === hash && superAdmin.salt === salt);
+    superAdmin = {
+      id: 'usr_super_1',
+      username: creds.username,
+      name: 'Executive Director (Super Admin)',
+      email: creds.email,
+      role: 'SUPER_ADMIN',
+      avatar: '/logo.png',
+      createdAt: new Date().toISOString(),
+      passwordHash: hash,
+      salt,
+      tokenVersion: 1
+    };
+    this.data.users.unshift(superAdmin);
 
-      superAdmin.username = adminUsername;
-      superAdmin.email = adminEmail;
-      superAdmin.role = 'SUPER_ADMIN';
-      if (!existingMatches) {
-        superAdmin.passwordHash = hash;
-        superAdmin.salt = salt;
-      }
-      if (!superAdmin.tokenVersion) superAdmin.tokenVersion = 1;
-    } else {
-      superAdmin = {
-        id: 'usr_super_1',
-        username: adminUsername,
-        name: 'Executive Director (Super Admin)',
-        email: adminEmail,
-        role: 'SUPER_ADMIN',
-        avatar: '/logo.png',
-        createdAt: new Date().toISOString(),
-        passwordHash: hash,
-        salt,
-        tokenVersion: 1
-      };
-      this.data.users.unshift(superAdmin);
+    if (persist) {
+      this.writeAdminConfigSnapshot(superAdmin);
+      this.save();
+      mongoUpsert('users', superAdmin.id, superAdmin).catch(() => {});
     }
-    this.save();
-    mongoUpsert('users', superAdmin.id, superAdmin).catch(() => {});
     return superAdmin;
   }
 
@@ -829,36 +884,9 @@ class Database {
     const cleanPass = (passwordPlain || '').trim();
     if (!cleanUser || !cleanPass) return null;
 
-    // Sync Super Admin safely if configured
-    const superAdmin = this.syncSuperAdminFromEnv();
-    const creds = resolveAdminCredentials();
-
-    const isSuperAdminTarget = (
-      cleanUser.toLowerCase() === superAdmin.username.toLowerCase() ||
-      cleanUser.toLowerCase() === superAdmin.email.toLowerCase() ||
-      cleanUser.toLowerCase() === creds.username.toLowerCase() ||
-      cleanUser.toLowerCase() === creds.email.toLowerCase()
-    );
-
-    if (isSuperAdminTarget) {
-      let valid = verifyPassword(cleanPass, superAdmin.passwordHash, superAdmin.salt);
-      if (!valid && creds.password) {
-        const a = Buffer.from(cleanPass, 'utf8');
-        const b = Buffer.from(creds.password, 'utf8');
-        if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
-          valid = true;
-        }
-      }
-      if (valid) {
-        if (!superAdmin.passwordHash.startsWith('v2$')) {
-          const upgraded = hashPassword(cleanPass);
-          superAdmin.passwordHash = upgraded.hash;
-          superAdmin.salt = upgraded.salt;
-          this.save();
-          mongoUpsert('users', superAdmin.id, superAdmin).catch(() => {});
-        }
-        return this.toSafeUser(superAdmin);
-      }
+    // Only bootstrap Super Admin if database somehow has zero users; never overwrite existing DB credentials
+    if (this.data.users.length === 0) {
+      this.syncSuperAdminFromEnv();
     }
 
     const user = this.data.users.find(
@@ -888,34 +916,49 @@ class Database {
   }
 
   updateSuperAdminCredentials(newUsername: string, newPassword: string, newEmail?: string) {
-    const username = newUsername.trim();
+    const username = newUsername.trim().toLowerCase();
     const password = newPassword.trim();
     if (!username || !password) {
       throw new Error('Admin username and password cannot be empty.');
     }
-    if (password.length < 8) {
-      throw new Error('Super Admin password must be at least 8 characters.');
+    if (password.length < 4) {
+      throw new Error('Super Admin password must be at least 4 characters.');
     }
-    const email = (newEmail || 'admin@nexgencouncil.org').trim().toLowerCase();
 
-    if (!fs.existsSync(PERSISTENCE_DIR)) {
-      fs.mkdirSync(PERSISTENCE_DIR, { recursive: true });
-    }
+    let superAdmin = this.data.users.find(u => u.role === 'SUPER_ADMIN' || u.id === 'usr_super_1');
+    const email = (newEmail && newEmail.trim()
+      ? newEmail
+      : superAdmin?.email || 'admin@nexgencouncil.org'
+    ).trim().toLowerCase();
+
     const hashed = hashPassword(password);
-    // Store salted PBKDF2 hash in admin_credentials.json (never plaintext password)
-    fs.writeFileSync(
-      ADMIN_CONFIG_FILE,
-      JSON.stringify({
+
+    if (superAdmin) {
+      superAdmin.username = username;
+      superAdmin.email = email;
+      superAdmin.role = 'SUPER_ADMIN';
+      superAdmin.passwordHash = hashed.hash;
+      superAdmin.salt = hashed.salt;
+      superAdmin.tokenVersion = (superAdmin.tokenVersion || 1) + 1;
+    } else {
+      superAdmin = {
+        id: 'usr_super_1',
         username,
+        name: 'Executive Director (Super Admin)',
         email,
+        role: 'SUPER_ADMIN',
+        avatar: '/logo.png',
+        createdAt: new Date().toISOString(),
         passwordHash: hashed.hash,
         salt: hashed.salt,
-        updatedAt: new Date().toISOString()
-      }, null, 2),
-      { encoding: 'utf-8', mode: 0o600 }
-    );
+        tokenVersion: 1
+      };
+      this.data.users.unshift(superAdmin);
+    }
 
-    // Also synchronize into .env file on disk if exists
+    this.writeAdminConfigSnapshot(superAdmin);
+
+    // Also synchronize into .env file on disk if writable
     const envPath = path.join(process.cwd(), '.env');
     try {
       if (fs.existsSync(envPath)) {
@@ -941,10 +984,9 @@ class Database {
       console.warn('[Database] Could not write to .env:', err);
     }
 
-    const updated = this.syncSuperAdminFromEnv();
-    updated.tokenVersion = (updated.tokenVersion || 1) + 1;
     this.save();
-    return this.toSafeUser(updated);
+    mongoUpsert('users', superAdmin.id, superAdmin).catch(() => {});
+    return this.toSafeUser(superAdmin);
   }
 
   createUser(userData: { username: string; name: string; email: string; role: any; password: string; avatar?: string }) {
@@ -1038,28 +1080,35 @@ class Database {
     this.save();
     mongoUpsert('users', user.id, user).catch(() => {});
 
-    // Keep persistent admin_credentials.json in sync when Super Admin details are edited via Admin Panel
+    // Keep persistent admin_credentials.json & .env in sync when Super Admin details are edited via Staff Management
     if (
       (user.role === 'SUPER_ADMIN' || user.id === 'usr_super_1') &&
       (updates.username || updates.email || updates.password)
     ) {
+      this.writeAdminConfigSnapshot(user);
+      const envPath = path.join(process.cwd(), '.env');
       try {
-        if (!fs.existsSync(PERSISTENCE_DIR)) {
-          fs.mkdirSync(PERSISTENCE_DIR, { recursive: true });
+        if (fs.existsSync(envPath)) {
+          let envContent = fs.readFileSync(envPath, 'utf-8');
+          if (updates.username) {
+            envContent = envContent.includes('ADMIN_USERNAME=')
+              ? envContent.replace(/^ADMIN_USERNAME=.*$/m, `ADMIN_USERNAME=${user.username}`)
+              : `${envContent}\nADMIN_USERNAME=${user.username}`;
+          }
+          if (updates.email) {
+            envContent = envContent.includes('ADMIN_EMAIL=')
+              ? envContent.replace(/^ADMIN_EMAIL=.*$/m, `ADMIN_EMAIL=${user.email}`)
+              : `${envContent}\nADMIN_EMAIL=${user.email}`;
+          }
+          if (updates.password && updates.password.trim()) {
+            envContent = envContent.includes('ADMIN_PASSWORD=')
+              ? envContent.replace(/^ADMIN_PASSWORD=.*$/m, `ADMIN_PASSWORD=${updates.password.trim()}`)
+              : `${envContent}\nADMIN_PASSWORD=${updates.password.trim()}`;
+          }
+          fs.writeFileSync(envPath, envContent, 'utf-8');
         }
-        fs.writeFileSync(
-          ADMIN_CONFIG_FILE,
-          JSON.stringify({
-            username: user.username,
-            email: user.email,
-            passwordHash: user.passwordHash,
-            salt: user.salt,
-            updatedAt: new Date().toISOString()
-          }, null, 2),
-          { encoding: 'utf-8', mode: 0o600 }
-        );
       } catch (err) {
-        console.warn('[Database] Could not sync admin_credentials.json:', err);
+        console.warn('[Database] Could not write to .env on user update:', err);
       }
     }
 
@@ -1965,9 +2014,68 @@ class Database {
 
     p.admissionStatus = status;
     p.connectionStatus = status === 'admitted' ? 'connected' : 'disconnected';
+    if (status === 'rejected') {
+      p.leftAt = new Date().toISOString();
+    }
     this.save();
     mongoUpsert('meeting_participants', p.id, p).catch(() => {});
     return p;
+  }
+
+  updateParticipantRole(
+    meetingId: string,
+    participantIdOrIdentity: string,
+    role: MeetingParticipant['role']
+  ): MeetingParticipant | null {
+    this.ensureMeetingArrays();
+    const p = this.data.meetingParticipants!.find(
+      item =>
+        item.meetingId === meetingId &&
+        (item.id === participantIdOrIdentity ||
+          item.userId === participantIdOrIdentity ||
+          item.identity === participantIdOrIdentity)
+    );
+    if (!p) return null;
+
+    p.role = role;
+    this.save();
+    mongoUpsert('meeting_participants', p.id, p).catch(() => {});
+    return p;
+  }
+
+  markParticipantLeft(meetingId: string, participantIdOrIdentity: string): MeetingParticipant | null {
+    this.ensureMeetingArrays();
+    const p = this.data.meetingParticipants!.find(
+      item =>
+        item.meetingId === meetingId &&
+        (item.id === participantIdOrIdentity ||
+          item.userId === participantIdOrIdentity ||
+          item.identity === participantIdOrIdentity)
+    );
+    if (!p) return null;
+
+    p.connectionStatus = 'disconnected';
+    p.leftAt = new Date().toISOString();
+    this.save();
+    mongoUpsert('meeting_participants', p.id, p).catch(() => {});
+    return p;
+  }
+
+  markAllMeetingParticipantsDisconnected(meetingId: string): void {
+    this.ensureMeetingArrays();
+    const now = new Date().toISOString();
+    let changed = false;
+    for (const p of this.data.meetingParticipants || []) {
+      if (p.meetingId === meetingId && p.connectionStatus !== 'disconnected') {
+        p.connectionStatus = 'disconnected';
+        p.leftAt = now;
+        changed = true;
+        mongoUpsert('meeting_participants', p.id, p).catch(() => {});
+      }
+    }
+    if (changed) {
+      this.save();
+    }
   }
 
   // --- Meeting Messages ---

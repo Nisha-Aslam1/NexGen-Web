@@ -1,10 +1,12 @@
 import { Resend } from 'resend';
-import type { EmailImage } from '../src/types.ts';
+import type { EmailButton, EmailImage } from '../src/types.ts';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export interface SendEmailInput {
-  to: string | string[];
+  to?: string | string[];
+  cc?: string | string[];
+  bcc?: string | string[];
   subject: string;
   message?: string;
   html?: string;
@@ -13,6 +15,7 @@ export interface SendEmailInput {
   fromEmail?: string;
   logoUrl?: string;
   images?: EmailImage[];
+  buttons?: EmailButton[];
   siteUrl?: string;
 }
 
@@ -23,6 +26,8 @@ export interface SendEmailResult {
     fromName: string;
     fromEmail: string;
     recipients: string[];
+    cc: string[];
+    bcc: string[];
     subject: string;
     sentAt: string;
   };
@@ -33,11 +38,15 @@ export interface SendEmailResult {
     fromName: string;
     fromEmail: string;
     recipients: string[];
+    cc: string[];
+    bcc: string[];
     subject: string;
     replyTo?: string;
     message: string;
+    html?: string;
     logoUrl?: string;
     images?: EmailImage[];
+    buttons?: EmailButton[];
   };
 }
 
@@ -127,6 +136,242 @@ function escapeHtml(text: string): string {
     .replace(/'/g, '&#39;');
 }
 
+const ALLOWED_EMAIL_TAGS = new Set([
+  'p',
+  'br',
+  'div',
+  'span',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'strong',
+  'b',
+  'em',
+  'i',
+  'u',
+  's',
+  'strike',
+  'del',
+  'ul',
+  'ol',
+  'li',
+  'blockquote',
+  'a',
+  'hr',
+  'font'
+]);
+
+const VOID_EMAIL_TAGS = new Set(['br', 'hr']);
+
+const ALLOWED_CSS_PROPERTIES = new Set([
+  'color',
+  'background-color',
+  'font-family',
+  'font-size',
+  'font-weight',
+  'font-style',
+  'text-decoration',
+  'text-align',
+  'line-height',
+  'margin',
+  'margin-top',
+  'margin-bottom',
+  'padding',
+  'padding-left',
+  'border-left'
+]);
+
+const FONT_SIZE_MAP: Record<string, string> = {
+  '1': '11px',
+  '2': '13px',
+  '3': '15px',
+  '4': '18px',
+  '5': '22px',
+  '6': '26px',
+  '7': '32px'
+};
+
+function sanitizeInlineStyle(rawStyle: string): string {
+  const declarations = rawStyle
+    .split(';')
+    .map(part => part.trim())
+    .filter(Boolean);
+  const safeParts: string[] = [];
+
+  for (const decl of declarations) {
+    const colonIdx = decl.indexOf(':');
+    if (colonIdx === -1) continue;
+    const prop = decl.slice(0, colonIdx).trim().toLowerCase();
+    const val = decl.slice(colonIdx + 1).trim();
+    if (!ALLOWED_CSS_PROPERTIES.has(prop) || !val) continue;
+    const lowerVal = val.toLowerCase();
+    if (
+      lowerVal.includes('javascript:') ||
+      lowerVal.includes('expression(') ||
+      lowerVal.includes('url(') ||
+      /[<>]/.test(val)
+    ) {
+      continue;
+    }
+    safeParts.push(`${prop}: ${val}`);
+  }
+
+  return safeParts.join('; ');
+}
+
+function sanitizeSafeLinkUrl(rawHref: string): string | null {
+  const trimmed = rawHref
+    .replace(/&amp;/gi, '&')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('/')) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    if (
+      parsed.protocol === 'https:' ||
+      parsed.protocol === 'http:' ||
+      parsed.protocol === 'mailto:' ||
+      parsed.protocol === 'tel:'
+    ) {
+      return parsed.toString();
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function sanitizeEmailBodyHtml(rawHtml: string): string {
+  if (!rawHtml) return '';
+
+  // Remove dangerous elements & comments completely (including contents)
+  let cleaned = rawHtml
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(script|style|iframe|object|embed|svg|math|form|textarea|input|button|select|meta|link|base)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
+    .replace(/<(script|style|iframe|object|embed|svg|math|form|textarea|input|button|select|meta|link|base)\b[^>]*\/?>/gi, '');
+
+  // Filter every remaining HTML tag against allowlist
+  cleaned = cleaned.replace(/<\/?([a-zA-Z0-9:-]+)(\s[^>]*?)?\/?>/g, (fullMatch, rawTagName: string, rawAttrs = '') => {
+    const tag = rawTagName.toLowerCase();
+    if (!ALLOWED_EMAIL_TAGS.has(tag)) {
+      return '';
+    }
+
+    const isClosing = fullMatch.startsWith('</');
+    if (isClosing) {
+      return VOID_EMAIL_TAGS.has(tag) ? '' : `</${tag}>`;
+    }
+
+    if (VOID_EMAIL_TAGS.has(tag)) {
+      return tag === 'hr'
+        ? '<hr style="border: 0; border-top: 1px solid #334155; margin: 18px 0;" />'
+        : '<br />';
+    }
+
+    const safeAttrs: string[] = [];
+    const attrMap: Record<string, string> = {};
+
+    // Parse attributes safely
+    const attrRegex = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+    let match: RegExpExecArray | null;
+    while ((match = attrRegex.exec(rawAttrs)) !== null) {
+      const attrName = match[1].toLowerCase();
+      const attrVal = (match[2] ?? match[3] ?? match[4] ?? '').trim();
+      if (attrName.startsWith('on')) continue;
+      attrMap[attrName] = attrVal;
+    }
+
+    const inlineStyles: string[] = [];
+    if (attrMap.style) {
+      const safeCss = sanitizeInlineStyle(attrMap.style);
+      if (safeCss) inlineStyles.push(safeCss);
+    }
+
+    if (tag === 'a') {
+      const safeHref = attrMap.href ? sanitizeSafeLinkUrl(attrMap.href) : null;
+      if (safeHref) {
+        safeAttrs.push(`href="${escapeHtml(safeHref)}"`);
+        safeAttrs.push('target="_blank"');
+        safeAttrs.push('rel="noopener noreferrer"');
+      }
+    }
+
+    if (tag === 'font') {
+      if (attrMap.color && /^#[0-9a-f]{3,8}$|^[a-z]{3,20}$|^rgb\([\d\s,]+\)$/i.test(attrMap.color)) {
+        inlineStyles.push(`color: ${attrMap.color}`);
+      }
+      if (attrMap.face) {
+        const cleanFace = attrMap.face.replace(/[^a-zA-Z0-9,\s\-"]/g, '').trim();
+        if (cleanFace) inlineStyles.push(`font-family: ${cleanFace}`);
+      }
+      if (attrMap.size && FONT_SIZE_MAP[attrMap.size]) {
+        inlineStyles.push(`font-size: ${FONT_SIZE_MAP[attrMap.size]}`);
+      }
+    }
+
+    if ((tag === 'p' || tag === 'div' || tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4') && attrMap.align) {
+      const cleanAlign = attrMap.align.toLowerCase();
+      if (['left', 'center', 'right', 'justify'].includes(cleanAlign)) {
+        inlineStyles.push(`text-align: ${cleanAlign}`);
+      }
+    }
+
+    if (inlineStyles.length > 0) {
+      safeAttrs.push(`style="${escapeHtml(inlineStyles.join('; '))}"`);
+    }
+
+    return safeAttrs.length > 0 ? `<${tag} ${safeAttrs.join(' ')}>` : `<${tag}>`;
+  });
+
+  return cleaned.trim();
+}
+
+function mergeDefaultTagStyle(existingAttrs: string | undefined, defaultCss: string): string {
+  const attrs = existingAttrs || '';
+  const styleMatch = attrs.match(/\sstyle=(["'])([\s\S]*?)\1/i);
+  if (styleMatch) {
+    const existingCss = styleMatch[2].trim();
+    const combined = `${defaultCss}; ${existingCss}`;
+    return attrs.replace(styleMatch[0], ` style="${combined}"`);
+  }
+  return `${attrs} style="${defaultCss}"`;
+}
+
+export function enhanceEmailHtmlForClients(sanitizedHtml: string): string {
+  if (!sanitizedHtml) return '';
+
+  return sanitizedHtml
+    .replace(/<h1(\s[^>]*)?>/gi, (_m, attrs) => `<h1${mergeDefaultTagStyle(attrs, 'margin: 0 0 14px 0; color: #ffffff; font-size: 22px; font-weight: 700; line-height: 1.3')}>`)
+    .replace(/<h2(\s[^>]*)?>/gi, (_m, attrs) => `<h2${mergeDefaultTagStyle(attrs, 'margin: 18px 0 10px 0; color: #ffffff; font-size: 18px; font-weight: 700; line-height: 1.35')}>`)
+    .replace(/<h3(\s[^>]*)?>/gi, (_m, attrs) => `<h3${mergeDefaultTagStyle(attrs, 'margin: 16px 0 8px 0; color: #fbbf24; font-size: 16px; font-weight: 700; line-height: 1.4')}>`)
+    .replace(/<h4(\s[^>]*)?>/gi, (_m, attrs) => `<h4${mergeDefaultTagStyle(attrs, 'margin: 14px 0 6px 0; color: #f1f5f9; font-size: 15px; font-weight: 700; line-height: 1.4')}>`)
+    .replace(/<p(\s[^>]*)?>/gi, (_m, attrs) => `<p${mergeDefaultTagStyle(attrs, 'margin: 0 0 14px 0; color: #e2e8f0; font-size: 15px; line-height: 1.65')}>`)
+    .replace(/<div(\s[^>]*)?>/gi, (_m, attrs) => `<div${mergeDefaultTagStyle(attrs, 'margin: 0 0 8px 0; color: #e2e8f0; font-size: 15px; line-height: 1.65')}>`)
+    .replace(/<ul(\s[^>]*)?>/gi, (_m, attrs) => `<ul${mergeDefaultTagStyle(attrs, 'margin: 0 0 16px 0; padding-left: 22px; color: #e2e8f0; font-size: 15px; line-height: 1.65')}>`)
+    .replace(/<ol(\s[^>]*)?>/gi, (_m, attrs) => `<ol${mergeDefaultTagStyle(attrs, 'margin: 0 0 16px 0; padding-left: 22px; color: #e2e8f0; font-size: 15px; line-height: 1.65')}>`)
+    .replace(/<li(\s[^>]*)?>/gi, (_m, attrs) => `<li${mergeDefaultTagStyle(attrs, 'margin: 0 0 6px 0; color: #e2e8f0')}>`)
+    .replace(/<blockquote(\s[^>]*)?>/gi, (_m, attrs) => `<blockquote${mergeDefaultTagStyle(attrs, 'margin: 14px 0 16px 0; padding: 10px 16px; border-left: 3px solid #f59e0b; background-color: #1e293b; color: #f8fafc; font-style: italic; border-radius: 6px')}>`)
+    .replace(/<a(\s[^>]*)?>/gi, (_m, attrs) => `<a${mergeDefaultTagStyle(attrs, 'color: #fbbf24; text-decoration: underline')}>`);
+}
+
+export function extractPlainTextFromHtml(html: string): string {
+  if (!html) return '';
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|h1|h2|h3|h4|blockquote|li|ul|ol)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export function formatMessageToHtml(message: string): string {
   const paragraphs = message
     .trim()
@@ -171,6 +416,91 @@ function renderEmailImagesHtml(images: EmailImage[], placement: 'top' | 'bottom'
   return blocks;
 }
 
+export function sanitizeEmailButtons(
+  buttons: unknown,
+  siteUrl = 'https://nexgencouncil.bond'
+): { valid: EmailButton[]; invalidCount: number } {
+  if (!Array.isArray(buttons)) return { valid: [], invalidCount: 0 };
+  const base = String(siteUrl || 'https://nexgencouncil.bond').trim().replace(/\/+$/, '');
+  const valid: EmailButton[] = [];
+  let invalidCount = 0;
+
+  for (let i = 0; i < buttons.length; i++) {
+    const item = buttons[i] as Partial<EmailButton> | null;
+    if (!item || typeof item.label !== 'string' || typeof item.url !== 'string') {
+      invalidCount++;
+      continue;
+    }
+    const cleanLabel = item.label.trim().slice(0, 80);
+    const rawUrl = item.url.trim();
+    const expandedUrl = rawUrl.startsWith('/') ? `${base}${rawUrl}` : rawUrl;
+    const safeUrl = sanitizeSafeLinkUrl(expandedUrl);
+
+    if (!cleanLabel || !safeUrl) {
+      invalidCount++;
+      continue;
+    }
+
+    const style: EmailButton['style'] =
+      item.style === 'primary' || item.style === 'outline' ? item.style : 'amber';
+    const align: EmailButton['align'] =
+      item.align === 'left' || item.align === 'right' ? item.align : 'center';
+
+    valid.push({
+      id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `btn_${i + 1}`,
+      label: cleanLabel,
+      url: safeUrl,
+      style,
+      align
+    });
+  }
+
+  return { valid, invalidCount };
+}
+
+function renderEmailButtonsHtml(buttons: EmailButton[]): string {
+  if (!buttons || buttons.length === 0) return '';
+
+  return buttons
+    .map(btn => {
+      const safeUrl = escapeHtml(btn.url);
+      const safeLabel = escapeHtml(btn.label);
+      const align = btn.align || 'center';
+
+      let tdStyle = 'background-color: #f59e0b; border-radius: 10px;';
+      let aStyle =
+        'display: inline-block; padding: 12px 26px; font-size: 14px; font-weight: 700; color: #0f172a; text-decoration: none; border-radius: 10px; mso-padding-alt: 0;';
+
+      if (btn.style === 'primary') {
+        tdStyle = 'background-color: #4f46e5; border-radius: 10px;';
+        aStyle =
+          'display: inline-block; padding: 12px 26px; font-size: 14px; font-weight: 700; color: #ffffff; text-decoration: none; border-radius: 10px; mso-padding-alt: 0;';
+      } else if (btn.style === 'outline') {
+        tdStyle = 'background-color: transparent; border: 2px solid #f59e0b; border-radius: 10px;';
+        aStyle =
+          'display: inline-block; padding: 10px 24px; font-size: 14px; font-weight: 700; color: #fbbf24; text-decoration: none; border-radius: 10px; mso-padding-alt: 0;';
+      }
+
+      return `
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 18px 0 6px 0;">
+          <tr>
+            <td align="${align}">
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td align="center" style="${tdStyle}">
+                    <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" style="${aStyle}">
+                      ${safeLabel}
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>`;
+    })
+    .join('\n');
+}
+
 export function buildNexGenEmailTemplate(
   subject: string,
   bodyHtml: string,
@@ -178,6 +508,7 @@ export function buildNexGenEmailTemplate(
   options?: {
     logoUrl?: string;
     images?: EmailImage[];
+    buttons?: EmailButton[];
     siteUrl?: string;
   }
 ): string {
@@ -188,7 +519,9 @@ export function buildNexGenEmailTemplate(
   const resolvedLogo = resolveEmailImageUrl(options?.logoUrl, siteUrl);
   const safeLogoUrl = resolvedLogo ? escapeHtml(resolvedLogo) : '';
   const allImages = Array.isArray(options?.images) ? options!.images : [];
+  const allButtons = Array.isArray(options?.buttons) ? options!.buttons : [];
   const topImagesHtml = renderEmailImagesHtml(allImages, 'top');
+  const buttonsHtml = renderEmailButtonsHtml(allButtons);
   const bottomImagesHtml = renderEmailImagesHtml(allImages, 'bottom');
 
   return `<!DOCTYPE html>
@@ -244,8 +577,9 @@ export function buildNexGenEmailTemplate(
 
           <!-- Main Body -->
           <tr>
-            <td style="padding: 22px 32px 28px 32px;">
+            <td style="padding: 22px 32px 28px 32px; color: #e2e8f0; font-size: 15px; line-height: 1.65;">
               ${bodyHtml}
+              ${buttonsHtml}
               ${bottomImagesHtml}
             </td>
           </tr>
@@ -272,7 +606,8 @@ export function buildNexGenEmailTemplate(
 </html>`;
 }
 
-export function parseRecipientList(to: string | string[]): { valid: string[]; invalid: string[] } {
+export function parseRecipientList(to?: string | string[]): { valid: string[]; invalid: string[] } {
+  if (!to) return { valid: [], invalid: [] };
   const rawItems = Array.isArray(to)
     ? to
     : String(to || '')
@@ -280,7 +615,7 @@ export function parseRecipientList(to: string | string[]): { valid: string[]; in
         .map(item => item.trim())
         .filter(Boolean);
 
-  const unique = Array.from(new Set(rawItems.map(email => email.trim().toLowerCase())));
+  const unique = Array.from(new Set(rawItems.map(email => email.trim().toLowerCase()).filter(Boolean)));
   const valid: string[] = [];
   const invalid: string[] = [];
 
@@ -308,28 +643,46 @@ export async function sendCouncilEmail(input: SendEmailInput): Promise<SendEmail
     };
   }
 
-  const { valid: recipients, invalid } = parseRecipientList(input.to);
-  if (invalid.length > 0) {
+  const { valid: toRecipients, invalid: invalidTo } = parseRecipientList(input.to);
+  const { valid: ccRecipients, invalid: invalidCc } = parseRecipientList(input.cc);
+  const { valid: bccRecipients, invalid: invalidBcc } = parseRecipientList(input.bcc);
+
+  if (invalidTo.length > 0) {
     return {
       success: false,
       statusCode: 400,
-      error: `Invalid email address(es): ${invalid.join(', ')}`
+      error: `Invalid To email address(es): ${invalidTo.join(', ')}`
+    };
+  }
+  if (invalidCc.length > 0) {
+    return {
+      success: false,
+      statusCode: 400,
+      error: `Invalid CC email address(es): ${invalidCc.join(', ')}`
+    };
+  }
+  if (invalidBcc.length > 0) {
+    return {
+      success: false,
+      statusCode: 400,
+      error: `Invalid BCC email address(es): ${invalidBcc.join(', ')}`
     };
   }
 
-  if (recipients.length === 0) {
+  const totalRecipients = toRecipients.length + ccRecipients.length + bccRecipients.length;
+  if (totalRecipients === 0) {
     return {
       success: false,
       statusCode: 400,
-      error: 'At least one valid recipient email address is required.'
+      error: 'At least one valid recipient email address (To, CC, or BCC) is required.'
     };
   }
 
-  if (recipients.length > 50) {
+  if (totalRecipients > 50) {
     return {
       success: false,
       statusCode: 400,
-      error: 'Maximum 50 recipients allowed per email request.'
+      error: 'Maximum 50 total recipients (To + CC + BCC) allowed per email request.'
     };
   }
 
@@ -368,14 +721,32 @@ export async function sendCouncilEmail(input: SendEmailInput): Promise<SendEmail
     };
   }
 
-  const rawHtml = typeof input.html === 'string' && input.html.trim() ? input.html.trim() : '';
-  const rawMessage = typeof input.message === 'string' && input.message.trim() ? input.message.trim() : '';
-
-  if (!rawHtml && !rawMessage && sanitizedImages.length === 0) {
+  const { valid: sanitizedButtons, invalidCount: invalidButtonsCount } = sanitizeEmailButtons(input.buttons, siteUrl);
+  if (invalidButtonsCount > 0) {
     return {
       success: false,
       statusCode: 400,
-      error: 'Email message body, HTML content, or at least one image is required.'
+      error: 'One or more email buttons have an empty label or invalid URL (use https://, http://, mailto:, or /path).'
+    };
+  }
+  if (sanitizedButtons.length > 5) {
+    return {
+      success: false,
+      statusCode: 400,
+      error: 'Maximum 5 CTA buttons allowed per email.'
+    };
+  }
+
+  const rawHtml = typeof input.html === 'string' && input.html.trim() ? input.html.trim() : '';
+  const sanitizedHtml = rawHtml ? sanitizeEmailBodyHtml(rawHtml) : '';
+  const rawMessageInput = typeof input.message === 'string' && input.message.trim() ? input.message.trim() : '';
+  const derivedPlainText = rawMessageInput || extractPlainTextFromHtml(sanitizedHtml);
+
+  if (!sanitizedHtml && !derivedPlainText && sanitizedImages.length === 0 && sanitizedButtons.length === 0) {
+    return {
+      success: false,
+      statusCode: 400,
+      error: 'Email message body, formatted content, button, or at least one image is required.'
     };
   }
 
@@ -391,12 +762,16 @@ export async function sendCouncilEmail(input: SendEmailInput): Promise<SendEmail
   const resolvedMeta = {
     fromName,
     fromEmail,
-    recipients,
+    recipients: toRecipients,
+    cc: ccRecipients,
+    bcc: bccRecipients,
     subject,
     replyTo,
-    message: rawMessage || '[HTML Content]',
+    message: derivedPlainText || '[Formatted Content]',
+    html: sanitizedHtml || undefined,
     logoUrl: resolvedLogoUrl,
-    images: sanitizedImages
+    images: sanitizedImages,
+    buttons: sanitizedButtons
   };
 
   const apiKey = process.env.RESEND_API_KEY?.trim();
@@ -410,21 +785,35 @@ export async function sendCouncilEmail(input: SendEmailInput): Promise<SendEmail
     };
   }
 
-  const bodyHtml = rawHtml || (rawMessage ? formatMessageToHtml(rawMessage) : '');
+  const bodyHtml = sanitizedHtml
+    ? enhanceEmailHtmlForClients(sanitizedHtml)
+    : derivedPlainText
+      ? formatMessageToHtml(derivedPlainText)
+      : '';
+
   const fullHtml = buildNexGenEmailTemplate(subject, bodyHtml, fromName, {
     logoUrl: resolvedLogoUrl,
     images: sanitizedImages,
+    buttons: sanitizedButtons,
     siteUrl
   });
+
+  const buttonTextLines = sanitizedButtons.map(b => `${b.label}: ${b.url}`).join('\n');
+  const fullPlainText = [derivedPlainText, buttonTextLines].filter(Boolean).join('\n\n');
+
+  // Resend API requires at least one address in `to`. If sending BCC/CC-only, fallback `to` to `[fromEmail]`
+  const effectiveTo = toRecipients.length > 0 ? toRecipients : [fromEmail];
 
   try {
     const resend = new Resend(apiKey);
     const { data, error } = await resend.emails.send({
       from: `${fromName} <${fromEmail}>`,
-      to: recipients,
+      to: effectiveTo,
+      ...(ccRecipients.length > 0 ? { cc: ccRecipients } : {}),
+      ...(bccRecipients.length > 0 ? { bcc: bccRecipients } : {}),
       subject,
       html: fullHtml,
-      ...(rawMessage ? { text: rawMessage } : {}),
+      ...(fullPlainText ? { text: fullPlainText } : {}),
       ...(replyTo ? { replyTo } : {})
     });
 
@@ -447,7 +836,9 @@ export async function sendCouncilEmail(input: SendEmailInput): Promise<SendEmail
         id: data?.id || `msg_${Date.now()}`,
         fromName,
         fromEmail,
-        recipients,
+        recipients: toRecipients,
+        cc: ccRecipients,
+        bcc: bccRecipients,
         subject,
         sentAt: new Date().toISOString()
       }
@@ -462,3 +853,134 @@ export async function sendCouncilEmail(input: SendEmailInput): Promise<SendEmail
     };
   }
 }
+
+export interface VolunteerApprovalEmailOptions {
+  volunteerName: string;
+  referenceCode: string;
+  preferredRole?: string;
+  city?: string;
+  customNote?: string;
+  includeWhatsappInvite?: boolean;
+  whatsappGroupLink?: string;
+  siteUrl?: string;
+}
+
+export function buildVolunteerApprovalEmail(opts: VolunteerApprovalEmailOptions): {
+  subject: string;
+  html: string;
+  message: string;
+  buttons: EmailButton[];
+  hasValidWhatsappLink: boolean;
+} {
+  const rawName = String(opts.volunteerName || 'Changemaker').trim() || 'Changemaker';
+  const firstName = rawName.split(/\s+/)[0] || rawName;
+  const safeFullName = escapeHtml(rawName);
+  const safeRef = escapeHtml(String(opts.referenceCode || 'NG-VOL').trim());
+  const safeRole = escapeHtml(String(opts.preferredRole || 'Council Volunteer').trim());
+  const safeCity = escapeHtml(String(opts.city || 'Community Chapter').trim());
+  const safeCustomNote = opts.customNote && opts.customNote.trim()
+    ? escapeHtml(opts.customNote.trim()).replace(/\n/g, '<br />')
+    : '';
+  const siteUrl = (opts.siteUrl || 'https://nexgencouncil.bond').trim().replace(/\/+$/, '');
+
+  const cleanedLink = typeof opts.whatsappGroupLink === 'string' ? opts.whatsappGroupLink.trim() : '';
+  const validatedWhatsappUrl = cleanedLink ? sanitizeSafeLinkUrl(cleanedLink) : null;
+  const shouldIncludeWhatsappButton = Boolean(opts.includeWhatsappInvite && validatedWhatsappUrl);
+
+  const subject = `🎉 Congratulations, ${firstName}! Welcome to NexGen Council 🌟`;
+
+  const buttons: EmailButton[] = [];
+  if (shouldIncludeWhatsappButton && validatedWhatsappUrl) {
+    buttons.push({
+      id: 'whatsapp_group_invite',
+      label: '💬 Join Official WhatsApp Group →',
+      url: validatedWhatsappUrl,
+      style: 'amber',
+      align: 'center'
+    });
+  }
+
+  const html = `
+    <p style="margin: 0 0 16px 0; font-size: 16px; color: #ffffff; font-weight: 700;">
+      🎉 Dear ${safeFullName}, Congratulations! 🌟
+    </p>
+    <p style="margin: 0 0 16px 0; color: #e2e8f0; font-size: 15px; line-height: 1.65;">
+      We are thrilled to inform you that your volunteer application with
+      <strong style="color: #fbbf24;">NexGen Women Empowerment &amp; Youth Leadership Council</strong>
+      has been officially <strong style="color: #34d399;">APPROVED</strong>! 🙌✨
+    </p>
+    <p style="margin: 0 0 16px 0; color: #e2e8f0; font-size: 15px; line-height: 1.65;">
+      Your passion, vision, and commitment to empowering women and inspiring youth leaders stood out to our Selection Committee. Welcome to a vibrant community of changemakers making real impact! 🤝🌍
+    </p>
+
+    <div style="margin: 18px 0; padding: 16px 18px; background-color: #020617; border: 1px solid #334155; border-left: 4px solid #f59e0b; border-radius: 10px;">
+      <div style="font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #fbbf24; margin-bottom: 10px;">
+        📋 Volunteer Onboarding Summary
+      </div>
+      <div style="font-size: 14px; color: #f8fafc; line-height: 1.75;">
+        <div><strong>👤 Full Name:</strong> ${safeFullName}</div>
+        <div><strong>🔖 Application Ref:</strong> ${safeRef}</div>
+        <div><strong>🎯 Assigned Track / Role:</strong> ${safeRole}</div>
+        <div><strong>📍 Chapter / City:</strong> ${safeCity}</div>
+        <div><strong>✅ Membership Status:</strong> <span style="color: #34d399; font-weight: 700;">Active Approved Volunteer</span></div>
+      </div>
+    </div>
+
+    ${
+      safeCustomNote
+        ? `<blockquote style="margin: 16px 0; padding: 12px 16px; border-left: 3px solid #34d399; background-color: #1e293b; color: #f8fafc; border-radius: 8px; font-size: 14px;">
+            <strong style="color: #34d399;">💌 Note from Committee:</strong><br />
+            ${safeCustomNote}
+          </blockquote>`
+        : ''
+    }
+
+    ${
+      shouldIncludeWhatsappButton
+        ? `<p style="margin: 18px 0 8px 0; color: #e2e8f0; font-size: 15px; line-height: 1.65;">
+            💚 <strong>Next Step — Join Our Official Volunteers WhatsApp Group:</strong><br />
+            Connect immediately with our core team, fellow volunteers, orientation briefings, and upcoming project announcements by clicking the invitation button below 👇
+          </p>`
+        : `<p style="margin: 18px 0 8px 0; color: #e2e8f0; font-size: 15px; line-height: 1.65;">
+            📩 <strong>What Happens Next?</strong><br />
+            Our chapter coordinators will reach out shortly with your orientation schedule, onboarding brief, and upcoming council activities. You can also track updates anytime at
+            <a href="${escapeHtml(siteUrl)}" style="color: #fbbf24; text-decoration: underline;">${escapeHtml(siteUrl)}</a>. 🌟
+          </p>`
+    }
+
+    <p style="margin: 18px 0 0 0; color: #cbd5e1; font-size: 14px; line-height: 1.6;">
+      Warmest regards &amp; welcome aboard! 🚀<br />
+      <strong style="color: #ffffff;">Executive Secretariat &amp; Volunteer Directorate</strong><br />
+      <span style="color: #94a3b8;">NexGen Women Empowerment &amp; Youth Leadership Council</span>
+    </p>
+  `.trim();
+
+  const messageLines = [
+    `🎉 Dear ${rawName}, Congratulations! 🌟`,
+    '',
+    'We are thrilled to inform you that your volunteer application with NexGen Women Empowerment & Youth Leadership Council has been officially APPROVED! 🙌✨',
+    '',
+    `📋 Onboarding Summary:`,
+    `- Full Name: ${rawName}`,
+    `- Reference Code: ${opts.referenceCode}`,
+    `- Role: ${opts.preferredRole || 'Council Volunteer'}`,
+    `- City: ${opts.city || 'Community Chapter'}`,
+    '- Status: Active Approved Volunteer ✅',
+    opts.customNote?.trim() ? `\n💌 Note from Committee: ${opts.customNote.trim()}` : '',
+    shouldIncludeWhatsappButton
+      ? `\n💚 Join our Official Volunteers WhatsApp Group using the link below!`
+      : `\n📩 Our coordinators will share your orientation schedule and upcoming activities shortly.`,
+    '',
+    'Warmest regards, 🚀',
+    'NexGen Council Executive Secretariat'
+  ].filter(Boolean);
+
+  return {
+    subject,
+    html,
+    message: messageLines.join('\n'),
+    buttons,
+    hasValidWhatsappLink: Boolean(validatedWhatsappUrl)
+  };
+}
+

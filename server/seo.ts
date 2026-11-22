@@ -647,18 +647,19 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
     };
   }
 
-  // Handle Meeting Room / Conferencing (/meeting/:slug, /room/:code)
+  // Handle Meeting Room / Conferencing (/meeting/:slug, /room/:code) - STRICTLY PRIVATE / NOINDEX
   if (
     cleanPath.startsWith('/meeting/') ||
     cleanPath === '/meeting' ||
     cleanPath === '/meetings' ||
     cleanPath.startsWith('/room/') ||
     cleanPath === '/room' ||
-    cleanPath.startsWith('/meet/')
+    cleanPath.startsWith('/meet/') ||
+    cleanPath === '/meet'
   ) {
     return {
-      title: `Live Video Conference | ${orgName}`,
-      description: 'Secure video meeting room on the NexGen Council platform.',
+      title: `Private Video Session | ${orgName}`,
+      description: 'Private invite-only video conference session hosted on NexGen Council.',
       canonicalUrl: `${siteUrl}${cleanPath}`,
       ogType: 'website',
       ogImage: defaultLogo,
@@ -850,11 +851,18 @@ Allow: /*.png
 Allow: /*.webp
 Allow: /*.svg
 
-# Disallow administrative portals and private API surfaces
+# Disallow administrative portals, private meeting rooms, and API surfaces
 Disallow: /admin
 Disallow: /admin/*
 Disallow: /admin-login
 Disallow: /login
+Disallow: /meeting
+Disallow: /meeting/*
+Disallow: /meetings
+Disallow: /room
+Disallow: /room/*
+Disallow: /meet
+Disallow: /meet/*
 Disallow: /api/
 Disallow: /data/
 

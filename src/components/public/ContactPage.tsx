@@ -74,7 +74,8 @@ export const ContactPage: React.FC = () => {
           email: formData.email.trim(),
           phone: formData.phone.trim(),
           subject: formData.subject,
-          message: formData.message.trim()
+          message: formData.message.trim(),
+          source: 'Contact Page'
         })
       });
 

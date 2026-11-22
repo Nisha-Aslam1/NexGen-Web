@@ -3,25 +3,17 @@ import { useApp } from '../../context/AppContext.tsx';
 import { authFetch } from '../../lib/api.ts';
 import {
   Search,
-  Filter,
   Download,
   CheckCircle2,
   XCircle,
   Clock,
   Eye,
   Trash2,
-  Sparkles,
-  Phone,
   Mail,
-  MapPin,
-  Calendar,
-  GraduationCap,
-  HeartHandshake,
-  AlertCircle,
-  Check,
-  Copy
+  AlertCircle
 } from 'lucide-react';
 import { VolunteerApplication, ApplicationStatus } from '../../types.ts';
+import { VolunteerApprovalModal } from './VolunteerApprovalModal.tsx';
 
 export const AdminApplications: React.FC = () => {
   const { addToast } = useApp();
@@ -36,6 +28,11 @@ export const AdminApplications: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [deleteCandidate, setDeleteCandidate] = useState<VolunteerApplication | null>(null);
 
+  // Volunteer Approval Decision Modal State (asks admin before approving / emailing)
+  const [approvalModalApp, setApprovalModalApp] = useState<VolunteerApplication | null>(null);
+  const [approvalNotes, setApprovalNotes] = useState<string>('');
+  const [isResendOnly, setIsResendOnly] = useState<boolean>(false);
+
   const fetchApplications = async () => {
     setLoading(true);
     try {
@@ -43,7 +40,7 @@ export const AdminApplications: React.FC = () => {
       const data = await res.json();
       const list = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : []);
       setApplications(list);
-    } catch (err) {
+    } catch {
       addToast('Failed to load volunteer applications', 'error');
     } finally {
       setLoading(false);
@@ -57,39 +54,65 @@ export const AdminApplications: React.FC = () => {
   const openDossier = (app: VolunteerApplication) => {
     setSelectedApp(app);
     setEditingStatus(app.status);
-    setReviewNotes(app.reviewNotes || '');
+    setReviewNotes(app.internalNotes || app.reviewNotes || '');
   };
 
-  const handleStatusUpdate = async (appId: string, newStatus: ApplicationStatus, notes: string) => {
+  const openApprovalDecisionModal = (
+    app: VolunteerApplication,
+    notesOverride?: string,
+    resendWelcomeOnly = false
+  ) => {
+    setApprovalModalApp(app);
+    setApprovalNotes(notesOverride !== undefined ? notesOverride : (app.internalNotes || app.reviewNotes || ''));
+    setIsResendOnly(resendWelcomeOnly);
+  };
+
+  const executeStatusUpdate = async (
+    appId: string,
+    newStatus: ApplicationStatus,
+    notes: string
+  ) => {
     setIsSaving(true);
     try {
       const res = await authFetch(`/api/applications/${appId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus, reviewNotes: notes })
+        body: JSON.stringify({
+          status: newStatus,
+          internalNotes: notes,
+          reviewNotes: notes
+        })
       });
 
-      const updated = await res.json();
+      const payload = await res.json();
       if (!res.ok) {
-        throw new Error(updated.error || 'Failed to update status');
+        throw new Error(payload.error || 'Failed to update status');
       }
+
+      const { emailDispatch: _unused, ...updated } = payload;
 
       setApplications(prev => prev.map(a => (a.id === appId ? updated : a)));
       if (selectedApp && selectedApp.id === appId) {
         setSelectedApp(updated);
       }
 
-      addToast(
-        newStatus === 'Approved'
-          ? 'Application approved! Candidate automatically enrolled into Volunteers directory.'
-          : `Application status updated to ${newStatus}.`,
-        'success'
-      );
+      addToast(`Application status updated to ${newStatus}.`, 'success');
     } catch (err: any) {
       addToast(err.message || 'Error updating application status', 'error');
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleStatusUpdate = async (appId: string, newStatus: ApplicationStatus, notes: string) => {
+    if (newStatus === 'Approved') {
+      const targetApp = applications.find(a => a.id === appId) || selectedApp;
+      if (targetApp) {
+        openApprovalDecisionModal(targetApp, notes, false);
+        return;
+      }
+    }
+    await executeStatusUpdate(appId, newStatus, notes);
   };
 
   const confirmDelete = async () => {
@@ -116,7 +139,6 @@ export const AdminApplications: React.FC = () => {
     addToast('Exporting complete applicant CSV file...', 'info');
   };
 
-  // Cities extracted for filter dropdown
   const uniqueCities = Array.from(new Set(applications.map(a => a.city).filter(Boolean)));
 
   const filtered = applications.filter(a => {
@@ -142,7 +164,8 @@ export const AdminApplications: React.FC = () => {
             Volunteer Applications Management
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Review incoming candidate dossiers, update approval states, and synchronize directly with active chapters.
+            Review incoming candidate dossiers, approve applicants with optional congratulations &amp; WhatsApp invite emails from{' '}
+            <span className="font-mono text-slate-700">admin@nexgencouncil.bond</span>.
           </p>
         </div>
 
@@ -165,7 +188,6 @@ export const AdminApplications: React.FC = () => {
 
       {/* Filter Bar */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row items-center justify-between gap-4">
-        {/* Search */}
         <div className="relative w-full md:w-80">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
@@ -177,7 +199,6 @@ export const AdminApplications: React.FC = () => {
           />
         </div>
 
-        {/* Filters */}
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
           <div className="flex items-center gap-1.5 text-xs text-slate-500">
             <span>Status:</span>
@@ -281,7 +302,29 @@ export const AdminApplications: React.FC = () => {
 
                     <td className="py-3.5 px-4 text-right">
                       <div className="flex items-center justify-end gap-1.5">
+                        {app.status !== 'Approved' ? (
+                          <button
+                            type="button"
+                            onClick={() => openApprovalDecisionModal(app, app.internalNotes || app.reviewNotes || '', false)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap"
+                            title="Approve volunteer application"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Approve</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openApprovalDecisionModal(app, app.internalNotes || app.reviewNotes || '', true)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap"
+                            title="Send Congratulations / WhatsApp Group Email"
+                          >
+                            <Mail className="w-3.5 h-3.5 text-amber-700" />
+                            <span>Welcome Email</span>
+                          </button>
+                        )}
                         <button
+                          type="button"
                           onClick={() => openDossier(app)}
                           className="p-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-950 font-semibold transition-colors cursor-pointer"
                           title="View Full Dossier"
@@ -289,6 +332,7 @@ export const AdminApplications: React.FC = () => {
                           <Eye className="w-4 h-4" />
                         </button>
                         <button
+                          type="button"
                           onClick={() => setDeleteCandidate(app)}
                           className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
                           title="Delete Application"
@@ -307,11 +351,12 @@ export const AdminApplications: React.FC = () => {
 
       {/* Full Dossier Modal */}
       {selectedApp && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+        <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-3xl w-full p-6 sm:p-8 space-y-6 shadow-2xl relative animate-in fade-in zoom-in-95 my-8 max-h-[92vh] overflow-y-auto">
             <button
               onClick={() => setSelectedApp(null)}
               className="absolute top-5 right-5 text-slate-400 hover:text-slate-700 p-2 rounded-full cursor-pointer"
+              aria-label="Close dossier"
             >
               ✕
             </button>
@@ -327,10 +372,10 @@ export const AdminApplications: React.FC = () => {
                     {selectedApp.fullName}
                   </h3>
                   <p className="text-xs text-slate-500">
-                    Submitted on {new Date(selectedApp.submittedAt).toLocaleString()}
+                    Submitted on {new Date(selectedApp.submittedAt || selectedApp.createdAt).toLocaleString()}
                   </p>
                 </div>
-                <div>
+                <div className="flex items-center gap-2">
                   <span
                     className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
                       selectedApp.status === 'Approved'
@@ -350,7 +395,6 @@ export const AdminApplications: React.FC = () => {
 
             {/* Dossier Content Tabs / Blocks */}
             <div className="space-y-6 text-xs text-slate-700">
-              {/* 1. Contact & Demographics */}
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
                 <span className="font-bold text-slate-900 uppercase tracking-wider text-[11px] block">
                   1. Contact &amp; Personal Info
@@ -380,7 +424,6 @@ export const AdminApplications: React.FC = () => {
                 )}
               </div>
 
-              {/* 2. Education & Background */}
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
                 <span className="font-bold text-slate-900 uppercase tracking-wider text-[11px] block">
                   2. Background, Education &amp; Skills
@@ -415,7 +458,6 @@ export const AdminApplications: React.FC = () => {
                 )}
               </div>
 
-              {/* 3. Volunteering Intent & Commitment */}
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
                 <span className="font-bold text-slate-900 uppercase tracking-wider text-[11px] block">
                   3. Motivation &amp; Availability
@@ -442,7 +484,6 @@ export const AdminApplications: React.FC = () => {
                 </div>
               </div>
 
-              {/* 4. Emergency & Notes */}
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
                 <span className="font-bold text-slate-900 uppercase tracking-wider text-[11px] block">
                   4. Emergency Contact &amp; Additional Information
@@ -498,15 +539,16 @@ export const AdminApplications: React.FC = () => {
                       rows={2}
                       value={reviewNotes}
                       onChange={e => setReviewNotes(e.target.value)}
-                      placeholder="e.g. Cleared phone interview; assigned to Lahore chapter media squad."
+                      placeholder="e.g. Cleared phone interview; assigned to Sialkot chapter media squad."
                       className="w-full px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs focus:ring-2 focus:ring-indigo-300"
                     />
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between pt-2">
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                   <span className="text-[11px] text-slate-500">
-                    * Approving an applicant automatically enrolls them into the live Volunteers directory.
+                    * Choosing Approved will ask whether to send a Congratulations &amp; WhatsApp email from{' '}
+                    <span className="font-mono">admin@nexgencouncil.bond</span>.
                   </span>
                   <button
                     type="button"
@@ -514,7 +556,11 @@ export const AdminApplications: React.FC = () => {
                     onClick={() => handleStatusUpdate(selectedApp.id, editingStatus, reviewNotes)}
                     className="px-5 py-2.5 bg-indigo-950 hover:bg-indigo-900 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer disabled:opacity-50"
                   >
-                    {isSaving ? 'Updating...' : 'Save Review & Update Status'}
+                    {isSaving
+                      ? 'Updating...'
+                      : editingStatus === 'Approved'
+                      ? 'Continue to Approval Options →'
+                      : 'Save Review & Update Status'}
                   </button>
                 </div>
               </div>
@@ -522,6 +568,20 @@ export const AdminApplications: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Volunteer Approval 3-Option Decision Modal */}
+      <VolunteerApprovalModal
+        application={approvalModalApp}
+        initialNotes={approvalNotes}
+        isResendOnly={isResendOnly}
+        onClose={() => setApprovalModalApp(null)}
+        onCompleted={(updated) => {
+          setApplications(prev => prev.map(a => (a.id === updated.id ? updated : a)));
+          if (selectedApp && selectedApp.id === updated.id) {
+            setSelectedApp(updated);
+          }
+        }}
+      />
 
       {/* Delete Confirmation Modal */}
       {deleteCandidate && (
@@ -554,3 +614,4 @@ export const AdminApplications: React.FC = () => {
     </div>
   );
 };
+

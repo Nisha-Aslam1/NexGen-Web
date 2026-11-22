@@ -356,13 +356,22 @@ export const AboutPage: React.FC = () => {
           </div>
 
           {/* Operational & Live Impact Ledger Strip (below hero split) */}
-          <dl className="mt-12 pt-8 border-t border-stone-200 grid grid-cols-2 lg:grid-cols-4 gap-6 sm:gap-8">
-            <div className="space-y-1">
-              <dt className="text-xs font-medium text-stone-500">Council Headquarters</dt>
-              <dd className="text-xl sm:text-2xl font-serif font-bold text-slate-950">
-                {settings?.directoryHeadquarters || 'Sialkot, PK'}
-              </dd>
-            </div>
+          <dl
+            className={`mt-12 pt-8 border-t border-stone-200 grid grid-cols-2 ${
+              settings?.showDirectoryHeadquarters !== false && (settings?.directoryHeadquarters ?? 'Sialkot, PK').trim()
+                ? 'lg:grid-cols-4'
+                : 'lg:grid-cols-3'
+            } gap-6 sm:gap-8`}
+          >
+            {settings?.showDirectoryHeadquarters !== false &&
+              (settings?.directoryHeadquarters ?? 'Sialkot, PK').trim() && (
+                <div className="space-y-1">
+                  <dt className="text-xs font-medium text-stone-500">Council Headquarters</dt>
+                  <dd className="text-xl sm:text-2xl font-serif font-bold text-slate-950">
+                    {settings?.directoryHeadquarters || 'Sialkot, PK'}
+                  </dd>
+                </div>
+              )}
             <div className="space-y-1">
               <dt className="text-xs font-medium text-stone-500">Active Leadership Programs</dt>
               <dd className="text-xl sm:text-2xl font-serif font-bold text-slate-950 tabular-nums">
@@ -387,99 +396,158 @@ export const AboutPage: React.FC = () => {
 
       {/* 2. FOUNDING ESSAY & INSTITUTIONAL DIRECTORY (Asymmetric 7/5 Grid) */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 lg:pt-20">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
-          {/* Main Essay Column */}
-          <div className="lg:col-span-7 space-y-6">
-            <div className="space-y-2 border-b border-stone-200 pb-5">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-indigo-900">
-                Chapter 01 · Origin &amp; Purpose
-              </p>
-              <h2 className="text-2xl sm:text-3xl font-serif font-bold text-slate-950 tracking-tight [text-wrap:balance]">
-                From Local Mentorship Circles to a Structured Leadership Network
-              </h2>
-            </div>
+        {(() => {
+          const showDirectoryCard = settings?.showDirectoryCard !== false;
+          const showDirectoryHeading = settings?.showDirectoryHeading !== false;
+          const showOfficialTitle = settings?.showOfficialTitle !== false;
+          const showPrimaryDomains = settings?.showPrimaryDomains !== false;
+          const showDirectoryHeadquarters =
+            settings?.showDirectoryHeadquarters !== false &&
+            Boolean((settings?.directoryHeadquarters ?? 'Sialkot, PK').trim());
+          const showOfficeAddress = settings?.showOfficeAddress !== false;
+          const showContactEmail = settings?.showContactEmail !== false;
+          const showContactPhone =
+            settings?.showContactPhone !== false && Boolean(settings?.contactPhone?.trim());
+          const showRegistrationNumber =
+            settings?.showRegistrationNumber !== false && Boolean(settings?.registrationNumber?.trim());
 
-            <div className="space-y-5 text-[15px] sm:text-base text-slate-700 leading-[1.75] max-w-2xl">
-              <p className="first-letter:text-5xl first-letter:font-serif first-letter:font-bold first-letter:float-left first-letter:mr-3 first-letter:mt-1 first-letter:leading-none first-letter:text-indigo-950">
-                Founded as a collaborative civil society initiative of educators, youth researchers, and women advocates, NexGen Council was established to address structural disparities that keep talented young women and emerging youth leaders out of senior civic, institutional, and entrepreneurial roles.
-              </p>
-              <p>
-                What began as focused community dialogues in Sialkot has grown into our flagship 30-Day Leadership Development Series, Women in STEM and Entrepreneurship mentorship tracks, and multi-district youth parliamentary symposiums connecting emerging voices directly with civic scholars.
-              </p>
-              <p>
-                Today, NexGen Women Empowerment &amp; Youth Leadership Council operates with verified volunteer onboarding, transparent application tracking, and active educational partnerships—turning ambition into disciplined public service.
-              </p>
-            </div>
+          const hasVisibleDirectoryRows =
+            showOfficialTitle ||
+            showPrimaryDomains ||
+            showDirectoryHeadquarters ||
+            showOfficeAddress ||
+            showContactEmail ||
+            showContactPhone ||
+            showRegistrationNumber;
 
-            {/* Editorial Pull Quote */}
-            <blockquote className="my-8 py-6 border-y border-stone-300 max-w-2xl">
-              <p className="font-serif italic text-xl sm:text-2xl text-slate-900 leading-relaxed">
-                “Leadership is not defined by title or inherited privilege—it is built through moral courage, civic empathy, and consistent service to one’s community.”
-              </p>
-              <footer className="mt-3 text-xs font-medium text-stone-500 uppercase tracking-wider">
-                NexGen Council Founding Charter · Principle I
-              </footer>
-            </blockquote>
-          </div>
+          const renderDirectoryCard = showDirectoryCard && (hasVisibleDirectoryRows || showDirectoryHeading);
 
-          {/* Right Institutional Dossier Column */}
-          <div className="lg:col-span-5">
-            <div className="bg-white border border-stone-200 rounded-2xl p-6 sm:p-8 space-y-4">
-              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900">
-                {settings?.directoryHeading || 'Institutional Record & Directory'}
-              </h3>
-              <dl className="divide-y divide-stone-200 text-sm">
-                <div className="py-3.5 space-y-1">
-                  <dt className="text-xs text-stone-500 font-medium uppercase tracking-wider">Official Title</dt>
-                  <dd className="text-slate-900 font-semibold">
-                    {settings?.organizationName || 'NexGen Women Empowerment & Youth Leadership Council'}
-                  </dd>
+          return (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
+              {/* Main Essay Column */}
+              <div className={`${renderDirectoryCard ? 'lg:col-span-7' : 'lg:col-span-12'} space-y-6`}>
+                <div className="space-y-2 border-b border-stone-200 pb-5">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-indigo-900">
+                    Chapter 01 · Origin &amp; Purpose
+                  </p>
+                  <h2 className="text-2xl sm:text-3xl font-serif font-bold text-slate-950 tracking-tight [text-wrap:balance]">
+                    From Local Mentorship Circles to a Structured Leadership Network
+                  </h2>
                 </div>
-                <div className="py-3.5 space-y-1">
-                  <dt className="text-xs text-stone-500 font-medium uppercase tracking-wider">Primary Domains</dt>
-                  <dd className="text-slate-700 leading-relaxed">
-                    {settings?.primaryDomains ||
-                      'Women Empowerment · Youth Civic Leadership · Mentorship · Policy Dialogue'}
-                  </dd>
+
+                <div
+                  className={`space-y-5 text-[15px] sm:text-base text-slate-700 leading-[1.75] ${
+                    renderDirectoryCard ? 'max-w-2xl' : 'max-w-3xl'
+                  }`}
+                >
+                  <p className="first-letter:text-5xl first-letter:font-serif first-letter:font-bold first-letter:float-left first-letter:mr-3 first-letter:mt-1 first-letter:leading-none first-letter:text-indigo-950">
+                    Founded as a collaborative civil society initiative of educators, youth researchers, and women advocates, NexGen Council was established to address structural disparities that keep talented young women and emerging youth leaders out of senior civic, institutional, and entrepreneurial roles.
+                  </p>
+                  <p>
+                    What began as focused community dialogues in Sialkot has grown into our flagship 30-Day Leadership Development Series, Women in STEM and Entrepreneurship mentorship tracks, and multi-district youth parliamentary symposiums connecting emerging voices directly with civic scholars.
+                  </p>
+                  <p>
+                    Today, NexGen Women Empowerment &amp; Youth Leadership Council operates with verified volunteer onboarding, transparent application tracking, and active educational partnerships—turning ambition into disciplined public service.
+                  </p>
                 </div>
-                {settings?.directoryHeadquarters?.trim() && (
-                  <div className="py-3.5 space-y-1">
-                    <dt className="text-xs text-stone-500 font-medium uppercase tracking-wider">Headquarters</dt>
-                    <dd className="text-slate-700">{settings.directoryHeadquarters}</dd>
+
+                {/* Editorial Pull Quote */}
+                <blockquote className="my-8 py-6 border-y border-stone-300 max-w-2xl">
+                  <p className="font-serif italic text-xl sm:text-2xl text-slate-900 leading-relaxed">
+                    “Leadership is not defined by title or inherited privilege—it is built through moral courage, civic empathy, and consistent service to one’s community.”
+                  </p>
+                  <footer className="mt-3 text-xs font-medium text-stone-500 uppercase tracking-wider">
+                    NexGen Council Founding Charter · Principle I
+                  </footer>
+                </blockquote>
+              </div>
+
+              {/* Right Institutional Dossier Column */}
+              {renderDirectoryCard && (
+                <div className="lg:col-span-5">
+                  <div className="bg-white border border-stone-200 rounded-2xl p-6 sm:p-8 space-y-4">
+                    {showDirectoryHeading && (
+                      <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900">
+                        {settings?.directoryHeading || 'Institutional Record & Directory'}
+                      </h3>
+                    )}
+                    {hasVisibleDirectoryRows && (
+                      <dl className="divide-y divide-stone-200 text-sm">
+                        {showOfficialTitle && (
+                          <div className="py-3.5 space-y-1">
+                            <dt className="text-xs text-stone-500 font-medium uppercase tracking-wider">
+                              Official Title
+                            </dt>
+                            <dd className="text-slate-900 font-semibold">
+                              {settings?.organizationName || 'NexGen Women Empowerment & Youth Leadership Council'}
+                            </dd>
+                          </div>
+                        )}
+                        {showPrimaryDomains && (
+                          <div className="py-3.5 space-y-1">
+                            <dt className="text-xs text-stone-500 font-medium uppercase tracking-wider">
+                              Primary Domains
+                            </dt>
+                            <dd className="text-slate-700 leading-relaxed">
+                              {settings?.primaryDomains ||
+                                'Women Empowerment · Youth Civic Leadership · Mentorship · Policy Dialogue'}
+                            </dd>
+                          </div>
+                        )}
+                        {showDirectoryHeadquarters && (
+                          <div className="py-3.5 space-y-1">
+                            <dt className="text-xs text-stone-500 font-medium uppercase tracking-wider">
+                              Headquarters
+                            </dt>
+                            <dd className="text-slate-700">
+                              {settings?.directoryHeadquarters || 'Sialkot, PK'}
+                            </dd>
+                          </div>
+                        )}
+                        {showOfficeAddress && (
+                          <div className="py-3.5 space-y-1">
+                            <dt className="text-xs text-stone-500 font-medium uppercase tracking-wider">
+                              Secretariat Office
+                            </dt>
+                            <dd className="text-slate-700">
+                              {settings?.officeAddress || 'Executive Secretariat, Sialkot, Punjab, Pakistan'}
+                            </dd>
+                          </div>
+                        )}
+                        {showContactEmail && (
+                          <div className="py-3.5 space-y-1">
+                            <dt className="text-xs text-stone-500 font-medium uppercase tracking-wider">
+                              Official Contact
+                            </dt>
+                            <dd className="text-slate-700">
+                              {settings?.contactEmail || 'admin@nexgencouncil.bond'}
+                            </dd>
+                          </div>
+                        )}
+                        {showContactPhone && (
+                          <div className="py-3.5 space-y-1">
+                            <dt className="text-xs text-stone-500 font-medium uppercase tracking-wider">
+                              Official Phone
+                            </dt>
+                            <dd className="text-slate-700 tabular-nums">{settings?.contactPhone}</dd>
+                          </div>
+                        )}
+                        {showRegistrationNumber && (
+                          <div className="py-3.5 space-y-1">
+                            <dt className="text-xs text-stone-500 font-medium uppercase tracking-wider">
+                              Registration &amp; Charter
+                            </dt>
+                            <dd className="text-slate-700">{settings?.registrationNumber}</dd>
+                          </div>
+                        )}
+                      </dl>
+                    )}
                   </div>
-                )}
-                {settings?.showOfficeAddress !== false && (
-                  <div className="py-3.5 space-y-1">
-                    <dt className="text-xs text-stone-500 font-medium uppercase tracking-wider">Secretariat Office</dt>
-                    <dd className="text-slate-700">
-                      {settings?.officeAddress || 'Executive Secretariat, Sialkot, Punjab, Pakistan'}
-                    </dd>
-                  </div>
-                )}
-                {settings?.showContactEmail !== false && (
-                  <div className="py-3.5 space-y-1">
-                    <dt className="text-xs text-stone-500 font-medium uppercase tracking-wider">Official Contact</dt>
-                    <dd className="text-slate-700">
-                      {settings?.contactEmail || 'admin@nexgencouncil.bond'}
-                    </dd>
-                  </div>
-                )}
-                {settings?.showContactPhone !== false && settings?.contactPhone?.trim() && (
-                  <div className="py-3.5 space-y-1">
-                    <dt className="text-xs text-stone-500 font-medium uppercase tracking-wider">Official Phone</dt>
-                    <dd className="text-slate-700 tabular-nums">{settings.contactPhone}</dd>
-                  </div>
-                )}
-                {settings?.showRegistrationNumber !== false && settings?.registrationNumber?.trim() && (
-                  <div className="py-3.5 space-y-1">
-                    <dt className="text-xs text-stone-500 font-medium uppercase tracking-wider">Registration &amp; Charter</dt>
-                    <dd className="text-slate-700">{settings.registrationNumber}</dd>
-                  </div>
-                )}
-              </dl>
+                </div>
+              )}
             </div>
-          </div>
-        </div>
+          );
+        })()}
       </section>
 
       {/* 3. MISSION, VISION, INTERACTIVE CHARTER & CORE VALUES */}

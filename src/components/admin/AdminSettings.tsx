@@ -666,9 +666,49 @@ export const AdminSettings: React.FC = () => {
           </div>
         </div>
 
+        {/* Volunteer Onboarding & Official WhatsApp Group Link */}
+        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2">
+              <Share2 className="w-4 h-4 text-emerald-700" />
+              <div>
+                <h3 className="font-serif font-bold text-base text-slate-900">
+                  Volunteer Approval &amp; WhatsApp Group Invite Link
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Default invitation link attached to Volunteer Approval Congratulations emails sent from{' '}
+                  <span className="font-mono text-slate-700">admin@nexgencouncil.bond</span>.
+                </p>
+              </div>
+            </div>
+            <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+              {formData.volunteerWhatsappGroupLink?.trim() ? 'Invite Link Set' : 'No Default Link (Optional)'}
+            </span>
+          </div>
+
+          <div>
+            <label className="block font-semibold text-slate-700 mb-1">
+              Official Volunteer WhatsApp Group Invitation URL (Optional)
+            </label>
+            <input
+              type="url"
+              value={formData.volunteerWhatsappGroupLink || ''}
+              onChange={e => {
+                setIsDirty(true);
+                setFormData({ ...formData, volunteerWhatsappGroupLink: e.target.value });
+              }}
+              placeholder="https://chat.whatsapp.com/YourInviteCodeHere"
+              className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono text-xs"
+            />
+            <p className="text-[11px] text-slate-500 mt-1.5">
+              Leave blank if you do not have a group link yet — you can still send clean Congratulations emails without an invite button, or override the link per approval.
+            </p>
+          </div>
+        </div>
+
         {/* About Page: Institutional Record & Directory */}
         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div className="flex items-center gap-2">
               <Building className="w-4 h-4 text-indigo-950" />
               <div>
@@ -676,15 +716,73 @@ export const AdminSettings: React.FC = () => {
                   About Page — Institutional Record &amp; Directory
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  All details shown inside the Institutional Record &amp; Directory card on the public About page.
+                  Edit details or toggle individual items ON/OFF inside the Institutional Record &amp; Directory card on the About page.
                 </p>
               </div>
             </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setIsDirty(true);
+                setFormData({
+                  ...formData,
+                  showDirectoryCard: formData.showDirectoryCard === false ? true : false
+                });
+              }}
+              className={`flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1 rounded-full transition-colors cursor-pointer ${
+                formData.showDirectoryCard !== false
+                  ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+              }`}
+              title="Toggle entire Directory Card on About page"
+            >
+              {formData.showDirectoryCard !== false ? (
+                <>
+                  <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Directory Card: ON</span>
+                </>
+              ) : (
+                <>
+                  <EyeOff className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Directory Card: OFF</span>
+                </>
+              )}
+            </button>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Directory Section Heading</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold text-slate-700">Directory Section Heading</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDirty(true);
+                    setFormData({
+                      ...formData,
+                      showDirectoryHeading: formData.showDirectoryHeading === false ? true : false
+                    });
+                  }}
+                  className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                    formData.showDirectoryHeading !== false
+                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                  }`}
+                >
+                  {formData.showDirectoryHeading !== false ? (
+                    <>
+                      <Eye className="w-3 h-3 text-emerald-600" />
+                      <span>ON</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="w-3 h-3 text-slate-400" />
+                      <span>OFF</span>
+                    </>
+                  )}
+                </button>
+              </div>
               <input
                 type="text"
                 value={formData.directoryHeading ?? 'Institutional Record & Directory'}
@@ -698,7 +796,36 @@ export const AdminSettings: React.FC = () => {
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Council Headquarters Badge</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold text-slate-700">Council Headquarters Badge</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDirty(true);
+                    setFormData({
+                      ...formData,
+                      showDirectoryHeadquarters: formData.showDirectoryHeadquarters === false ? true : false
+                    });
+                  }}
+                  className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                    formData.showDirectoryHeadquarters !== false
+                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                  }`}
+                >
+                  {formData.showDirectoryHeadquarters !== false ? (
+                    <>
+                      <Eye className="w-3 h-3 text-emerald-600" />
+                      <span>ON</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="w-3 h-3 text-slate-400" />
+                      <span>OFF</span>
+                    </>
+                  )}
+                </button>
+              </div>
               <input
                 type="text"
                 value={formData.directoryHeadquarters ?? 'Sialkot, PK'}
@@ -712,7 +839,36 @@ export const AdminSettings: React.FC = () => {
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Official Title</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold text-slate-700">Official Title</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDirty(true);
+                    setFormData({
+                      ...formData,
+                      showOfficialTitle: formData.showOfficialTitle === false ? true : false
+                    });
+                  }}
+                  className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                    formData.showOfficialTitle !== false
+                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                  }`}
+                >
+                  {formData.showOfficialTitle !== false ? (
+                    <>
+                      <Eye className="w-3 h-3 text-emerald-600" />
+                      <span>ON</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="w-3 h-3 text-slate-400" />
+                      <span>OFF</span>
+                    </>
+                  )}
+                </button>
+              </div>
               <input
                 type="text"
                 value={formData.organizationName || ''}
@@ -726,7 +882,36 @@ export const AdminSettings: React.FC = () => {
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Official Contact Email</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold text-slate-700">Official Contact Email</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDirty(true);
+                    setFormData({
+                      ...formData,
+                      showContactEmail: formData.showContactEmail === false ? true : false
+                    });
+                  }}
+                  className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                    formData.showContactEmail !== false
+                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                  }`}
+                >
+                  {formData.showContactEmail !== false ? (
+                    <>
+                      <Eye className="w-3 h-3 text-emerald-600" />
+                      <span>ON</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="w-3 h-3 text-slate-400" />
+                      <span>OFF</span>
+                    </>
+                  )}
+                </button>
+              </div>
               <input
                 type="email"
                 value={formData.contactEmail || ''}
@@ -740,7 +925,36 @@ export const AdminSettings: React.FC = () => {
             </div>
 
             <div className="sm:col-span-2">
-              <label className="block font-semibold text-slate-700 mb-1">Primary Domains</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold text-slate-700">Primary Domains</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDirty(true);
+                    setFormData({
+                      ...formData,
+                      showPrimaryDomains: formData.showPrimaryDomains === false ? true : false
+                    });
+                  }}
+                  className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                    formData.showPrimaryDomains !== false
+                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                  }`}
+                >
+                  {formData.showPrimaryDomains !== false ? (
+                    <>
+                      <Eye className="w-3 h-3 text-emerald-600" />
+                      <span>ON</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="w-3 h-3 text-slate-400" />
+                      <span>OFF</span>
+                    </>
+                  )}
+                </button>
+              </div>
               <input
                 type="text"
                 value={
@@ -757,7 +971,36 @@ export const AdminSettings: React.FC = () => {
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Secretariat Office Address</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold text-slate-700">Secretariat Office Address</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDirty(true);
+                    setFormData({
+                      ...formData,
+                      showOfficeAddress: formData.showOfficeAddress === false ? true : false
+                    });
+                  }}
+                  className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                    formData.showOfficeAddress !== false
+                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                  }`}
+                >
+                  {formData.showOfficeAddress !== false ? (
+                    <>
+                      <Eye className="w-3 h-3 text-emerald-600" />
+                      <span>ON</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="w-3 h-3 text-slate-400" />
+                      <span>OFF</span>
+                    </>
+                  )}
+                </button>
+              </div>
               <input
                 type="text"
                 value={formData.officeAddress || ''}
@@ -771,7 +1014,36 @@ export const AdminSettings: React.FC = () => {
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Official Helpline / Phone</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold text-slate-700">Official Helpline / Phone</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDirty(true);
+                    setFormData({
+                      ...formData,
+                      showContactPhone: formData.showContactPhone === false ? true : false
+                    });
+                  }}
+                  className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                    formData.showContactPhone !== false
+                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                  }`}
+                >
+                  {formData.showContactPhone !== false ? (
+                    <>
+                      <Eye className="w-3 h-3 text-emerald-600" />
+                      <span>ON</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="w-3 h-3 text-slate-400" />
+                      <span>OFF</span>
+                    </>
+                  )}
+                </button>
+              </div>
               <input
                 type="text"
                 value={formData.contactPhone || ''}
@@ -785,7 +1057,36 @@ export const AdminSettings: React.FC = () => {
             </div>
 
             <div className="sm:col-span-2">
-              <label className="block font-semibold text-slate-700 mb-1">Registration / Charter ID</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold text-slate-700">Registration / Charter ID</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDirty(true);
+                    setFormData({
+                      ...formData,
+                      showRegistrationNumber: formData.showRegistrationNumber === false ? true : false
+                    });
+                  }}
+                  className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                    formData.showRegistrationNumber !== false
+                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                  }`}
+                >
+                  {formData.showRegistrationNumber !== false ? (
+                    <>
+                      <Eye className="w-3 h-3 text-emerald-600" />
+                      <span>ON</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="w-3 h-3 text-slate-400" />
+                      <span>OFF</span>
+                    </>
+                  )}
+                </button>
+              </div>
               <input
                 type="text"
                 value={formData.registrationNumber || ''}
@@ -1108,7 +1409,7 @@ export const AdminSettings: React.FC = () => {
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : 'bg-amber-50 text-amber-700 border-amber-200'
               }`}>
-                Source: {adminStatus.source === 'env_file' ? '.env file on disk' : adminStatus.source === 'process_env' ? 'Environment variable' : adminStatus.source === 'admin_config' ? 'Custom saved credentials' : 'Default'}
+                Source: {adminStatus.source === 'database' ? 'Database (Preserved on Rebuild)' : adminStatus.source === 'env_file' ? '.env file on disk' : adminStatus.source === 'process_env' ? 'Environment variable' : adminStatus.source === 'admin_config' ? 'Custom saved credentials' : 'Default'}
               </span>
             )}
           </div>

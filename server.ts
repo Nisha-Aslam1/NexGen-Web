@@ -6,7 +6,7 @@ import fs from 'fs';
 import { generateSecret, generateURI, verifySync } from 'otplib';
 import QRCode from 'qrcode';
 import { createServer as createViteServer } from 'vite';
-import { db, resolveAdminCredentials } from './server/db.ts';
+import { db } from './server/db.ts';
 import { Role } from './src/types.ts';
 import {
   initMongo,
@@ -31,7 +31,13 @@ import {
 } from './server/seo.ts';
 
 import { meetingsRouter } from './server/meetings.ts';
-import { sendCouncilEmail, sanitizeSenderName, isValidEmailAddress, isValidImageUrl } from './server/email.ts';
+import {
+  sendCouncilEmail,
+  buildVolunteerApprovalEmail,
+  sanitizeSenderName,
+  isValidEmailAddress,
+  isValidImageUrl
+} from './server/email.ts';
 
 const app = express();
 const PORT = 3000;
@@ -1097,14 +1103,25 @@ app.get('/api/applications/:id', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'VIE
   res.json(appItem);
 });
 
-app.patch('/api/applications/:id/status', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), (req, res) => {
-  const { status, internalNotes } = req.body;
+app.patch('/api/applications/:id/status', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), async (req, res) => {
+  const {
+    status,
+    internalNotes,
+    reviewNotes,
+    sendApprovalEmail,
+    includeWhatsappInvite,
+    whatsappGroupLink,
+    saveWhatsappAsDefault,
+    customEmailNote
+  } = req.body || {};
+
   if (!['Pending', 'Under Review', 'Approved', 'Rejected'].includes(status)) {
     return res.status(400).json({ error: 'Invalid application status.' });
   }
 
+  const effectiveNotes = internalNotes !== undefined ? internalNotes : reviewNotes;
   const user = (req as any).user;
-  const updated = db.updateApplicationStatus(req.params.id, status, internalNotes, {
+  const updated = db.updateApplicationStatus(req.params.id, status, effectiveNotes, {
     name: user.name,
     id: user.userId
   });
@@ -1118,11 +1135,105 @@ app.patch('/api/applications/:id/status', requireAuth(['ADMIN', 'VOLUNTEER_MANAG
     action: 'APPLICATION_STATUS_UPDATE',
     entityType: 'VolunteerApplication',
     entityId: updated.id,
-    details: `Application ${updated.referenceCode} (${updated.fullName}) marked as ${status}. ${internalNotes ? `Notes: ${internalNotes}` : ''}`,
+    details: `Application ${updated.referenceCode} (${updated.fullName}) marked as ${status}. ${effectiveNotes ? `Notes: ${effectiveNotes}` : ''}`,
     ipAddress: req.ip || 'unknown'
   });
 
-  res.json(updated);
+  let emailDispatch: {
+    attempted: boolean;
+    success: boolean;
+    error?: string;
+    resendId?: string;
+    includedWhatsappButton: boolean;
+    fromEmail: string;
+  } | null = null;
+
+  if (status === 'Approved' && sendApprovalEmail === true) {
+    const settings = db.getSettings();
+    const emailConfig = db.getEmailSenderConfig();
+    const chosenWhatsappLink =
+      typeof whatsappGroupLink === 'string'
+        ? whatsappGroupLink.trim()
+        : (settings.volunteerWhatsappGroupLink || '').trim();
+
+    if (saveWhatsappAsDefault === true && typeof whatsappGroupLink === 'string') {
+      db.updateSettings({ volunteerWhatsappGroupLink: chosenWhatsappLink });
+    }
+
+    const template = buildVolunteerApprovalEmail({
+      volunteerName: updated.fullName,
+      referenceCode: updated.referenceCode,
+      preferredRole: updated.preferredRole,
+      city: updated.city,
+      customNote: typeof customEmailNote === 'string' ? customEmailNote : undefined,
+      includeWhatsappInvite: Boolean(includeWhatsappInvite && chosenWhatsappLink),
+      whatsappGroupLink: chosenWhatsappLink,
+      siteUrl: settings.siteUrl || 'https://nexgencouncil.bond'
+    });
+
+    const senderEmail = 'admin@nexgencouncil.bond';
+    const senderName = emailConfig.senderName || 'NexGen Council';
+
+    const result = await sendCouncilEmail({
+      to: updated.email,
+      fromName: senderName,
+      fromEmail: senderEmail,
+      replyTo: emailConfig.replyTo || settings.contactEmail || undefined,
+      subject: template.subject,
+      html: template.html,
+      message: template.message,
+      buttons: template.buttons,
+      logoUrl: emailConfig.logoUrl || undefined,
+      siteUrl: settings.siteUrl || 'https://nexgencouncil.bond'
+    });
+
+    if (result.attemptedDispatch && result.resolvedMeta) {
+      db.addEmailLog({
+        resendId: result.data?.id,
+        fromName: result.resolvedMeta.fromName,
+        fromEmail: result.resolvedMeta.fromEmail,
+        to: result.resolvedMeta.recipients,
+        replyTo: result.resolvedMeta.replyTo,
+        subject: result.resolvedMeta.subject,
+        message: result.resolvedMeta.message,
+        html: result.resolvedMeta.html,
+        logoUrl: result.resolvedMeta.logoUrl,
+        buttons: result.resolvedMeta.buttons,
+        status: result.success ? 'Sent' : 'Failed',
+        error: result.success ? undefined : result.error || 'Failed to send volunteer approval email.',
+        sentByUserId: user.userId,
+        sentByName: user.name,
+        sentAt: result.data?.sentAt
+      });
+    }
+
+    db.logActivity({
+      userId: user.userId,
+      userName: user.name,
+      userRole: user.role,
+      action: 'VOLUNTEER_APPROVAL_EMAIL',
+      entityType: 'Email',
+      entityId: result.data?.id || updated.id,
+      details: result.success
+        ? `Sent approval congratulations email from ${senderEmail} to ${updated.email}${template.buttons.length > 0 ? ' (with WhatsApp Group Invite button)' : ' (without invite button)'}.`
+        : `Failed approval congratulations email to ${updated.email}: ${result.error || 'Unknown error'}`,
+      ipAddress: req.ip || 'unknown'
+    });
+
+    emailDispatch = {
+      attempted: true,
+      success: result.success,
+      error: result.error,
+      resendId: result.data?.id,
+      includedWhatsappButton: template.buttons.length > 0,
+      fromEmail: senderEmail
+    };
+  }
+
+  res.json({
+    ...updated,
+    ...(emailDispatch ? { emailDispatch } : {})
+  });
 });
 
 app.patch('/api/applications/:id', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), (req, res) => {
@@ -1454,19 +1565,39 @@ app.delete('/api/gallery/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNI
 
 // 10. Contact
 app.post(['/api/contact', '/api/contacts'], (req, res) => {
-  const { name, email, phone, subject, message } = req.body;
-  if (!name || !email || !message) {
+  const { name, email, phone, whatsapp, source, subject, message } = req.body || {};
+  const cleanName = typeof name === 'string' ? name.trim() : '';
+  const cleanEmail = typeof email === 'string' ? email.trim() : '';
+  const cleanMessage = typeof message === 'string' ? message.trim() : '';
+  const cleanPhone = typeof phone === 'string' ? phone.trim() : '';
+  const cleanWhatsapp = typeof whatsapp === 'string' ? whatsapp.trim() : cleanPhone;
+  const normalizedSource: 'Support Widget' | 'Contact Page' =
+    source === 'Support Widget' ? 'Support Widget' : 'Contact Page';
+
+  if (!cleanName || !cleanEmail || !cleanMessage) {
     return res.status(400).json({ error: 'Name, email, and message are required.' });
   }
-  const contact = db.createContact({ name, email, phone, subject: subject || 'General Inquiry', message });
+  if (normalizedSource === 'Support Widget' && cleanWhatsapp.replace(/\D/g, '').length < 7) {
+    return res.status(400).json({ error: 'A valid WhatsApp number is required for Support Widget inquiries.' });
+  }
+
+  const contact = db.createContact({
+    name: cleanName,
+    email: cleanEmail,
+    phone: cleanWhatsapp || cleanPhone || undefined,
+    whatsapp: cleanWhatsapp || undefined,
+    source: normalizedSource,
+    subject: (typeof subject === 'string' && subject.trim()) ? subject.trim() : 'General Inquiry',
+    message: cleanMessage
+  });
   db.logActivity({
     userId: 'public_visitor',
-    userName: name,
+    userName: cleanName,
     userRole: 'VISITOR',
     action: 'CONTACT_SUBMITTED',
     entityType: 'ContactMessage',
     entityId: contact.id,
-    details: `Contact message received from ${name} (${email}): "${subject}"`,
+    details: `Inquiry received via ${normalizedSource} from ${cleanName} (${cleanEmail}): "${contact.subject}"`,
     ipAddress: req.ip || 'unknown'
   });
   res.status(201).json({ ok: true, message: 'Message sent successfully. Our team will contact you shortly.' });
@@ -1547,6 +1678,8 @@ app.get('/api/email/history', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEE
       l.fromEmail.toLowerCase().includes(q) ||
       l.fromName.toLowerCase().includes(q) ||
       l.to.some(r => r.toLowerCase().includes(q)) ||
+      (Array.isArray(l.cc) && l.cc.some(r => r.toLowerCase().includes(q))) ||
+      (Array.isArray(l.bcc) && l.bcc.some(r => r.toLowerCase().includes(q))) ||
       (l.resendId && l.resendId.toLowerCase().includes(q))
     );
   }
@@ -1564,7 +1697,7 @@ app.delete('/api/email/history/:id', requireAuth(['ADMIN']), (req, res) => {
 
 app.post('/api/send-email', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'COMMUNICATIONS_OFFICER']), async (req, res) => {
   try {
-    const { to, subject, html, message, replyTo, fromName, fromEmail, logoUrl, images } = req.body || {};
+    const { to, cc, bcc, subject, html, message, replyTo, fromName, fromEmail, logoUrl, images, buttons } = req.body || {};
     const savedConfig = db.getEmailSenderConfig();
     const siteSettings = db.getSettings();
     const effectiveFromName = (typeof fromName === 'string' && fromName.trim()) ? fromName.trim() : savedConfig.senderName;
@@ -1574,6 +1707,8 @@ app.post('/api/send-email', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_
 
     const result = await sendCouncilEmail({
       to,
+      cc,
+      bcc,
       subject,
       html,
       message,
@@ -1582,6 +1717,7 @@ app.post('/api/send-email', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_
       fromEmail: effectiveFromEmail,
       logoUrl: effectiveLogoUrl || undefined,
       images: Array.isArray(images) ? images : undefined,
+      buttons: Array.isArray(buttons) ? buttons : undefined,
       siteUrl: siteSettings.siteUrl || 'https://nexgencouncil.bond'
     });
 
@@ -1594,11 +1730,15 @@ app.post('/api/send-email', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_
           fromName: result.resolvedMeta.fromName,
           fromEmail: result.resolvedMeta.fromEmail,
           to: result.resolvedMeta.recipients,
+          cc: result.resolvedMeta.cc.length > 0 ? result.resolvedMeta.cc : undefined,
+          bcc: result.resolvedMeta.bcc.length > 0 ? result.resolvedMeta.bcc : undefined,
           replyTo: result.resolvedMeta.replyTo,
           subject: result.resolvedMeta.subject,
           message: result.resolvedMeta.message,
+          html: result.resolvedMeta.html,
           logoUrl: result.resolvedMeta.logoUrl,
           images: result.resolvedMeta.images,
+          buttons: result.resolvedMeta.buttons,
           status: 'Failed',
           error: result.error || 'Failed to send email.',
           sentByUserId: user.userId,
@@ -1618,16 +1758,25 @@ app.post('/api/send-email', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_
       fromName: result.data?.fromName || effectiveFromName,
       fromEmail: result.data?.fromEmail || effectiveFromEmail,
       to: result.data?.recipients || [],
+      cc: result.data?.cc && result.data.cc.length > 0 ? result.data.cc : undefined,
+      bcc: result.data?.bcc && result.data.bcc.length > 0 ? result.data.bcc : undefined,
       replyTo: effectiveReplyTo || undefined,
       subject: result.data?.subject || String(subject || '').trim(),
-      message: String(message || '').trim() || '[HTML Content]',
+      message: result.resolvedMeta?.message || String(message || '').trim() || '[Formatted Content]',
+      html: result.resolvedMeta?.html,
       logoUrl: result.resolvedMeta?.logoUrl,
       images: result.resolvedMeta?.images,
+      buttons: result.resolvedMeta?.buttons,
       status: 'Sent',
       sentByUserId: user.userId,
       sentByName: user.name,
       sentAt: result.data?.sentAt
     });
+
+    const totalRecipientsCount =
+      (result.data?.recipients.length || 0) +
+      (result.data?.cc.length || 0) +
+      (result.data?.bcc.length || 0);
 
     db.logActivity({
       userId: user.userId,
@@ -1636,7 +1785,7 @@ app.post('/api/send-email', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_
       action: 'EMAIL_SENT',
       entityType: 'Email',
       entityId: result.data?.id,
-      details: `Sent email "${result.data?.subject}" from "${savedLog.fromName} <${savedLog.fromEmail}>" to ${result.data?.recipients.length || 0} recipient(s).`,
+      details: `Sent email "${result.data?.subject}" from "${savedLog.fromName} <${savedLog.fromEmail}>" to ${totalRecipientsCount} recipient(s) (To: ${result.data?.recipients.length || 0}, CC: ${result.data?.cc.length || 0}, BCC: ${result.data?.bcc.length || 0}).`,
       ipAddress: req.ip || 'unknown'
     });
 
@@ -1982,13 +2131,8 @@ app.post('/api/system/database-purge-mock', requireAuth(['SUPER_ADMIN']), async 
 });
 
 app.get('/api/system/admin-credentials', requireAuth(['SUPER_ADMIN']), (req, res) => {
-  const creds = resolveAdminCredentials();
-  res.json({
-    username: creds.username,
-    email: creds.email,
-    source: creds.source,
-    isCustomConfigured: creds.source !== 'default'
-  });
+  const creds = db.getActiveSuperAdminInfo();
+  res.json(creds);
 });
 
 app.post('/api/system/admin-credentials', requireAuth(['SUPER_ADMIN']), (req, res) => {

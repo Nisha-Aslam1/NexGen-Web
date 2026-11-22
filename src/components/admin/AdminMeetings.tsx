@@ -22,7 +22,9 @@ import {
   RefreshCw,
   MicOff,
   VideoOff,
-  Monitor
+  Monitor,
+  Edit2,
+  ShieldCheck
 } from 'lucide-react';
 
 function slugifyRoomSlug(input: string): string {
@@ -86,6 +88,21 @@ export const AdminMeetings: React.FC = () => {
 
   // Modals
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingMeeting, setEditingMeeting] = useState<Meeting | null>(null);
+  const [editForm, setEditForm] = useState({
+    title: '',
+    description: '',
+    scheduledStart: '',
+    scheduledEnd: '',
+    enablePassword: false,
+    password: '',
+    clearPassword: false,
+    startWithAudioMuted: false,
+    startWithVideoMuted: false,
+    waitingRoomEnabled: false,
+    screenShareEnabled: true,
+    maxParticipants: 50
+  });
   const [viewingHistoryMeeting, setViewingHistoryMeeting] = useState<Meeting | null>(null);
   const [historyParticipants, setHistoryParticipants] = useState<any[]>([]);
   const [historyMessages, setHistoryMessages] = useState<any[]>([]);
@@ -108,6 +125,10 @@ export const AdminMeetings: React.FC = () => {
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [confirmMeetingAction, setConfirmMeetingAction] = useState<{
+    id: string;
+    type: 'end' | 'delete';
+  } | null>(null);
 
   const fetchMeetings = async () => {
     try {
@@ -266,15 +287,14 @@ export const AdminMeetings: React.FC = () => {
   };
 
   const handleEndMeeting = async (meeting: Meeting) => {
-    if (!confirm(`End "${meeting.title}" and mark this meeting session as completed?`)) return;
-
     try {
       const headers: Record<string, string> = {};
       if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
 
       const res = await fetch(`/api/meetings/${meeting.id}/end`, { method: 'POST', headers });
       if (res.ok) {
-        addToast('Meeting marked as ended', 'info');
+        addToast('Meeting ended for all active participants in real time.', 'success');
+        setConfirmMeetingAction(null);
         fetchMeetings();
       }
     } catch {
@@ -283,8 +303,6 @@ export const AdminMeetings: React.FC = () => {
   };
 
   const handleDeleteMeeting = async (id: string) => {
-    if (!confirm('Are you sure you want to permanently delete this meeting?')) return;
-
     try {
       const headers: Record<string, string> = {};
       if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
@@ -292,10 +310,79 @@ export const AdminMeetings: React.FC = () => {
       const res = await fetch(`/api/meetings/${id}`, { method: 'DELETE', headers });
       if (res.ok) {
         addToast('Meeting deleted', 'success');
+        setConfirmMeetingAction(null);
         fetchMeetings();
       }
     } catch {
       addToast('Error deleting meeting', 'error');
+    }
+  };
+
+  const handleOpenEditModal = (m: Meeting) => {
+    setEditingMeeting(m);
+    setEditForm({
+      title: m.title || '',
+      description: m.description || '',
+      scheduledStart: m.scheduledStart ? m.scheduledStart.slice(0, 16) : '',
+      scheduledEnd: m.scheduledEnd ? m.scheduledEnd.slice(0, 16) : '',
+      enablePassword: Boolean(m.hasPassword),
+      password: '',
+      clearPassword: false,
+      startWithAudioMuted: Boolean(m.startWithAudioMuted),
+      startWithVideoMuted: Boolean(m.startWithVideoMuted),
+      waitingRoomEnabled: Boolean(m.waitingRoomEnabled),
+      screenShareEnabled: m.screenShareEnabled !== false,
+      maxParticipants: m.maxParticipants || 50
+    });
+  };
+
+  const handleSaveEditMeeting = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingMeeting) return;
+    if (!editForm.title.trim()) {
+      addToast('Meeting title is required.', 'error');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+
+      const payload: Record<string, any> = {
+        title: editForm.title.trim(),
+        description: editForm.description.trim(),
+        scheduledStart: editForm.scheduledStart || editingMeeting.scheduledStart,
+        scheduledEnd: editForm.scheduledEnd || undefined,
+        startWithAudioMuted: editForm.startWithAudioMuted,
+        startWithVideoMuted: editForm.startWithVideoMuted,
+        waitingRoomEnabled: editForm.waitingRoomEnabled,
+        screenShareEnabled: editForm.screenShareEnabled,
+        maxParticipants: editForm.maxParticipants || 50
+      };
+
+      if (!editForm.enablePassword) {
+        payload.password = '';
+      } else if (editForm.password.trim()) {
+        payload.password = editForm.password.trim();
+      }
+
+      const res = await fetch(`/api/meetings/${editingMeeting.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update meeting');
+
+      addToast('Meeting settings updated in real time!', 'success');
+      setEditingMeeting(null);
+      fetchMeetings();
+    } catch (err: any) {
+      addToast(err.message || 'Could not update meeting settings', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -306,7 +393,7 @@ export const AdminMeetings: React.FC = () => {
       if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
 
       const [pRes, mRes] = await Promise.all([
-        fetch(`/api/meetings/${meeting.id}/participants`, { headers }).then(r => r.json()),
+        fetch(`/api/meetings/${meeting.id}/participants?all=true`, { headers }).then(r => r.json()),
         fetch(`/api/meetings/${meeting.id}/messages`, { headers }).then(r => r.json())
       ]);
 
@@ -391,6 +478,26 @@ export const AdminMeetings: React.FC = () => {
             <span>Create / Schedule Meeting</span>
           </button>
         </div>
+      </div>
+
+      {/* Private Invite-Only Notice Banner */}
+      <div className="bg-slate-900 text-slate-100 rounded-2xl p-4 px-5 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-start sm:items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0">
+            <ShieldCheck className="w-5 h-5" />
+          </div>
+          <div>
+            <p className="text-xs font-bold text-white">
+              Private &amp; Invite-Only Video Rooms
+            </p>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              Meetings are never listed publicly on the website or indexed by search engines (<span className="font-mono text-slate-300">noindex</span>). Only people with a direct private invite link can enter.
+            </p>
+          </div>
+        </div>
+        <span className="self-start sm:self-auto px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[11px] font-bold whitespace-nowrap">
+          Private Mode Active
+        </span>
       </div>
 
       {/* Metrics Strip */}
@@ -492,145 +599,373 @@ export const AdminMeetings: React.FC = () => {
             </button>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500">
-                <tr>
-                  <th className="px-6 py-3.5">Meeting Details</th>
-                  <th className="px-6 py-3.5">Room Slug &amp; Website Link</th>
-                  <th className="px-6 py-3.5">Status &amp; Schedule</th>
-                  <th className="px-6 py-3.5">Room Behavior</th>
-                  <th className="px-6 py-3.5 text-right">Host Controls</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredMeetings.map(m => (
-                  <tr key={m.id} className="hover:bg-slate-50/70 transition-colors">
-                    <td className="px-6 py-4">
+          <>
+            {/* Mobile Card List (< md) */}
+            <div className="md:hidden divide-y divide-slate-100">
+              {filteredMeetings.map(m => (
+                <div key={m.id} className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
                       <div className="font-semibold text-slate-900 leading-snug">{m.title}</div>
-                      {m.description && (
-                        <p className="text-xs text-slate-500 mt-0.5 line-clamp-1 max-w-xs">{m.description}</p>
-                      )}
-                      <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
+                      <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-x-2">
                         <span>Host: {m.hostName}</span>
                         <span aria-hidden="true">·</span>
-                        <span className="tabular-nums">Max {m.maxParticipants}</span>
+                        <span className="font-mono text-slate-700">{m.meetingCode}</span>
                       </div>
-                    </td>
+                    </div>
+                    <span
+                      className={`text-xs font-bold shrink-0 ${
+                        m.status === 'Active'
+                          ? 'text-emerald-700'
+                          : m.status === 'Scheduled'
+                          ? 'text-amber-700'
+                          : 'text-slate-500'
+                      }`}
+                    >
+                      {m.status === 'Active' ? 'Active Live' : m.status === 'Scheduled' ? 'Scheduled' : 'Ended'}
+                    </span>
+                  </div>
 
-                    <td className="px-6 py-4">
-                      <div className="text-xs font-mono font-semibold text-slate-800">{m.meetingCode}</div>
-                      <button
-                        onClick={() => handleCopyLink(m.meetingCode)}
-                        className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 border border-slate-200 text-xs font-medium transition-colors cursor-pointer whitespace-nowrap"
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                    <span className="tabular-nums">
+                      {new Date(m.scheduledStart || m.createdAt).toLocaleString([], {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </span>
+                    {m.hasPassword && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="text-rose-700 font-medium">Password Protected</span>
+                      </>
+                    )}
+                    {m.waitingRoomEnabled && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span>Lobby Enabled</span>
+                      </>
+                    )}
+                    {m.isLocked && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="text-amber-700 font-semibold">Locked</span>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    {m.status !== 'Ended' && m.status !== 'Cancelled' && (
+                      <a
+                        href={`/meeting/${m.meetingCode}`}
+                        onClick={(e) => handleJoinAsHost(e, m.meetingCode)}
+                        className="flex-1 min-h-[40px] px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
                       >
-                        {copiedCode === m.meetingCode ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 text-emerald-600" />
-                            <span className="text-emerald-700">Copied Invite Link</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5" />
-                            <span>Copy Invite Link</span>
-                          </>
-                        )}
-                      </button>
-                    </td>
+                        <Play className="w-3.5 h-3.5 fill-white" />
+                        <span>Join as Host</span>
+                      </a>
+                    )}
 
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center gap-1.5 text-xs font-semibold">
-                        <span
-                          className={
-                            m.status === 'Active'
-                              ? 'text-emerald-700'
-                              : m.status === 'Scheduled'
-                              ? 'text-amber-700'
-                              : 'text-slate-500'
-                          }
-                        >
-                          {m.status === 'Active' ? 'Active Live' : m.status === 'Scheduled' ? 'Scheduled' : 'Ended'}
-                        </span>
-                      </div>
-                      <div className="text-xs text-slate-500 mt-1 tabular-nums">
-                        {new Date(m.scheduledStart || m.createdAt).toLocaleString([], {
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
-                      </div>
-                    </td>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyLink(m.meetingCode)}
+                      className="min-h-[40px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-blue-50 text-slate-700 border border-slate-200 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      {copiedCode === m.meetingCode ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                      <span>{copiedCode === m.meetingCode ? 'Copied' : 'Invite'}</span>
+                    </button>
 
-                    <td className="px-6 py-4">
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600 max-w-xs">
-                        {m.hasPassword && <span className="text-rose-700 font-medium">Password Protected</span>}
-                        {m.waitingRoomEnabled && <span>Lobby Enabled</span>}
-                        {m.startWithAudioMuted && <span>Audio Muted</span>}
-                        {m.startWithVideoMuted && <span>Video Muted</span>}
-                        <span>{m.screenShareEnabled !== false ? 'Screen Share On' : 'Screen Share Off'}</span>
-                        {m.isLocked && <span className="text-amber-700 font-semibold">Locked</span>}
-                      </div>
-                    </td>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleLock(m)}
+                      className={`min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl border text-xs cursor-pointer ${
+                        m.isLocked
+                          ? 'bg-amber-50 text-amber-700 border-amber-200'
+                          : 'bg-slate-50 text-slate-600 border-slate-200'
+                      }`}
+                      title={m.isLocked ? 'Unlock room' : 'Lock room'}
+                    >
+                      {m.isLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+                    </button>
 
-                    <td className="px-6 py-4 text-right whitespace-nowrap">
-                      <div className="flex items-center justify-end gap-1.5">
-                        {m.status !== 'Ended' && m.status !== 'Cancelled' && (
-                          <a
-                            href={`/meeting/${m.meetingCode}`}
-                            onClick={(e) => handleJoinAsHost(e, m.meetingCode)}
-                            className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
-                          >
-                            <Play className="w-3 h-3 fill-white" />
-                            <span>Start / Join as Host</span>
-                          </a>
-                        )}
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEditModal(m)}
+                      className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl bg-slate-50 border border-slate-200 text-slate-600 cursor-pointer"
+                      title="Edit Room Settings"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
 
-                        <button
-                          onClick={() => handleToggleLock(m)}
-                          className={`p-1.5 rounded-lg border text-xs transition-colors cursor-pointer ${
-                            m.isLocked
-                              ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
-                              : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                          }`}
-                          title={m.isLocked ? 'Unlock room' : 'Lock room'}
-                        >
-                          {m.isLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
-                        </button>
+                    <button
+                      type="button"
+                      onClick={() => handleViewHistory(m)}
+                      className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl bg-slate-50 border border-slate-200 text-slate-600 cursor-pointer"
+                      title="Attendance & Messages"
+                    >
+                      <Eye className="w-4 h-4" />
+                    </button>
 
-                        <button
-                          onClick={() => handleViewHistory(m)}
-                          className="p-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-600 hover:text-blue-600 hover:bg-slate-100 transition-colors cursor-pointer"
-                          title="Attendance & Messages"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </button>
-
-                        {m.status !== 'Ended' && m.status !== 'Cancelled' && (
+                    {m.status !== 'Ended' && m.status !== 'Cancelled' && (
+                      confirmMeetingAction?.id === m.id && confirmMeetingAction.type === 'end' ? (
+                        <div className="flex items-center gap-1">
                           <button
+                            type="button"
                             onClick={() => handleEndMeeting(m)}
-                            className="px-2.5 py-1.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1"
-                            title="End Meeting"
+                            className="min-h-[36px] px-2.5 py-1 rounded-lg bg-rose-600 text-white text-xs font-bold cursor-pointer"
                           >
-                            <Square className="w-3 h-3 fill-rose-600" />
-                            <span>End</span>
+                            Confirm End
                           </button>
-                        )}
-
+                          <button
+                            type="button"
+                            onClick={() => setConfirmMeetingAction(null)}
+                            className="min-h-[36px] px-2 py-1 rounded-lg bg-slate-100 text-slate-600 text-xs cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
                         <button
-                          onClick={() => handleDeleteMeeting(m.id)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                          title="Delete Meeting"
+                          type="button"
+                          onClick={() => setConfirmMeetingAction({ id: m.id, type: 'end' })}
+                          className="min-h-[40px] px-3 py-2 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold cursor-pointer inline-flex items-center gap-1"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Square className="w-3 h-3 fill-rose-600" />
+                          <span>End</span>
+                        </button>
+                      )
+                    )}
+
+                    {confirmMeetingAction?.id === m.id && confirmMeetingAction.type === 'delete' ? (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteMeeting(m.id)}
+                          className="min-h-[36px] px-2.5 py-1 rounded-lg bg-rose-600 text-white text-xs font-bold cursor-pointer"
+                        >
+                          Confirm Delete
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmMeetingAction(null)}
+                          className="min-h-[36px] px-2 py-1 rounded-lg bg-slate-100 text-slate-600 text-xs cursor-pointer"
+                        >
+                          Cancel
                         </button>
                       </div>
-                    </td>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmMeetingAction({ id: m.id, type: 'delete' })}
+                        className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
+                        title="Delete Meeting"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop Table (md+) */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500">
+                  <tr>
+                    <th className="px-6 py-3.5">Meeting Details</th>
+                    <th className="px-6 py-3.5">Room Slug &amp; Website Link</th>
+                    <th className="px-6 py-3.5">Status &amp; Schedule</th>
+                    <th className="px-6 py-3.5">Room Behavior</th>
+                    <th className="px-6 py-3.5 text-right">Host Controls</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredMeetings.map(m => (
+                    <tr key={m.id} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="px-6 py-4">
+                        <div className="font-semibold text-slate-900 leading-snug">{m.title}</div>
+                        {m.description && (
+                          <p className="text-xs text-slate-500 mt-0.5 line-clamp-1 max-w-xs">{m.description}</p>
+                        )}
+                        <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
+                          <span>Host: {m.hostName}</span>
+                          <span aria-hidden="true">·</span>
+                          <span className="tabular-nums">Max {m.maxParticipants}</span>
+                        </div>
+                      </td>
+
+                      <td className="px-6 py-4">
+                        <div className="text-xs font-mono font-semibold text-slate-800">{m.meetingCode}</div>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyLink(m.meetingCode)}
+                          className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 border border-slate-200 text-xs font-medium transition-colors cursor-pointer whitespace-nowrap"
+                        >
+                          {copiedCode === m.meetingCode ? (
+                            <>
+                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                              <span className="text-emerald-700">Copied Invite Link</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3.5 h-3.5" />
+                              <span>Copy Invite Link</span>
+                            </>
+                          )}
+                        </button>
+                      </td>
+
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold">
+                          <span
+                            className={
+                              m.status === 'Active'
+                                ? 'text-emerald-700'
+                                : m.status === 'Scheduled'
+                                ? 'text-amber-700'
+                                : 'text-slate-500'
+                            }
+                          >
+                            {m.status === 'Active' ? 'Active Live' : m.status === 'Scheduled' ? 'Scheduled' : 'Ended'}
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-500 mt-1 tabular-nums">
+                          {new Date(m.scheduledStart || m.createdAt).toLocaleString([], {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </div>
+                      </td>
+
+                      <td className="px-6 py-4">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600 max-w-xs">
+                          {m.hasPassword && <span className="text-rose-700 font-medium">Password Protected</span>}
+                          {m.waitingRoomEnabled && <span>Lobby Enabled</span>}
+                          {m.startWithAudioMuted && <span>Audio Muted</span>}
+                          {m.startWithVideoMuted && <span>Video Muted</span>}
+                          <span>{m.screenShareEnabled !== false ? 'Screen Share On' : 'Screen Share Off'}</span>
+                          {m.isLocked && <span className="text-amber-700 font-semibold">Locked</span>}
+                        </div>
+                      </td>
+
+                      <td className="px-6 py-4 text-right whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {m.status !== 'Ended' && m.status !== 'Cancelled' && (
+                            <a
+                              href={`/meeting/${m.meetingCode}`}
+                              onClick={(e) => handleJoinAsHost(e, m.meetingCode)}
+                              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+                            >
+                              <Play className="w-3 h-3 fill-white" />
+                              <span>Start / Join as Host</span>
+                            </a>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => handleToggleLock(m)}
+                            className={`p-1.5 rounded-lg border text-xs transition-colors cursor-pointer ${
+                              m.isLocked
+                                ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                            }`}
+                            title={m.isLocked ? 'Unlock room' : 'Lock room'}
+                          >
+                            {m.isLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditModal(m)}
+                            className="p-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-600 hover:text-indigo-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                            title="Edit Room Settings"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleViewHistory(m)}
+                            className="p-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-600 hover:text-blue-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                            title="Attendance & Messages"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+
+                          {m.status !== 'Ended' && m.status !== 'Cancelled' && (
+                            confirmMeetingAction?.id === m.id && confirmMeetingAction.type === 'end' ? (
+                              <div className="inline-flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleEndMeeting(m)}
+                                  className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[11px] font-bold cursor-pointer"
+                                >
+                                  End All
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmMeetingAction(null)}
+                                  className="px-2 py-1 rounded-lg bg-slate-100 text-slate-600 text-[11px] cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmMeetingAction({ id: m.id, type: 'end' })}
+                                className="px-2.5 py-1.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1"
+                                title="End Meeting"
+                              >
+                                <Square className="w-3 h-3 fill-rose-600" />
+                                <span>End</span>
+                              </button>
+                            )
+                          )}
+
+                          {confirmMeetingAction?.id === m.id && confirmMeetingAction.type === 'delete' ? (
+                            <div className="inline-flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteMeeting(m.id)}
+                                className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[11px] font-bold cursor-pointer"
+                              >
+                                Confirm
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmMeetingAction(null)}
+                                className="px-2 py-1 rounded-lg bg-slate-100 text-slate-600 text-[11px] cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmMeetingAction({ id: m.id, type: 'delete' })}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                              title="Delete Meeting"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
 
@@ -890,6 +1225,155 @@ export const AdminMeetings: React.FC = () => {
                 )}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+      {/* Edit Meeting Settings Modal */}
+      {editingMeeting && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 max-h-[92vh] overflow-y-auto space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div>
+                <h3 className="text-lg font-serif font-bold text-slate-900">Edit Meeting Settings</h3>
+                <p className="text-xs text-slate-500 font-mono">
+                  /meeting/{editingMeeting.meetingCode}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingMeeting(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                aria-label="Close edit modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditMeeting} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Meeting Title *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editForm.title}
+                  onChange={e => setEditForm({ ...editForm, title: e.target.value })}
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Scheduled Start
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={editForm.scheduledStart}
+                    onChange={e => setEditForm({ ...editForm, scheduledStart: e.target.value })}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Max Participants
+                  </label>
+                  <input
+                    type="number"
+                    min={2}
+                    max={500}
+                    value={editForm.maxParticipants}
+                    onChange={e => setEditForm({ ...editForm, maxParticipants: Number(e.target.value) || 50 })}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Agenda / Description
+                </label>
+                <textarea
+                  rows={2}
+                  value={editForm.description}
+                  onChange={e => setEditForm({ ...editForm, description: e.target.value })}
+                  className="w-full px-4 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 space-y-3">
+                <ToggleSwitchRow
+                  checked={editForm.enablePassword}
+                  onChange={val => setEditForm({ ...editForm, enablePassword: val })}
+                  label="Room Password / Access PIN"
+                  description="Toggle OFF to remove password, or type a new PIN below to replace it"
+                  icon={<Lock className="w-4 h-4" />}
+                />
+
+                {editForm.enablePassword && (
+                  <input
+                    type="text"
+                    placeholder={
+                      editingMeeting.hasPassword
+                        ? 'Enter new PIN (leave blank to keep existing PIN)...'
+                        : 'Enter room password or numeric PIN...'
+                    }
+                    value={editForm.password}
+                    onChange={e => setEditForm({ ...editForm, password: e.target.value })}
+                    className="w-full px-4 py-2.5 text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  />
+                )}
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 space-y-2.5">
+                <ToggleSwitchRow
+                  checked={editForm.startWithAudioMuted}
+                  onChange={val => setEditForm({ ...editForm, startWithAudioMuted: val })}
+                  label="Start with Audio Muted"
+                  description="Microphones muted initially upon joining"
+                  icon={<MicOff className="w-4 h-4" />}
+                />
+                <ToggleSwitchRow
+                  checked={editForm.startWithVideoMuted}
+                  onChange={val => setEditForm({ ...editForm, startWithVideoMuted: val })}
+                  label="Start with Video Muted"
+                  description="Cameras turned off initially upon joining"
+                  icon={<VideoOff className="w-4 h-4" />}
+                />
+                <ToggleSwitchRow
+                  checked={editForm.waitingRoomEnabled}
+                  onChange={val => setEditForm({ ...editForm, waitingRoomEnabled: val })}
+                  label="Enable Lobby (Waiting Room)"
+                  description="Hold unauthenticated guests until admitted by host"
+                  icon={<Shield className="w-4 h-4" />}
+                />
+                <ToggleSwitchRow
+                  checked={editForm.screenShareEnabled}
+                  onChange={val => setEditForm({ ...editForm, screenShareEnabled: val })}
+                  label="Allow Screen Sharing"
+                  description="Enable desktop sharing inside the room"
+                  icon={<Monitor className="w-4 h-4" />}
+                />
+              </div>
+
+              <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingMeeting(null)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 border border-slate-200 rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmitting ? 'Saving Changes...' : 'Save Room Changes'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

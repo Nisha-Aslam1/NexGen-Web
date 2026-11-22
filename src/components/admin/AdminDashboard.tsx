@@ -28,6 +28,8 @@ import {
   Compass
 } from 'lucide-react';
 import { DashboardStats, VolunteerApplication, ActivityLog } from '../../types.ts';
+import { VolunteerApprovalModal } from './VolunteerApprovalModal.tsx';
+import { ActivityLogDetailModal } from './ActivityLogDetailModal.tsx';
 import {
   ResponsiveContainer,
   BarChart,
@@ -50,6 +52,8 @@ export const AdminDashboard: React.FC = () => {
   const [realtimeInsights, setRealtimeInsights] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [approvalModalApp, setApprovalModalApp] = useState<VolunteerApplication | null>(null);
+  const [selectedActivityLog, setSelectedActivityLog] = useState<ActivityLog | null>(null);
 
   const fetchDashboardData = async (silent = false) => {
     if (!silent) setLoading(true);
@@ -92,22 +96,9 @@ export const AdminDashboard: React.FC = () => {
     addToast('Dashboard data updated in realtime.', 'success');
   };
 
-  const handleQuickApprove = async (e: React.MouseEvent, appId: string, appName: string) => {
+  const handleOpenApprovalModal = (e: React.MouseEvent, app: VolunteerApplication) => {
     e.stopPropagation();
-    try {
-      const res = await authFetch(`/api/applications/${appId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'Approved' })
-      });
-      if (res.ok) {
-        addToast(`Application for ${appName} approved!`, 'success');
-        setRecentApps(prev => prev.map(a => a.id === appId ? { ...a, status: 'Approved' } : a));
-        fetchDashboardData(true);
-      }
-    } catch {
-      addToast('Error approving application', 'error');
-    }
+    setApprovalModalApp(app);
   };
 
   const handleExportCSV = () => {
@@ -511,8 +502,9 @@ export const AdminDashboard: React.FC = () => {
                       <td className="px-6 py-4 text-right">
                         {app.status !== 'Approved' ? (
                           <button
-                            onClick={(e) => handleQuickApprove(e, app.id, app.fullName)}
-                            title="Quickly approve application"
+                            type="button"
+                            onClick={(e) => handleOpenApprovalModal(e, app)}
+                            title="Choose approval & email options"
                             className="px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors cursor-pointer"
                           >
                             Approve
@@ -573,21 +565,37 @@ export const AdminDashboard: React.FC = () => {
                   <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold mb-1">
                     Activity Feed
                   </p>
-                  <ul className="space-y-3 mt-3">
+                  <ul className="space-y-2 mt-3">
                     {logs.length === 0 ? (
                       <li className="text-xs text-slate-400">No activity logged yet.</li>
                     ) : (
-                      logs.slice(0, 3).map((log, idx) => (
-                        <li key={log.id} className="flex gap-3 text-xs">
+                      logs.slice(0, 4).map((log, idx) => (
+                        <li
+                          key={log.id}
+                          onClick={() => setSelectedActivityLog(log)}
+                          className="flex gap-2.5 text-xs p-2 -mx-2 rounded-lg hover:bg-white transition-colors cursor-pointer group"
+                          title="Click to read full activity details"
+                        >
                           <div
-                            className={`w-1.5 h-1.5 rounded-full mt-1 flex-shrink-0 ${
+                            className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${
                               idx % 2 === 0 ? 'bg-blue-600' : 'bg-amber-500'
                             }`}
                           ></div>
-                          <p className="text-slate-600 leading-snug">
-                            <strong className="text-slate-800">{log.userName}</strong>: {log.action.replace(/_/g, ' ')}
-                            {log.target && <span className="text-slate-400 block text-[11px]">{log.target}</span>}
-                          </p>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-slate-600 leading-snug">
+                              <strong className="text-slate-800">{log.userName}</strong>: {log.action.replace(/_/g, ' ')}
+                              {log.entityType && (
+                                <span className="text-slate-400 font-mono text-[10px] ml-1.5">
+                                  [{log.entityType}]
+                                </span>
+                              )}
+                            </p>
+                            {log.details && (
+                              <p className="text-[11px] text-slate-500 line-clamp-1 mt-0.5 group-hover:text-indigo-700">
+                                {log.details}
+                              </p>
+                            )}
+                          </div>
                         </li>
                       ))
                     )}
@@ -601,7 +609,7 @@ export const AdminDashboard: React.FC = () => {
             onClick={() => setAdminTab('activity')}
             className="w-full py-3 mt-6 bg-slate-900 text-white text-xs font-bold rounded-xl hover:bg-slate-800 transition-colors cursor-pointer"
           >
-            Download Activity Log
+            View All Activity Logs
           </button>
         </div>
       </div>
@@ -684,6 +692,21 @@ export const AdminDashboard: React.FC = () => {
           </div>
         </div>
       </div>
+      {/* Volunteer Approval Decision Modal */}
+      <VolunteerApprovalModal
+        application={approvalModalApp}
+        onClose={() => setApprovalModalApp(null)}
+        onCompleted={(updated) => {
+          setRecentApps(prev => prev.map(a => (a.id === updated.id ? updated : a)));
+          fetchDashboardData(true);
+        }}
+      />
+
+      {/* Full Untruncated Activity Log Modal */}
+      <ActivityLogDetailModal
+        log={selectedActivityLog}
+        onClose={() => setSelectedActivityLog(null)}
+      />
     </div>
   );
 };

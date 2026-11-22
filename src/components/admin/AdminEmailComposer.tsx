@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useApp } from '../../context/AppContext.tsx';
 import { authFetch } from '../../lib/api.ts';
-import { EmailImage, EmailLog } from '../../types.ts';
+import { EmailImage, EmailButton, EmailLog } from '../../types.ts';
 import {
   Send,
   Mail,
@@ -26,7 +26,21 @@ import {
   Upload,
   Link as LinkIcon,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  Bold,
+  Italic,
+  Underline,
+  Strikethrough,
+  List,
+  ListOrdered,
+  Quote,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  RemoveFormatting,
+  Lock,
+  ExternalLink,
+  Plus
 } from 'lucide-react';
 
 interface EmailPreset {
@@ -85,6 +99,40 @@ function isValidEmailImageInput(url: string): boolean {
     return false;
   }
 }
+
+function isValidEmailButtonUrl(url: string): boolean {
+  const clean = url.trim();
+  if (!clean) return false;
+  if (clean.startsWith('/')) return true;
+  try {
+    const parsed = new URL(clean);
+    return (
+      parsed.protocol === 'https:' ||
+      parsed.protocol === 'http:' ||
+      parsed.protocol === 'mailto:' ||
+      parsed.protocol === 'tel:'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function resolveButtonPreviewUrl(url: string, siteUrl?: string): string {
+  const clean = url.trim();
+  if (clean.startsWith('/')) {
+    const base = (siteUrl || (typeof window !== 'undefined' ? window.location.origin : 'https://nexgencouncil.bond')).replace(/\/+$/, '');
+    return `${base}${clean}`;
+  }
+  return clean;
+}
+
+const EMAIL_BUTTON_PRESETS: { label: string; url: string; style: 'amber' | 'primary' | 'outline' }[] = [
+  { label: 'Visit NexGen Website', url: 'https://nexgencouncil.bond', style: 'amber' },
+  { label: 'Apply as Volunteer', url: '/volunteer', style: 'amber' },
+  { label: 'View Programs', url: '/programs', style: 'primary' },
+  { label: 'Track Application', url: '/track', style: 'outline' },
+  { label: 'Contact Secretariat', url: '/contact', style: 'outline' }
+];
 
 async function parseJsonResponse<T = any>(res: Response): Promise<T> {
   const rawText = await res.text();
@@ -200,6 +248,201 @@ async function compressImageToDataUrl(
   };
 }
 
+function parseEmailAddresses(raw: string): { unique: string[]; valid: string[]; invalid: string[] } {
+  const items = raw
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+
+  const unique: string[] = Array.from<string>(new Set(items));
+  const valid = unique.filter(e => EMAIL_REGEX.test(e));
+  const invalid = unique.filter(e => !EMAIL_REGEX.test(e));
+
+  return { unique, valid, invalid };
+}
+
+function escapeHtmlClient(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function plainTextToEditorHtml(plain: string): string {
+  const trimmed = plain.trim();
+  if (!trimmed) return '';
+  return trimmed
+    .split(/\n{2,}/)
+    .map(block => `<p>${escapeHtmlClient(block).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+}
+
+function extractPlainTextClient(html: string): string {
+  if (!html) return '';
+  const container = document.createElement('div');
+  container.innerHTML = html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|h1|h2|h3|h4|blockquote|li)>/gi, '\n');
+  return (container.textContent || container.innerText || '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+const SAFE_CLIENT_TAGS = new Set([
+  'P',
+  'BR',
+  'DIV',
+  'SPAN',
+  'H1',
+  'H2',
+  'H3',
+  'H4',
+  'STRONG',
+  'B',
+  'EM',
+  'I',
+  'U',
+  'S',
+  'STRIKE',
+  'DEL',
+  'UL',
+  'OL',
+  'LI',
+  'BLOCKQUOTE',
+  'A',
+  'HR',
+  'FONT'
+]);
+
+const SAFE_CLIENT_CSS = new Set([
+  'color',
+  'background-color',
+  'font-family',
+  'font-size',
+  'font-weight',
+  'font-style',
+  'text-decoration',
+  'text-align',
+  'line-height'
+]);
+
+const CLIENT_FONT_SIZE_MAP: Record<string, string> = {
+  '1': '11px',
+  '2': '13px',
+  '3': '15px',
+  '4': '18px',
+  '5': '22px',
+  '6': '26px',
+  '7': '32px'
+};
+
+function sanitizeClientEmailHtml(rawHtml: string): string {
+  if (!rawHtml) return '';
+  const template = document.createElement('template');
+  template.innerHTML = rawHtml;
+
+  const walk = (node: Node): Node | null => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return document.createTextNode(node.textContent || '');
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      return null;
+    }
+
+    const el = node as HTMLElement;
+    const tag = el.tagName.toUpperCase();
+
+    if (['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'SVG', 'FORM'].includes(tag)) {
+      return null;
+    }
+
+    if (!SAFE_CLIENT_TAGS.has(tag)) {
+      const frag = document.createDocumentFragment();
+      el.childNodes.forEach(child => {
+        const cleanChild = walk(child);
+        if (cleanChild) frag.appendChild(cleanChild);
+      });
+      return frag;
+    }
+
+    const cleanEl = document.createElement(tag.toLowerCase());
+
+    if (tag === 'A') {
+      const href = (el.getAttribute('href') || '').trim();
+      if (href && (href.startsWith('https://') || href.startsWith('http://') || href.startsWith('mailto:') || href.startsWith('/'))) {
+        cleanEl.setAttribute('href', href);
+        cleanEl.setAttribute('target', '_blank');
+        cleanEl.setAttribute('rel', 'noopener noreferrer');
+      }
+    }
+
+    if (tag === 'FONT') {
+      const c = el.getAttribute('color');
+      const f = el.getAttribute('face');
+      const s = el.getAttribute('size');
+      if (c && /^#[0-9a-f]{3,8}$|^[a-z]{3,20}$|^rgb\([\d\s,]+\)$/i.test(c)) {
+        cleanEl.style.color = c;
+      }
+      if (f) {
+        cleanEl.style.fontFamily = f.replace(/[^a-zA-Z0-9,\s\-"]/g, '');
+      }
+      if (s && CLIENT_FONT_SIZE_MAP[s]) {
+        cleanEl.style.fontSize = CLIENT_FONT_SIZE_MAP[s];
+      }
+    }
+
+    const rawStyle = el.getAttribute('style') || '';
+    if (rawStyle) {
+      rawStyle.split(';').forEach(decl => {
+        const idx = decl.indexOf(':');
+        if (idx === -1) return;
+        const prop = decl.slice(0, idx).trim().toLowerCase();
+        const val = decl.slice(idx + 1).trim();
+        if (!SAFE_CLIENT_CSS.has(prop) || !val) return;
+        const lv = val.toLowerCase();
+        if (lv.includes('javascript:') || lv.includes('expression(') || lv.includes('url(')) return;
+        cleanEl.style.setProperty(prop, val);
+      });
+    }
+
+    const align = (el.getAttribute('align') || '').toLowerCase();
+    if (['left', 'center', 'right', 'justify'].includes(align)) {
+      cleanEl.style.textAlign = align;
+    }
+
+    el.childNodes.forEach(child => {
+      const cleanChild = walk(child);
+      if (cleanChild) cleanEl.appendChild(cleanChild);
+    });
+
+    return cleanEl;
+  };
+
+  const out = document.createElement('div');
+  template.content.childNodes.forEach(child => {
+    const cleanChild = walk(child);
+    if (cleanChild) out.appendChild(cleanChild);
+  });
+  return out.innerHTML;
+}
+
+const RICH_CONTENT_LIGHT_CLASSES =
+  'min-h-[220px] px-4 py-3.5 text-sm text-slate-900 leading-relaxed focus:outline-none [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:text-slate-950 [&_h1]:mb-3 [&_h2]:text-xl [&_h2]:font-bold [&_h2]:text-slate-900 [&_h2]:mt-3 [&_h2]:mb-2 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-indigo-950 [&_h3]:mt-2.5 [&_h3]:mb-1.5 [&_p]:mb-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:mb-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:mb-3 [&_li]:mb-1 [&_blockquote]:border-l-4 [&_blockquote]:border-amber-500 [&_blockquote]:bg-amber-50/70 [&_blockquote]:px-3.5 [&_blockquote]:py-2 [&_blockquote]:italic [&_blockquote]:text-slate-800 [&_blockquote]:my-3 [&_a]:text-indigo-700 [&_a]:underline [&_hr]:border-slate-200 [&_hr]:my-4';
+
+const RICH_CONTENT_DARK_CLASSES =
+  'text-sm text-slate-200 leading-relaxed [&_h1]:text-xl [&_h1]:font-bold [&_h1]:text-white [&_h1]:mb-3 [&_h2]:text-lg [&_h2]:font-bold [&_h2]:text-white [&_h2]:mt-3 [&_h2]:mb-2 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-amber-400 [&_h3]:mt-2.5 [&_h3]:mb-1.5 [&_p]:mb-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:mb-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:mb-3 [&_li]:mb-1 [&_blockquote]:border-l-4 [&_blockquote]:border-amber-500 [&_blockquote]:bg-slate-800/80 [&_blockquote]:px-3.5 [&_blockquote]:py-2 [&_blockquote]:italic [&_blockquote]:text-slate-100 [&_blockquote]:my-3 [&_a]:text-amber-400 [&_a]:underline [&_hr]:border-slate-700 [&_hr]:my-4';
+
+const EMAIL_TEXT_COLORS = [
+  { label: 'Amber Gold', hex: '#d97706' },
+  { label: 'Emerald', hex: '#059669' },
+  { label: 'Sky Blue', hex: '#0284c7' },
+  { label: 'Rose Crimson', hex: '#e11d48' },
+  { label: 'Violet', hex: '#7c3aed' },
+  { label: 'Slate Gray', hex: '#64748b' }
+];
+
 export const AdminEmailComposer: React.FC = () => {
   const { addToast, settings, refreshData, currentUser } = useApp();
 
@@ -221,14 +464,34 @@ export const AdminEmailComposer: React.FC = () => {
   // Composer State
   const [selectedPreset, setSelectedPreset] = useState<string>('custom');
   const [toInput, setToInput] = useState<string>('');
+  const [ccInput, setCcInput] = useState<string>('');
+  const [bccInput, setBccInput] = useState<string>('');
   const [replyTo, setReplyTo] = useState<string>(settings?.emailReplyTo || settings?.contactEmail || '');
   const [subject, setSubject] = useState<string>('');
   const [message, setMessage] = useState<string>('');
+  const [htmlBody, setHtmlBody] = useState<string>('');
+  const htmlBodyRef = useRef<string>('');
+  const editorRef = useRef<HTMLDivElement>(null);
+  const savedSelectionRef = useRef<Range | null>(null);
+
+  // Rich Editor Popovers
+  const [showLinkPopover, setShowLinkPopover] = useState<boolean>(false);
+  const [linkUrlInput, setLinkUrlInput] = useState<string>('https://');
+  const [linkTextInput, setLinkTextInput] = useState<string>('');
+
   const [emailImages, setEmailImages] = useState<EmailImage[]>([]);
   const [newImageUrlInput, setNewImageUrlInput] = useState<string>('');
   const [newImagePlacement, setNewImagePlacement] = useState<'top' | 'bottom'>('bottom');
   const [uploadingBodyImage, setUploadingBodyImage] = useState<boolean>(false);
   const bodyImageFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Email CTA Buttons State
+  const [emailButtons, setEmailButtons] = useState<EmailButton[]>([]);
+  const [newButtonLabel, setNewButtonLabel] = useState<string>('');
+  const [newButtonUrl, setNewButtonUrl] = useState<string>('');
+  const [newButtonStyle, setNewButtonStyle] = useState<'amber' | 'primary' | 'outline'>('amber');
+  const [newButtonAlign, setNewButtonAlign] = useState<'left' | 'center' | 'right'>('center');
+
   const [showPreview, setShowPreview] = useState<boolean>(false);
 
   const [isSending, setIsSending] = useState<boolean>(false);
@@ -245,6 +508,7 @@ export const AdminEmailComposer: React.FC = () => {
   const [historySearch, setHistorySearch] = useState<string>('');
   const [historyStatusFilter, setHistoryStatusFilter] = useState<'All' | 'Sent' | 'Failed'>('All');
   const [selectedLog, setSelectedLog] = useState<EmailLog | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const isAdminUser =
     currentUser?.role === 'SUPER_ADMIN' ||
@@ -300,19 +564,97 @@ export const AdminEmailComposer: React.FC = () => {
     loadHistory();
   }, [loadSenderSettings, loadHistory]);
 
-  // Parse comma-separated recipients live
-  const parsedRecipients = useMemo(() => {
-    const items = toInput
-      .split(',')
-      .map(s => s.trim())
-      .filter(Boolean);
+  // Restore formatted HTML into the contentEditable element whenever editor mounts
+  useEffect(() => {
+    if (activeView === 'compose' && !showPreview && editorRef.current) {
+      if (editorRef.current.innerHTML !== htmlBodyRef.current) {
+        editorRef.current.innerHTML = htmlBodyRef.current;
+      }
+    }
+  }, [activeView, showPreview]);
 
-    const unique: string[] = Array.from<string>(new Set(items));
-    const valid = unique.filter(e => EMAIL_REGEX.test(e));
-    const invalid = unique.filter(e => !EMAIL_REGEX.test(e));
+  const setEditorHtmlProgrammatically = useCallback((nextHtml: string, nextPlain?: string) => {
+    const cleanHtml = sanitizeClientEmailHtml(nextHtml);
+    htmlBodyRef.current = cleanHtml;
+    setHtmlBody(cleanHtml);
+    const derivedPlain = nextPlain !== undefined ? nextPlain : extractPlainTextClient(cleanHtml);
+    setMessage(derivedPlain);
+    if (editorRef.current) {
+      editorRef.current.innerHTML = cleanHtml;
+    }
+  }, []);
 
-    return { unique, valid, invalid };
-  }, [toInput]);
+  const syncEditorFromDom = useCallback(() => {
+    if (!editorRef.current) return;
+    const raw = editorRef.current.innerHTML;
+    const plain = extractPlainTextClient(raw);
+    const cleanHtml = plain ? sanitizeClientEmailHtml(raw) : '';
+    htmlBodyRef.current = cleanHtml;
+    setHtmlBody(cleanHtml);
+    setMessage(plain);
+  }, []);
+
+  const execEditorCommand = (command: string, value?: string) => {
+    if (isSending || !editorRef.current) return;
+    editorRef.current.focus();
+    document.execCommand(command, false, value);
+    syncEditorFromDom();
+  };
+
+  const handleApplyBlockFormat = (tag: string) => {
+    if (isSending || !editorRef.current) return;
+    editorRef.current.focus();
+    document.execCommand('formatBlock', false, tag);
+    syncEditorFromDom();
+  };
+
+  const handleOpenLinkPopover = () => {
+    if (isSending || !editorRef.current) return;
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0 && editorRef.current.contains(selection.anchorNode)) {
+      savedSelectionRef.current = selection.getRangeAt(0).cloneRange();
+      setLinkTextInput(selection.toString());
+    } else {
+      savedSelectionRef.current = null;
+      setLinkTextInput('');
+    }
+    setLinkUrlInput('https://');
+    setShowLinkPopover(prev => !prev);
+  };
+
+  const handleInsertLink = () => {
+    const rawUrl = linkUrlInput.trim();
+    if (!rawUrl || (!rawUrl.startsWith('https://') && !rawUrl.startsWith('http://') && !rawUrl.startsWith('mailto:'))) {
+      addToast('Enter a valid https://, http://, or mailto: link URL.', 'error');
+      return;
+    }
+    if (!editorRef.current) return;
+    editorRef.current.focus();
+
+    const selection = window.getSelection();
+    if (savedSelectionRef.current && selection) {
+      selection.removeAllRanges();
+      selection.addRange(savedSelectionRef.current);
+    }
+
+    if (selection && !selection.isCollapsed) {
+      document.execCommand('createLink', false, rawUrl);
+    } else {
+      const label = linkTextInput.trim() || rawUrl;
+      const anchor = `<a href="${escapeHtmlClient(rawUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtmlClient(label)}</a>`;
+      document.execCommand('insertHTML', false, anchor);
+    }
+
+    savedSelectionRef.current = null;
+    setShowLinkPopover(false);
+    syncEditorFromDom();
+  };
+
+  // Parse comma-separated To, CC, and BCC recipients live
+  const parsedTo = useMemo(() => parseEmailAddresses(toInput), [toInput]);
+  const parsedCc = useMemo(() => parseEmailAddresses(ccInput), [ccInput]);
+  const parsedBcc = useMemo(() => parseEmailAddresses(bccInput), [bccInput]);
+  const totalValidRecipients = parsedTo.valid.length + parsedCc.valid.length + parsedBcc.valid.length;
 
   const filteredHistory = useMemo(() => {
     return historyLogs.filter(log => {
@@ -324,6 +666,8 @@ export const AdminEmailComposer: React.FC = () => {
         log.fromName.toLowerCase().includes(q) ||
         log.fromEmail.toLowerCase().includes(q) ||
         log.to.some(r => r.toLowerCase().includes(q)) ||
+        (Array.isArray(log.cc) && log.cc.some(r => r.toLowerCase().includes(q))) ||
+        (Array.isArray(log.bcc) && log.bcc.some(r => r.toLowerCase().includes(q))) ||
         (log.resendId && log.resendId.toLowerCase().includes(q));
       return matchesStatus && matchesQuery;
     });
@@ -454,6 +798,117 @@ export const AdminEmailComposer: React.FC = () => {
     setEmailImages(prev => prev.filter(img => img.id !== id));
   };
 
+  const handleAddButton = () => {
+    const cleanLabel = newButtonLabel.trim();
+    const cleanUrl = newButtonUrl.trim();
+    if (!cleanLabel) {
+      addToast('Enter button text (e.g. Apply Now or Visit Website).', 'error');
+      return;
+    }
+    if (!isValidEmailButtonUrl(cleanUrl)) {
+      addToast('Enter a valid https://, http://, mailto:, tel:, or /path link URL.', 'error');
+      return;
+    }
+    if (emailButtons.length >= 5) {
+      addToast('Maximum 5 CTA buttons allowed per email.', 'error');
+      return;
+    }
+
+    setEmailButtons(prev => [
+      ...prev,
+      {
+        id: `ebtn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        label: cleanLabel.slice(0, 60),
+        url: cleanUrl,
+        style: newButtonStyle,
+        align: newButtonAlign
+      }
+    ]);
+    setNewButtonLabel('');
+    setNewButtonUrl('');
+  };
+
+  const handleAddPresetButton = (preset: {
+    label: string;
+    url: string;
+    style: 'amber' | 'primary' | 'outline';
+  }) => {
+    if (emailButtons.length >= 5) {
+      addToast('Maximum 5 CTA buttons allowed per email.', 'error');
+      return;
+    }
+    setEmailButtons(prev => [
+      ...prev,
+      {
+        id: `ebtn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        label: preset.label,
+        url: preset.url,
+        style: preset.style,
+        align: newButtonAlign
+      }
+    ]);
+    addToast(`Added "${preset.label}" button.`, 'success');
+  };
+
+  const handleUpdateButton = (id: string, patch: Partial<EmailButton>) => {
+    setEmailButtons(prev => prev.map(btn => (btn.id === id ? { ...btn, ...patch } : btn)));
+  };
+
+  const handleMoveButton = (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= emailButtons.length) return;
+    setEmailButtons(prev => {
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(target, 0, moved);
+      return next;
+    });
+  };
+
+  const handleRemoveButton = (id: string) => {
+    setEmailButtons(prev => prev.filter(btn => btn.id !== id));
+  };
+
+  const renderPreviewButtons = (buttonsList: EmailButton[]) => {
+    const validButtons = buttonsList.filter(
+      b => b.label.trim() && isValidEmailButtonUrl(b.url)
+    );
+    if (validButtons.length === 0) return null;
+
+    return (
+      <div className="space-y-3 pt-2">
+        {validButtons.map(btn => {
+          const alignClass =
+            btn.align === 'left'
+              ? 'justify-start'
+              : btn.align === 'right'
+              ? 'justify-end'
+              : 'justify-center';
+          const styleClass =
+            btn.style === 'primary'
+              ? 'bg-indigo-700 hover:bg-indigo-600 text-white border border-indigo-500'
+              : btn.style === 'outline'
+              ? 'bg-transparent hover:bg-amber-400/10 text-amber-400 border-2 border-amber-400'
+              : 'bg-amber-500 hover:bg-amber-400 text-slate-950 border border-amber-400';
+
+          return (
+            <div key={btn.id} className={`flex ${alignClass}`}>
+              <a
+                href={resolveButtonPreviewUrl(btn.url, settings?.siteUrl)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`inline-flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold shadow-sm transition-colors ${styleClass}`}
+              >
+                <span>{btn.label}</span>
+                <ExternalLink className="w-3.5 h-3.5 opacity-80" />
+              </a>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const handleSaveSenderSettings = async () => {
     const cleanName = senderName.trim();
     const cleanEmail = senderEmail.trim().toLowerCase();
@@ -513,7 +968,7 @@ export const AdminEmailComposer: React.FC = () => {
 
     if (preset.id !== 'custom') {
       setSubject(preset.subject);
-      setMessage(preset.message);
+      setEditorHtmlProgrammatically(plainTextToEditorHtml(preset.message), preset.message);
     }
   };
 
@@ -539,16 +994,37 @@ export const AdminEmailComposer: React.FC = () => {
       return;
     }
 
-    if (parsedRecipients.valid.length === 0) {
-      const errMsg = 'Please enter at least one valid recipient email address.';
+    if (parsedTo.invalid.length > 0) {
+      const errMsg = `Invalid To email format detected: ${parsedTo.invalid.join(', ')}`;
+      setStatusBanner({ type: 'error', title: 'Invalid To Recipient', detail: errMsg });
+      addToast(errMsg, 'error');
+      return;
+    }
+
+    if (parsedCc.invalid.length > 0) {
+      const errMsg = `Invalid CC email format detected: ${parsedCc.invalid.join(', ')}`;
+      setStatusBanner({ type: 'error', title: 'Invalid CC Recipient', detail: errMsg });
+      addToast(errMsg, 'error');
+      return;
+    }
+
+    if (parsedBcc.invalid.length > 0) {
+      const errMsg = `Invalid BCC email format detected: ${parsedBcc.invalid.join(', ')}`;
+      setStatusBanner({ type: 'error', title: 'Invalid BCC Recipient', detail: errMsg });
+      addToast(errMsg, 'error');
+      return;
+    }
+
+    if (totalValidRecipients === 0) {
+      const errMsg = 'Please enter at least one valid email address in To, CC, or BCC.';
       setStatusBanner({ type: 'error', title: 'Validation Error', detail: errMsg });
       addToast(errMsg, 'error');
       return;
     }
 
-    if (parsedRecipients.invalid.length > 0) {
-      const errMsg = `Invalid email format detected: ${parsedRecipients.invalid.join(', ')}`;
-      setStatusBanner({ type: 'error', title: 'Invalid Recipient Format', detail: errMsg });
+    if (totalValidRecipients > 50) {
+      const errMsg = `Total recipients (${totalValidRecipients}) exceed the 50-recipient limit per send.`;
+      setStatusBanner({ type: 'error', title: 'Recipient Limit Exceeded', detail: errMsg });
       addToast(errMsg, 'error');
       return;
     }
@@ -560,8 +1036,22 @@ export const AdminEmailComposer: React.FC = () => {
       return;
     }
 
-    if (!message.trim() && emailImages.length === 0) {
-      const errMsg = 'Please enter a message body or attach at least one image before sending.';
+    const latestRawHtml = editorRef.current ? editorRef.current.innerHTML : htmlBodyRef.current;
+    const finalSanitizedHtml = sanitizeClientEmailHtml(latestRawHtml);
+    const finalPlainMessage = extractPlainTextClient(finalSanitizedHtml) || message.trim();
+
+    const invalidButtons = emailButtons.filter(
+      b => !b.label.trim() || !isValidEmailButtonUrl(b.url)
+    );
+    if (invalidButtons.length > 0) {
+      const errMsg = 'Each CTA button must have both a label and a valid link URL (https://, http://, mailto:, tel:, or /path).';
+      setStatusBanner({ type: 'error', title: 'Invalid Button Link', detail: errMsg });
+      addToast(errMsg, 'error');
+      return;
+    }
+
+    if (!finalPlainMessage && !finalSanitizedHtml && emailImages.length === 0 && emailButtons.length === 0) {
+      const errMsg = 'Please enter a message body, button, or image before sending.';
       setStatusBanner({ type: 'error', title: 'Missing Content', detail: errMsg });
       addToast(errMsg, 'error');
       return;
@@ -573,14 +1063,18 @@ export const AdminEmailComposer: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          to: parsedRecipients.valid,
+          to: parsedTo.valid,
+          cc: parsedCc.valid,
+          bcc: parsedBcc.valid,
           subject: subject.trim(),
-          message: message.trim(),
+          message: finalPlainMessage,
+          html: finalSanitizedHtml || undefined,
           replyTo: replyTo.trim() || undefined,
           fromName: activeFromName,
           fromEmail: activeFromEmail,
           logoUrl: activeLogoUrl,
-          images: emailImages
+          images: emailImages,
+          buttons: emailButtons
         })
       });
 
@@ -597,12 +1091,17 @@ export const AdminEmailComposer: React.FC = () => {
       }
 
       const msgId = payload.data?.id;
-      const recipientCount = payload.data?.recipients?.length || parsedRecipients.valid.length;
+      const recipientCount =
+        (payload.data?.recipients?.length || 0) +
+        (payload.data?.cc?.length || 0) +
+        (payload.data?.bcc?.length || 0) || totalValidRecipients;
 
       setStatusBanner({
         type: 'success',
         title: `Email Sent Successfully to ${recipientCount} Recipient${recipientCount > 1 ? 's' : ''}`,
-        detail: `Dispatched from ${activeFromName} <${activeFromEmail}>.`,
+        detail: `Dispatched from ${activeFromName} <${activeFromEmail}>${
+          parsedBcc.valid.length > 0 ? ` • ${parsedBcc.valid.length} BCC` : ''
+        }${parsedCc.valid.length > 0 ? ` • ${parsedCc.valid.length} CC` : ''}.`,
         messageId: msgId
       });
 
@@ -610,9 +1109,14 @@ export const AdminEmailComposer: React.FC = () => {
 
       // Reset composer fields
       setToInput('');
+      setCcInput('');
+      setBccInput('');
       setSubject('');
-      setMessage('');
+      setEditorHtmlProgrammatically('', '');
       setEmailImages([]);
+      setEmailButtons([]);
+      setNewButtonLabel('');
+      setNewButtonUrl('');
       setSelectedPreset('custom');
       setShowPreview(false);
     } catch (err: any) {
@@ -634,18 +1138,25 @@ export const AdminEmailComposer: React.FC = () => {
     setUseCustomDomainEmail(!(log.fromEmail || '').toLowerCase().endsWith(`@${VERIFIED_DOMAIN}`));
     if (log.logoUrl !== undefined) setLogoUrl(log.logoUrl || '');
     setEmailImages(Array.isArray(log.images) ? log.images : []);
-    setToInput(log.to.join(', '));
+    setEmailButtons(Array.isArray(log.buttons) ? log.buttons : []);
+    setToInput((log.to || []).join(', '));
+    setCcInput(Array.isArray(log.cc) ? log.cc.join(', ') : '');
+    setBccInput(Array.isArray(log.bcc) ? log.bcc.join(', ') : '');
     setSubject(log.subject);
-    setMessage(log.message === '[HTML Content]' ? '' : log.message);
+
+    const restoredPlain = log.message === '[HTML Content]' || log.message === '[Formatted Content]' ? '' : log.message;
+    const restoredHtml = log.html ? log.html : plainTextToEditorHtml(restoredPlain);
+    setEditorHtmlProgrammatically(restoredHtml, restoredPlain);
+
     if (log.replyTo) setReplyTo(log.replyTo);
     setSelectedLog(null);
+    setConfirmDeleteId(null);
     setActiveView('compose');
     setShowPreview(false);
-    addToast('Loaded email details and images into composer.', 'info');
+    addToast('Loaded email details, buttons, recipients, and formatting into composer.', 'info');
   };
 
   const handleDeleteLog = async (id: string) => {
-    if (!confirm('Remove this email entry from sent history?')) return;
     try {
       const res = await authFetch(`/api/email/history/${id}`, { method: 'DELETE' });
       const data = await parseJsonResponse<any>(res);
@@ -654,6 +1165,7 @@ export const AdminEmailComposer: React.FC = () => {
       }
       setHistoryLogs(prev => prev.filter(l => l.id !== id));
       if (selectedLog?.id === id) setSelectedLog(null);
+      setConfirmDeleteId(null);
       addToast('Email history entry deleted.', 'info');
     } catch (err: any) {
       addToast(err?.message || 'Error deleting record.', 'error');
@@ -772,6 +1284,29 @@ export const AdminEmailComposer: React.FC = () => {
                   </span>
                 </div>
 
+                {(parsedTo.valid.length > 0 || parsedCc.valid.length > 0 || parsedBcc.valid.length > 0) && (
+                  <div className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-2.5 text-[11px] space-y-1">
+                    {parsedTo.valid.length > 0 && (
+                      <div>
+                        <strong className="text-slate-600">To:</strong>{' '}
+                        <span className="font-mono text-slate-800">{parsedTo.valid.join(', ')}</span>
+                      </div>
+                    )}
+                    {parsedCc.valid.length > 0 && (
+                      <div>
+                        <strong className="text-slate-600">CC:</strong>{' '}
+                        <span className="font-mono text-slate-800">{parsedCc.valid.join(', ')}</span>
+                      </div>
+                    )}
+                    {parsedBcc.valid.length > 0 && (
+                      <div>
+                        <strong className="text-slate-600">BCC (Private):</strong>{' '}
+                        <span className="font-mono text-slate-800">{parsedBcc.valid.join(', ')}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="rounded-2xl bg-slate-950 p-6 sm:p-8 border border-slate-800 text-slate-100 space-y-5">
                   <div className="border-b border-slate-800 pb-5 flex items-center gap-4">
                     {logoUrl.trim() && (
@@ -779,6 +1314,7 @@ export const AdminEmailComposer: React.FC = () => {
                         <img
                           src={logoUrl.trim()}
                           alt={`${effectiveDisplayName} Logo`}
+                          referrerPolicy="no-referrer"
                           className="w-full h-full object-contain"
                         />
                       </div>
@@ -809,6 +1345,7 @@ export const AdminEmailComposer: React.FC = () => {
                             <img
                               src={img.url}
                               alt={img.alt || img.caption || 'Email banner'}
+                              referrerPolicy="no-referrer"
                               className="w-full max-h-72 object-contain mx-auto bg-slate-950"
                             />
                             {img.caption && (
@@ -821,9 +1358,19 @@ export const AdminEmailComposer: React.FC = () => {
                     </div>
                   )}
 
-                  <div className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap min-h-[120px]">
-                    {message.trim() || 'Your formatted email message body will render here inside the branded email template.'}
-                  </div>
+                  {htmlBody.trim() ? (
+                    <div
+                      className={`min-h-[120px] ${RICH_CONTENT_DARK_CLASSES}`}
+                      dangerouslySetInnerHTML={{ __html: sanitizeClientEmailHtml(htmlBody) }}
+                    />
+                  ) : (
+                    <div className="text-sm text-slate-400 leading-relaxed min-h-[120px]">
+                      Your formatted email message body will render here inside the branded email template.
+                    </div>
+                  )}
+
+                  {/* CTA Action Buttons Preview */}
+                  {renderPreviewButtons(emailButtons)}
 
                   {/* Bottom Inline Images Preview */}
                   {emailImages.filter(img => (img.placement || 'bottom') === 'bottom').length > 0 && (
@@ -835,6 +1382,7 @@ export const AdminEmailComposer: React.FC = () => {
                             <img
                               src={img.url}
                               alt={img.alt || img.caption || 'Email visual'}
+                              referrerPolicy="no-referrer"
                               className="w-full max-h-72 object-contain mx-auto bg-slate-950"
                             />
                             {img.caption && (
@@ -893,45 +1441,134 @@ export const AdminEmailComposer: React.FC = () => {
                   </div>
                 </div>
 
-                {/* To Recipients */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label htmlFor="email-to" className="font-semibold text-slate-700 flex items-center gap-1.5">
-                      <Users className="w-3.5 h-3.5 text-indigo-900" />
-                      <span>To (Recipient Email) *</span>
-                    </label>
-                    {parsedRecipients.unique.length > 0 && (
-                      <span
-                        className={`text-[11px] font-semibold ${
-                          parsedRecipients.invalid.length > 0 ? 'text-rose-600' : 'text-emerald-700'
-                        }`}
-                      >
-                        {parsedRecipients.valid.length} valid
-                        {parsedRecipients.invalid.length > 0 ? ` • ${parsedRecipients.invalid.length} invalid` : ''}
-                      </span>
+                {/* To / CC / BCC Recipients */}
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                      <label htmlFor="email-to" className="font-semibold text-slate-700 flex items-center gap-1.5">
+                        <Users className="w-3.5 h-3.5 text-indigo-900" />
+                        <span>To (Primary Recipient)</span>
+                      </label>
+                      <div className="flex items-center gap-2.5 text-[11px]">
+                        {parsedTo.unique.length > 0 && (
+                          <span
+                            className={`font-semibold ${
+                              parsedTo.invalid.length > 0 ? 'text-rose-600' : 'text-emerald-700'
+                            }`}
+                          >
+                            {parsedTo.valid.length} valid
+                            {parsedTo.invalid.length > 0 ? ` • ${parsedTo.invalid.length} invalid` : ''}
+                          </span>
+                        )}
+                        <span
+                          className={`px-2 py-0.5 rounded-full font-semibold ${
+                            totalValidRecipients > 50
+                              ? 'bg-rose-100 text-rose-700'
+                              : 'bg-slate-100 text-slate-600'
+                          }`}
+                        >
+                          Total: {totalValidRecipients}/50
+                        </span>
+                      </div>
+                    </div>
+
+                    <input
+                      id="email-to"
+                      type="text"
+                      disabled={isSending}
+                      value={toInput}
+                      onChange={(e) => setToInput(e.target.value)}
+                      placeholder="member@example.com or comma-separated emails (optional if using BCC)"
+                      className={`w-full px-3.5 py-2.5 rounded-xl border text-slate-900 focus:outline-none focus:ring-2 ${
+                        parsedTo.invalid.length > 0
+                          ? 'border-rose-300 focus:ring-rose-200 bg-rose-50/30'
+                          : 'border-slate-300 focus:ring-indigo-300'
+                      }`}
+                    />
+
+                    {parsedTo.invalid.length > 0 && (
+                      <p className="text-[11px] text-rose-600 mt-1 font-medium">
+                        Invalid To email(s): {parsedTo.invalid.join(', ')}
+                      </p>
                     )}
                   </div>
 
-                  <input
-                    id="email-to"
-                    type="text"
-                    required
-                    disabled={isSending}
-                    value={toInput}
-                    onChange={(e) => setToInput(e.target.value)}
-                    placeholder="member@example.com or comma-separated: one@example.com, two@example.com"
-                    className={`w-full px-3.5 py-2.5 rounded-xl border text-slate-900 focus:outline-none focus:ring-2 ${
-                      parsedRecipients.invalid.length > 0
-                        ? 'border-rose-300 focus:ring-rose-200 bg-rose-50/30'
-                        : 'border-slate-300 focus:ring-indigo-300'
-                    }`}
-                  />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* CC */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label htmlFor="email-cc" className="font-semibold text-slate-700">
+                          CC (Carbon Copy)
+                        </label>
+                        {parsedCc.unique.length > 0 && (
+                          <span
+                            className={`text-[11px] font-semibold ${
+                              parsedCc.invalid.length > 0 ? 'text-rose-600' : 'text-emerald-700'
+                            }`}
+                          >
+                            {parsedCc.valid.length} valid
+                            {parsedCc.invalid.length > 0 ? ` • ${parsedCc.invalid.length} invalid` : ''}
+                          </span>
+                        )}
+                      </div>
+                      <input
+                        id="email-cc"
+                        type="text"
+                        disabled={isSending}
+                        value={ccInput}
+                        onChange={(e) => setCcInput(e.target.value)}
+                        placeholder="cc1@example.com, cc2@example.com"
+                        className={`w-full px-3.5 py-2 rounded-xl border text-slate-900 focus:outline-none focus:ring-2 ${
+                          parsedCc.invalid.length > 0
+                            ? 'border-rose-300 focus:ring-rose-200 bg-rose-50/30'
+                            : 'border-slate-300 focus:ring-indigo-300'
+                        }`}
+                      />
+                      {parsedCc.invalid.length > 0 && (
+                        <p className="text-[11px] text-rose-600 mt-1 font-medium">
+                          Invalid CC: {parsedCc.invalid.join(', ')}
+                        </p>
+                      )}
+                    </div>
 
-                  {parsedRecipients.invalid.length > 0 && (
-                    <p className="text-[11px] text-rose-600 mt-1 font-medium">
-                      Invalid email(s): {parsedRecipients.invalid.join(', ')}
-                    </p>
-                  )}
+                    {/* BCC */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label htmlFor="email-bcc" className="font-semibold text-slate-700 flex items-center gap-1">
+                          <Lock className="w-3 h-3 text-indigo-900" />
+                          <span>BCC (Hidden Recipients)</span>
+                        </label>
+                        {parsedBcc.unique.length > 0 && (
+                          <span
+                            className={`text-[11px] font-semibold ${
+                              parsedBcc.invalid.length > 0 ? 'text-rose-600' : 'text-emerald-700'
+                            }`}
+                          >
+                            {parsedBcc.valid.length} valid
+                            {parsedBcc.invalid.length > 0 ? ` • ${parsedBcc.invalid.length} invalid` : ''}
+                          </span>
+                        )}
+                      </div>
+                      <input
+                        id="email-bcc"
+                        type="text"
+                        disabled={isSending}
+                        value={bccInput}
+                        onChange={(e) => setBccInput(e.target.value)}
+                        placeholder="bcc1@example.com, bcc2@example.com"
+                        className={`w-full px-3.5 py-2 rounded-xl border text-slate-900 focus:outline-none focus:ring-2 ${
+                          parsedBcc.invalid.length > 0
+                            ? 'border-rose-300 focus:ring-rose-200 bg-rose-50/30'
+                            : 'border-slate-300 focus:ring-indigo-300'
+                        }`}
+                      />
+                      {parsedBcc.invalid.length > 0 && (
+                        <p className="text-[11px] text-rose-600 mt-1 font-medium">
+                          Invalid BCC: {parsedBcc.invalid.join(', ')}
+                        </p>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 {/* Subject */}
@@ -951,25 +1588,478 @@ export const AdminEmailComposer: React.FC = () => {
                   />
                 </div>
 
-                {/* Message Body */}
+                {/* Rich Text Formatted Message Body */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label htmlFor="email-body" className="font-semibold text-slate-700 flex items-center gap-1.5">
+                    <label className="font-semibold text-slate-700 flex items-center gap-1.5">
                       <FileText className="w-3.5 h-3.5 text-slate-500" />
-                      <span>Message Body {emailImages.length === 0 ? '*' : '(Optional if image attached)'}</span>
+                      <span>Message Body &amp; Font Formatting {emailImages.length === 0 ? '*' : '(Optional if image attached)'}</span>
                     </label>
                     <span className="text-[11px] text-slate-400">{message.length} characters</span>
                   </div>
-                  <textarea
-                    id="email-body"
-                    rows={9}
-                    required={emailImages.length === 0}
-                    disabled={isSending}
-                    value={message}
-                    onChange={(e) => setMessage(e.target.value)}
-                    placeholder="Write your official message here. Blank lines create clean paragraphs inside the branded email template..."
-                    className="w-full px-4 py-3 rounded-2xl border border-slate-300 text-slate-900 leading-relaxed focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                  />
+
+                  <div className="rounded-2xl border border-slate-300 overflow-hidden bg-white focus-within:ring-2 focus-within:ring-indigo-300">
+                    {/* Formatting Toolbar */}
+                    <div className="flex flex-wrap items-center gap-1.5 px-3 py-2 bg-slate-50 border-b border-slate-200">
+                      {/* Block Heading / Paragraph */}
+                      <select
+                        aria-label="Text Heading Style"
+                        defaultValue="p"
+                        onChange={(e) => {
+                          handleApplyBlockFormat(e.target.value);
+                          e.target.value = 'p';
+                        }}
+                        className="px-2 py-1 rounded-lg border border-slate-300 bg-white text-[11px] font-semibold text-slate-700 cursor-pointer focus:outline-none"
+                      >
+                        <option value="p">Normal Text</option>
+                        <option value="h1">Heading 1</option>
+                        <option value="h2">Heading 2</option>
+                        <option value="h3">Heading 3</option>
+                        <option value="blockquote">Blockquote</option>
+                      </select>
+
+                      {/* Font Family */}
+                      <select
+                        aria-label="Font Family"
+                        defaultValue=""
+                        onChange={(e) => {
+                          if (e.target.value) execEditorCommand('fontName', e.target.value);
+                          e.target.value = '';
+                        }}
+                        className="px-2 py-1 rounded-lg border border-slate-300 bg-white text-[11px] font-medium text-slate-700 cursor-pointer focus:outline-none"
+                      >
+                        <option value="" disabled>Font</option>
+                        <option value="Arial, Helvetica, sans-serif">Sans-Serif</option>
+                        <option value="Georgia, Times New Roman, serif">Serif (Editorial)</option>
+                        <option value="Courier New, monospace">Monospace</option>
+                      </select>
+
+                      {/* Font Size */}
+                      <select
+                        aria-label="Font Size"
+                        defaultValue=""
+                        onChange={(e) => {
+                          if (e.target.value) execEditorCommand('fontSize', e.target.value);
+                          e.target.value = '';
+                        }}
+                        className="px-2 py-1 rounded-lg border border-slate-300 bg-white text-[11px] font-medium text-slate-700 cursor-pointer focus:outline-none"
+                      >
+                        <option value="" disabled>Size</option>
+                        <option value="2">Small</option>
+                        <option value="3">Normal</option>
+                        <option value="4">Medium</option>
+                        <option value="5">Large</option>
+                        <option value="6">XL Heading</option>
+                      </select>
+
+                      <div className="w-px h-5 bg-slate-300 mx-0.5" />
+
+                      {/* Bold, Italic, Underline, Strike */}
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          execEditorCommand('bold');
+                        }}
+                        title="Bold (Ctrl+B)"
+                        className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-700 cursor-pointer"
+                      >
+                        <Bold className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          execEditorCommand('italic');
+                        }}
+                        title="Italic (Ctrl+I)"
+                        className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-700 cursor-pointer"
+                      >
+                        <Italic className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          execEditorCommand('underline');
+                        }}
+                        title="Underline (Ctrl+U)"
+                        className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-700 cursor-pointer"
+                      >
+                        <Underline className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          execEditorCommand('strikeThrough');
+                        }}
+                        title="Strikethrough"
+                        className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-700 cursor-pointer"
+                      >
+                        <Strikethrough className="w-3.5 h-3.5" />
+                      </button>
+
+                      <div className="w-px h-5 bg-slate-300 mx-0.5" />
+
+                      {/* Lists & Quote */}
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          execEditorCommand('insertUnorderedList');
+                        }}
+                        title="Bullet List"
+                        className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-700 cursor-pointer"
+                      >
+                        <List className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          execEditorCommand('insertOrderedList');
+                        }}
+                        title="Numbered List"
+                        className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-700 cursor-pointer"
+                      >
+                        <ListOrdered className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          handleApplyBlockFormat('blockquote');
+                        }}
+                        title="Blockquote"
+                        className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-700 cursor-pointer"
+                      >
+                        <Quote className="w-3.5 h-3.5" />
+                      </button>
+
+                      <div className="w-px h-5 bg-slate-300 mx-0.5" />
+
+                      {/* Alignment */}
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          execEditorCommand('justifyLeft');
+                        }}
+                        title="Align Left"
+                        className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-700 cursor-pointer"
+                      >
+                        <AlignLeft className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          execEditorCommand('justifyCenter');
+                        }}
+                        title="Align Center"
+                        className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-700 cursor-pointer"
+                      >
+                        <AlignCenter className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          execEditorCommand('justifyRight');
+                        }}
+                        title="Align Right"
+                        className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-700 cursor-pointer"
+                      >
+                        <AlignRight className="w-3.5 h-3.5" />
+                      </button>
+
+                      <div className="w-px h-5 bg-slate-300 mx-0.5" />
+
+                      {/* Text Color Swatches */}
+                      <div className="flex items-center gap-1 px-1" title="Text Color">
+                        {EMAIL_TEXT_COLORS.map(swatch => (
+                          <button
+                            key={swatch.hex}
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              execEditorCommand('foreColor', swatch.hex);
+                            }}
+                            title={`Color: ${swatch.label}`}
+                            style={{ backgroundColor: swatch.hex }}
+                            className="w-4 h-4 rounded-full border border-slate-300 hover:scale-110 transition-transform cursor-pointer"
+                          />
+                        ))}
+                      </div>
+
+                      <div className="w-px h-5 bg-slate-300 mx-0.5" />
+
+                      {/* Insert Link */}
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          handleOpenLinkPopover();
+                        }}
+                        title="Insert Hyperlink"
+                        className={`p-1.5 rounded-lg cursor-pointer ${
+                          showLinkPopover ? 'bg-indigo-100 text-indigo-950' : 'hover:bg-slate-200 text-slate-700'
+                        }`}
+                      >
+                        <LinkIcon className="w-3.5 h-3.5" />
+                      </button>
+
+                      {/* Clear Formatting */}
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          execEditorCommand('removeFormat');
+                        }}
+                        title="Clear Text Formatting"
+                        className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-700 cursor-pointer"
+                      >
+                        <RemoveFormatting className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {/* Inline Insert Link Bar */}
+                    {showLinkPopover && (
+                      <div className="px-3 py-2.5 bg-indigo-50/70 border-b border-indigo-200 flex flex-wrap items-center gap-2">
+                        <input
+                          type="url"
+                          value={linkUrlInput}
+                          onChange={(e) => setLinkUrlInput(e.target.value)}
+                          placeholder="https://nexgencouncil.bond"
+                          className="flex-1 min-w-[180px] px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-mono text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                        />
+                        {(!savedSelectionRef.current || savedSelectionRef.current.collapsed) && (
+                          <input
+                            type="text"
+                            value={linkTextInput}
+                            onChange={(e) => setLinkTextInput(e.target.value)}
+                            placeholder="Link label text"
+                            className="w-40 px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                          />
+                        )}
+                        <button
+                          type="button"
+                          onClick={handleInsertLink}
+                          className="px-3 py-1.5 rounded-lg bg-indigo-950 text-white text-[11px] font-semibold hover:bg-indigo-900 cursor-pointer"
+                        >
+                          Insert Link
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowLinkPopover(false)}
+                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-slate-600 hover:bg-slate-200 cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+
+                    {/* ContentEditable Canvas */}
+                    <div className="relative">
+                      {!message && !htmlBody && (
+                        <div className="pointer-events-none absolute top-3.5 left-4 text-sm text-slate-400">
+                          Write your official message here. Use the toolbar above for headings, bold, italic, underline, colors, lists, and links...
+                        </div>
+                      )}
+                      <div
+                        ref={editorRef}
+                        contentEditable={!isSending}
+                        suppressContentEditableWarning
+                        role="textbox"
+                        aria-multiline="true"
+                        aria-label="Rich Email Message Body"
+                        onInput={syncEditorFromDom}
+                        onBlur={syncEditorFromDom}
+                        className={RICH_CONTENT_LIGHT_CLASSES}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Email Action CTA Buttons Builder */}
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 space-y-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                        <ExternalLink className="w-4 h-4 text-indigo-900" />
+                        <span>Call-to-Action (CTA) Buttons ({emailButtons.length}/5)</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Add clickable buttons inside your email (website links, volunteer form, meetings, WhatsApp, email, or phone).
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Quick Website Preset Chips */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-slate-500 mr-1">Quick Add:</span>
+                    {EMAIL_BUTTON_PRESETS.map(preset => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        disabled={isSending || emailButtons.length >= 5}
+                        onClick={() => handleAddPresetButton(preset)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 bg-white hover:bg-indigo-950 hover:text-white hover:border-indigo-950 text-[11px] font-semibold text-slate-700 transition-colors cursor-pointer disabled:opacity-40"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>{preset.label}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Custom Button Inputs */}
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                    <input
+                      type="text"
+                      disabled={isSending || emailButtons.length >= 5}
+                      value={newButtonLabel}
+                      onChange={e => setNewButtonLabel(e.target.value)}
+                      placeholder="Button Label (e.g. Join Session Now)"
+                      className="sm:col-span-4 px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    />
+                    <input
+                      type="text"
+                      disabled={isSending || emailButtons.length >= 5}
+                      value={newButtonUrl}
+                      onChange={e => setNewButtonUrl(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddButton();
+                        }
+                      }}
+                      placeholder="Target URL (https://..., /volunteer, mailto:..., tel:...)"
+                      className="sm:col-span-4 px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    />
+                    <select
+                      aria-label="Button Color Style"
+                      value={newButtonStyle}
+                      onChange={e => setNewButtonStyle(e.target.value as 'amber' | 'primary' | 'outline')}
+                      disabled={isSending}
+                      className="sm:col-span-2 px-2.5 py-2 rounded-xl border border-slate-300 bg-white text-[11px] font-semibold text-slate-700 cursor-pointer"
+                    >
+                      <option value="amber">Gold Amber</option>
+                      <option value="primary">Council Indigo</option>
+                      <option value="outline">Gold Outline</option>
+                    </select>
+                    <select
+                      aria-label="Button Alignment"
+                      value={newButtonAlign}
+                      onChange={e => setNewButtonAlign(e.target.value as 'left' | 'center' | 'right')}
+                      disabled={isSending}
+                      className="sm:col-span-2 px-2.5 py-2 rounded-xl border border-slate-300 bg-white text-[11px] font-semibold text-slate-700 cursor-pointer"
+                    >
+                      <option value="center">Align: Center</option>
+                      <option value="left">Align: Left</option>
+                      <option value="right">Align: Right</option>
+                    </select>
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      disabled={isSending || emailButtons.length >= 5 || !newButtonLabel.trim() || !newButtonUrl.trim()}
+                      onClick={handleAddButton}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-950 hover:bg-indigo-900 text-white font-semibold text-xs transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      <Plus className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Add Button</span>
+                    </button>
+                  </div>
+
+                  {/* Configured Buttons List */}
+                  {emailButtons.length > 0 && (
+                    <div className="space-y-2.5 pt-1">
+                      {emailButtons.map((btn, idx) => (
+                        <div
+                          key={btn.id}
+                          className="flex flex-col sm:flex-row sm:items-center gap-2.5 p-3 rounded-xl bg-white border border-slate-200 shadow-2xs"
+                        >
+                          <div className="flex-1 grid grid-cols-1 sm:grid-cols-12 gap-2">
+                            <input
+                              type="text"
+                              value={btn.label}
+                              onChange={e => handleUpdateButton(btn.id, { label: e.target.value })}
+                              placeholder="Button label"
+                              className="sm:col-span-4 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                            />
+                            <input
+                              type="text"
+                              value={btn.url}
+                              onChange={e => handleUpdateButton(btn.id, { url: e.target.value })}
+                              placeholder="https://... or /path"
+                              className={`sm:col-span-4 px-2.5 py-1.5 rounded-lg border text-[11px] font-mono focus:outline-none focus:ring-1 ${
+                                isValidEmailButtonUrl(btn.url)
+                                  ? 'border-slate-200 text-slate-700 focus:ring-indigo-300'
+                                  : 'border-rose-300 bg-rose-50 text-rose-700 focus:ring-rose-300'
+                              }`}
+                            />
+                            <select
+                              value={btn.style || 'amber'}
+                              onChange={e =>
+                                handleUpdateButton(btn.id, {
+                                  style: e.target.value as 'amber' | 'primary' | 'outline'
+                                })
+                              }
+                              className="sm:col-span-2 px-2 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer"
+                            >
+                              <option value="amber">Gold Amber</option>
+                              <option value="primary">Indigo</option>
+                              <option value="outline">Outline</option>
+                            </select>
+                            <select
+                              value={btn.align || 'center'}
+                              onChange={e =>
+                                handleUpdateButton(btn.id, {
+                                  align: e.target.value as 'left' | 'center' | 'right'
+                                })
+                              }
+                              className="sm:col-span-2 px-2 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer"
+                            >
+                              <option value="center">Center</option>
+                              <option value="left">Left</option>
+                              <option value="right">Right</option>
+                            </select>
+                          </div>
+
+                          <div className="flex items-center gap-1 self-end sm:self-center shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleMoveButton(idx, -1)}
+                              disabled={idx === 0}
+                              title="Move up"
+                              className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-100 disabled:opacity-30 cursor-pointer"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleMoveButton(idx, 1)}
+                              disabled={idx === emailButtons.length - 1}
+                              title="Move down"
+                              className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-100 disabled:opacity-30 cursor-pointer"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveButton(btn.id)}
+                              title="Remove button"
+                              className="p-1.5 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Email Body Images Builder */}
@@ -1431,6 +2521,13 @@ export const AdminEmailComposer: React.FC = () => {
                             : 'Logo'}
                         </span>
                       )}
+
+                      {Array.isArray(log.buttons) && log.buttons.length > 0 && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-900 border border-amber-200">
+                          <ExternalLink className="w-3 h-3" />
+                          {log.buttons.length} button{log.buttons.length > 1 ? 's' : ''}
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600">
@@ -1439,9 +2536,25 @@ export const AdminEmailComposer: React.FC = () => {
                       </span>
                       <span className="truncate max-w-md">
                         <strong className="text-slate-700">To:</strong>{' '}
-                        {log.to.slice(0, 2).join(', ')}
-                        {log.to.length > 2 ? ` +${log.to.length - 2} more` : ''}
+                        {log.to.length > 0 ? (
+                          <>
+                            {log.to.slice(0, 2).join(', ')}
+                            {log.to.length > 2 ? ` +${log.to.length - 2} more` : ''}
+                          </>
+                        ) : (
+                          <span className="italic text-slate-400">Undisclosed (BCC)</span>
+                        )}
                       </span>
+                      {Array.isArray(log.cc) && log.cc.length > 0 && (
+                        <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-semibold text-[11px]">
+                          CC: {log.cc.length}
+                        </span>
+                      )}
+                      {Array.isArray(log.bcc) && log.bcc.length > 0 && (
+                        <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-900 font-semibold text-[11px]">
+                          BCC: {log.bcc.length}
+                        </span>
+                      )}
                     </div>
 
                     <p className="text-xs text-slate-500 line-clamp-1">{log.message}</p>
@@ -1479,7 +2592,10 @@ export const AdminEmailComposer: React.FC = () => {
           <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl relative space-y-5 my-8 max-h-[90vh] overflow-y-auto">
             <button
               type="button"
-              onClick={() => setSelectedLog(null)}
+              onClick={() => {
+                setSelectedLog(null);
+                setConfirmDeleteId(null);
+              }}
               className="absolute top-5 right-5 text-slate-400 hover:text-slate-700 p-2 rounded-full cursor-pointer"
             >
               <X className="w-5 h-5" />
@@ -1523,9 +2639,25 @@ export const AdminEmailComposer: React.FC = () => {
               <div>
                 <span className="text-slate-500 font-semibold">To ({selectedLog.to.length}):</span>{' '}
                 <span className="text-slate-900 font-mono break-all">
-                  {selectedLog.to.join(', ')}
+                  {selectedLog.to.length > 0 ? selectedLog.to.join(', ') : 'Undisclosed Recipients'}
                 </span>
               </div>
+              {Array.isArray(selectedLog.cc) && selectedLog.cc.length > 0 && (
+                <div>
+                  <span className="text-slate-500 font-semibold">CC ({selectedLog.cc.length}):</span>{' '}
+                  <span className="text-slate-900 font-mono break-all">
+                    {selectedLog.cc.join(', ')}
+                  </span>
+                </div>
+              )}
+              {Array.isArray(selectedLog.bcc) && selectedLog.bcc.length > 0 && (
+                <div>
+                  <span className="text-slate-500 font-semibold">BCC ({selectedLog.bcc.length}):</span>{' '}
+                  <span className="text-slate-900 font-mono break-all">
+                    {selectedLog.bcc.join(', ')}
+                  </span>
+                </div>
+              )}
               {selectedLog.replyTo && (
                 <div>
                   <span className="text-slate-500 font-semibold">Reply-To:</span>{' '}
@@ -1555,14 +2687,13 @@ export const AdminEmailComposer: React.FC = () => {
                 <div className="flex items-center gap-3 pb-3 border-b border-slate-800">
                   <img
                     src={selectedLog.logoUrl}
-                    alt="Header Logo"
+                    alt={`${selectedLog.fromName} Logo`}
+                    referrerPolicy="no-referrer"
                     className="w-10 h-10 rounded-lg object-contain bg-slate-900 border border-slate-700 p-1"
                   />
                   <div>
-                    <div className="text-[10px] uppercase tracking-wider text-amber-400 font-bold">
-                      Header Logo Included
-                    </div>
-                    <div className="text-xs text-slate-300 font-semibold">{selectedLog.fromName}</div>
+                    <div className="text-xs text-white font-bold">{selectedLog.fromName}</div>
+                    <div className="text-[11px] text-slate-400">Women Empowerment &amp; Youth Leadership Council</div>
                   </div>
                 </div>
               )}
@@ -1573,7 +2704,12 @@ export const AdminEmailComposer: React.FC = () => {
                     .filter(i => i.placement === 'top')
                     .map(img => (
                       <div key={img.id} className="rounded-xl overflow-hidden border border-slate-800 bg-slate-900">
-                        <img src={img.url} alt={img.alt || 'Banner'} className="w-full max-h-56 object-contain mx-auto" />
+                        <img
+                          src={img.url}
+                          alt={img.alt || 'Banner'}
+                          referrerPolicy="no-referrer"
+                          className="w-full max-h-56 object-contain mx-auto"
+                        />
                         {img.caption && (
                           <div className="px-3 py-1.5 text-[11px] text-slate-400 text-center border-t border-slate-800">
                             {img.caption}
@@ -1584,9 +2720,20 @@ export const AdminEmailComposer: React.FC = () => {
                 </div>
               )}
 
-              <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                {selectedLog.message}
-              </div>
+              {selectedLog.html ? (
+                <div
+                  className={RICH_CONTENT_DARK_CLASSES}
+                  dangerouslySetInnerHTML={{ __html: sanitizeClientEmailHtml(selectedLog.html) }}
+                />
+              ) : (
+                <div className="text-sm leading-relaxed whitespace-pre-wrap">
+                  {selectedLog.message}
+                </div>
+              )}
+
+              {Array.isArray(selectedLog.buttons) && selectedLog.buttons.length > 0 && (
+                renderPreviewButtons(selectedLog.buttons)
+              )}
 
               {selectedLog.images && selectedLog.images.filter(i => (i.placement || 'bottom') === 'bottom').length > 0 && (
                 <div className="space-y-2 pt-2">
@@ -1594,7 +2741,12 @@ export const AdminEmailComposer: React.FC = () => {
                     .filter(i => (i.placement || 'bottom') === 'bottom')
                     .map(img => (
                       <div key={img.id} className="rounded-xl overflow-hidden border border-slate-800 bg-slate-900">
-                        <img src={img.url} alt={img.alt || 'Attachment'} className="w-full max-h-56 object-contain mx-auto" />
+                        <img
+                          src={img.url}
+                          alt={img.alt || 'Attachment'}
+                          referrerPolicy="no-referrer"
+                          className="w-full max-h-56 object-contain mx-auto"
+                        />
                         {img.caption && (
                           <div className="px-3 py-1.5 text-[11px] text-slate-400 text-center border-t border-slate-800">
                             {img.caption}
@@ -1609,21 +2761,44 @@ export const AdminEmailComposer: React.FC = () => {
             <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
               <div>
                 {isAdminUser && (
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteLog(selectedLog.id)}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 cursor-pointer"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Delete Record</span>
-                  </button>
+                  confirmDeleteId === selectedLog.id ? (
+                    <div className="inline-flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteLog(selectedLog.id)}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-rose-600 text-white hover:bg-rose-700 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Confirm Delete</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteId(null)}
+                        className="px-2.5 py-2 rounded-xl text-xs font-semibold text-slate-500 hover:bg-slate-100 cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteId(selectedLog.id)}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Record</span>
+                    </button>
+                  )
                 )}
               </div>
 
               <div className="flex items-center gap-2.5">
                 <button
                   type="button"
-                  onClick={() => setSelectedLog(null)}
+                  onClick={() => {
+                    setSelectedLog(null);
+                    setConfirmDeleteId(null);
+                  }}
                   className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer"
                 >
                   Close

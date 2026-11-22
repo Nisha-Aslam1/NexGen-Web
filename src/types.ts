@@ -164,6 +164,8 @@ export interface ContactMessage {
   name: string;
   email: string;
   phone?: string;
+  whatsapp?: string;
+  source?: 'Support Widget' | 'Contact Page';
   subject: string;
   message: string;
   status: 'Unread' | 'Read' | 'Replied';
@@ -235,11 +237,18 @@ export interface WebsiteSettings {
   directoryHeading?: string;
   primaryDomains?: string;
   directoryHeadquarters?: string;
+  showDirectoryCard?: boolean;
+  showDirectoryHeading?: boolean;
+  showDirectoryHeadquarters?: boolean;
+  showOfficialTitle?: boolean;
+  showPrimaryDomains?: boolean;
   // Email Sender Identity
   emailSenderName?: string;
   emailSenderEmail?: string;
   emailReplyTo?: string;
   emailLogoUrl?: string;
+  // Volunteer Onboarding
+  volunteerWhatsappGroupLink?: string;
 }
 
 export interface EmailImage {
@@ -250,18 +259,29 @@ export interface EmailImage {
   placement?: 'top' | 'bottom';
 }
 
+export interface EmailButton {
+  id: string;
+  label: string;
+  url: string;
+  style?: 'amber' | 'primary' | 'outline';
+  align?: 'left' | 'center' | 'right';
+}
+
 export interface EmailLog {
   id: string;
   resendId?: string;
   fromName: string;
   fromEmail: string;
   to: string[];
+  cc?: string[];
+  bcc?: string[];
   replyTo?: string;
   subject: string;
   message: string;
   html?: string;
   logoUrl?: string;
   images?: EmailImage[];
+  buttons?: EmailButton[];
   status: 'Sent' | 'Failed';
   error?: string;
   sentByUserId?: string;

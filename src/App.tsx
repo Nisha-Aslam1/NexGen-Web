@@ -56,9 +56,9 @@ const AppContent: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [activePage, adminTab]);
 
-  // If in Room or Meetings view
+  // If in Room or Meetings view (never expose public directory on /meetings)
   if (activePage === 'room' || activePage === 'meetings') {
-    return <MeetingRoomWrapper />;
+    return <MeetingRoomWrapper isPrivatePortal={activePage === 'meetings'} />;
   }
 
   // If in Admin section or Admin Login

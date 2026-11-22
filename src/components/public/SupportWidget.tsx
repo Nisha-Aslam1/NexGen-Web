@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useApp } from '../../context/AppContext.tsx';
+import { useApp, ActivePage } from '../../context/AppContext.tsx';
 import {
   X,
   Send,
@@ -7,26 +7,59 @@ import {
   HelpCircle,
   ChevronDown,
   Phone,
-  Mail
+  Mail,
+  Compass,
+  Clock,
+  ArrowUpRight,
+  MessageCircle
 } from 'lucide-react';
 
 const QUICK_FAQS = [
   {
     q: 'Who can apply as a volunteer or cohort scholar?',
-    a: 'Women and youth advocates ages 16+ from all academic disciplines and backgrounds can join. No prior experience is required.'
+    a: 'Women and youth advocates ages 16+ from all academic disciplines and backgrounds can join. No prior experience is required — submit your application on the Volunteer page.'
   },
   {
-    q: 'Are certificates provided upon completion?',
-    a: 'Yes, participants who complete the required attendance and practical project receive an accredited digital certificate.'
+    q: 'How can I join the 30-Day Leadership & Empowerment Series?',
+    a: 'Open the Programs or Volunteer page on the website, choose the active cohort, and complete the registration form. Approved members receive onboarding and live session links via email and WhatsApp.'
   },
   {
-    q: 'Is there any fee to join?',
-    a: 'No. Volunteer registration and participation in all regular training cohorts are 100% free of charge.'
+    q: 'How do I track my submitted volunteer application?',
+    a: 'Go to the Track Application page (or click Track Application below) and enter your Application Reference Code (e.g., NG-XXXX) to see your real-time review status.'
+  },
+  {
+    q: 'Is there any fee to join cohorts, workshops, or volunteer?',
+    a: 'No. NexGen Council is a civil-society leadership initiative. Volunteer membership, leadership cohorts, and regular training sessions are 100% free of charge.'
+  },
+  {
+    q: 'Are verified certificates provided after completion?',
+    a: 'Yes! Participants who meet the attendance requirement and submit their practical community project receive an official digital certificate from the Secretariat.'
+  },
+  {
+    q: 'How do I join scheduled online meetings or webinars?',
+    a: 'Visit the Events page or use the direct Meeting Room link sent to your email. If your session requires waiting room admission, our coordinators admit attendees 5 minutes before start.'
+  },
+  {
+    q: 'Where can I view recent Council updates, events, and photo archives?',
+    a: 'You can browse official announcements on the News page, upcoming schedules on Events, and event photography in the Gallery section of this website.'
+  },
+  {
+    q: 'How can universities or organizations partner with NexGen Council?',
+    a: 'Select "University / School Partnership" in the Submit Issue tab here (or visit the Contact page) with your institution name and WhatsApp contact for a formal briefing.'
   }
 ];
 
+const QUICK_NAV_LINKS: { label: string; page: ActivePage }[] = [
+  { label: 'About Us', page: 'about' },
+  { label: 'Programs', page: 'programs' },
+  { label: 'Apply Volunteer', page: 'volunteer' },
+  { label: 'Track Status', page: 'track' },
+  { label: 'Events', page: 'events' },
+  { label: 'Contact Page', page: 'contact' }
+];
+
 export const SupportWidget: React.FC = () => {
-  const { settings, addToast } = useApp();
+  const { settings, addToast, setActivePage } = useApp();
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'ticket' | 'faq'>('ticket');
   const [openFaq, setOpenFaq] = useState<number | null>(0);
@@ -34,17 +67,33 @@ export const SupportWidget: React.FC = () => {
   const [formData, setFormData] = useState({
     name: '',
     email: '',
-    phone: '',
+    whatsapp: '',
     subject: 'General Inquiry',
     message: ''
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedSuccess, setSubmittedSuccess] = useState(false);
 
+  const handleNavigatePage = (page: ActivePage) => {
+    setActivePage(page);
+    setIsOpen(false);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name.trim() || !formData.email.trim() || !formData.message.trim()) {
-      addToast('Please fill out all required fields.', 'error');
+    const cleanName = formData.name.trim();
+    const cleanEmail = formData.email.trim();
+    const cleanWhatsapp = formData.whatsapp.trim();
+    const cleanMessage = formData.message.trim();
+    const whatsappDigits = cleanWhatsapp.replace(/\D/g, '');
+
+    if (!cleanName || !cleanEmail || !cleanWhatsapp || !cleanMessage) {
+      addToast('Please fill out all required fields including your WhatsApp number.', 'error');
+      return;
+    }
+
+    if (whatsappDigits.length < 7) {
+      addToast('Please enter a valid WhatsApp number with country code (at least 7 digits).', 'error');
       return;
     }
 
@@ -58,11 +107,13 @@ export const SupportWidget: React.FC = () => {
         },
         credentials: 'include',
         body: JSON.stringify({
-          name: formData.name.trim(),
-          email: formData.email.trim(),
-          phone: formData.phone.trim(),
+          name: cleanName,
+          email: cleanEmail,
+          phone: cleanWhatsapp,
+          whatsapp: cleanWhatsapp,
           subject: formData.subject,
-          message: formData.message.trim()
+          message: cleanMessage,
+          source: 'Support Widget'
         })
       });
 
@@ -85,7 +136,7 @@ export const SupportWidget: React.FC = () => {
       setFormData({
         name: '',
         email: '',
-        phone: '',
+        whatsapp: '',
         subject: 'General Inquiry',
         message: ''
       });
@@ -99,7 +150,7 @@ export const SupportWidget: React.FC = () => {
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end">
       {isOpen && (
-        <div className="mb-3 w-[340px] sm:w-[390px] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl transition-all">
+        <div className="mb-3 w-[340px] sm:w-[400px] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl transition-all">
           {/* Header */}
           <div className="bg-slate-900 p-5 text-white border-b border-slate-800">
             <div className="flex items-start justify-between gap-3">
@@ -114,7 +165,7 @@ export const SupportWidget: React.FC = () => {
                     NexGen Support Desk
                   </h3>
                   <p className="mt-0.5 text-xs text-slate-300">
-                    Report an issue or ask the Secretariat
+                    Website helpdesk, FAQs &amp; direct Secretariat ticket
                   </p>
                 </div>
               </div>
@@ -152,39 +203,100 @@ export const SupportWidget: React.FC = () => {
                 }`}
               >
                 <HelpCircle className="w-3.5 h-3.5" />
-                <span>Quick FAQs</span>
+                <span>FAQs &amp; Portal Links</span>
               </button>
             </div>
           </div>
 
           {/* Body */}
-          <div className="max-h-[430px] overflow-y-auto p-5 bg-slate-50/50">
+          <div className="max-h-[440px] overflow-y-auto p-5 bg-slate-50/60">
             {activeTab === 'faq' ? (
-              <div className="space-y-3">
-                {QUICK_FAQS.map((item, idx) => (
-                  <div
-                    key={idx}
-                    className="rounded-2xl border border-slate-200 bg-white overflow-hidden"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setOpenFaq(openFaq === idx ? null : idx)}
-                      className="flex w-full items-center justify-between gap-2 p-3.5 text-left text-xs font-bold text-slate-900 hover:bg-slate-50 cursor-pointer"
+              <div className="space-y-3.5">
+                {/* Quick Website Navigation Links */}
+                <div className="rounded-2xl border border-indigo-200/80 bg-indigo-50/70 p-3.5 space-y-2.5">
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-indigo-950">
+                    <Compass className="w-3.5 h-3.5 text-amber-600" />
+                    <span>Quick Website Links</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {QUICK_NAV_LINKS.map(link => (
+                      <button
+                        key={link.page}
+                        type="button"
+                        onClick={() => handleNavigatePage(link.page)}
+                        className="flex items-center justify-between gap-1 rounded-xl border border-indigo-200 bg-white px-2.5 py-2 text-[11px] font-semibold text-slate-800 hover:border-indigo-400 hover:bg-indigo-950 hover:text-white transition-colors cursor-pointer"
+                      >
+                        <span className="truncate">{link.label}</span>
+                        <ArrowUpRight className="w-3 h-3 shrink-0 opacity-70" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Expandable FAQs */}
+                <div className="space-y-2">
+                  {QUICK_FAQS.map((item, idx) => (
+                    <div
+                      key={idx}
+                      className="rounded-2xl border border-slate-200 bg-white overflow-hidden"
                     >
-                      <span>{item.q}</span>
-                      <ChevronDown
-                        className={`w-4 h-4 text-amber-600 shrink-0 transition-transform ${
-                          openFaq === idx ? 'rotate-180' : ''
-                        }`}
-                      />
-                    </button>
-                    {openFaq === idx && (
-                      <div className="border-t border-slate-100 px-3.5 py-3 text-xs leading-relaxed text-slate-600 bg-slate-50/60">
-                        {item.a}
+                      <button
+                        type="button"
+                        onClick={() => setOpenFaq(openFaq === idx ? null : idx)}
+                        className="flex w-full items-center justify-between gap-2 p-3.5 text-left text-xs font-bold text-slate-900 hover:bg-slate-50 cursor-pointer"
+                      >
+                        <span>{item.q}</span>
+                        <ChevronDown
+                          className={`w-4 h-4 text-amber-600 shrink-0 transition-transform ${
+                            openFaq === idx ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
+                      {openFaq === idx && (
+                        <div className="border-t border-slate-100 px-3.5 py-3 text-xs leading-relaxed text-slate-600 bg-slate-50/60">
+                          {item.a}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Live Secretariat Info */}
+                {(settings?.showOfficeHours !== false ||
+                  settings?.showContactEmail !== false ||
+                  (settings?.showContactPhone !== false && settings?.contactPhone)) && (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-1.5 text-[11px] text-slate-600">
+                    <div className="font-bold text-slate-900 text-xs">Secretariat Desk Info</div>
+                    {settings?.showOfficeHours !== false && settings?.footerOfficeHours && (
+                      <div className="flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>{settings.footerOfficeHours}</span>
+                      </div>
+                    )}
+                    {settings?.showContactEmail !== false && settings?.contactEmail && (
+                      <div className="flex items-center gap-1.5">
+                        <Mail className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <a
+                          href={`mailto:${settings.contactEmail}`}
+                          className="text-indigo-900 hover:underline font-medium"
+                        >
+                          {settings.contactEmail}
+                        </a>
+                      </div>
+                    )}
+                    {settings?.showContactPhone !== false && settings?.contactPhone && (
+                      <div className="flex items-center gap-1.5">
+                        <Phone className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <a
+                          href={`tel:${settings.contactPhone}`}
+                          className="text-indigo-900 hover:underline font-medium"
+                        >
+                          {settings.contactPhone}
+                        </a>
                       </div>
                     )}
                   </div>
-                ))}
+                )}
 
                 <button
                   type="button"
@@ -202,7 +314,7 @@ export const SupportWidget: React.FC = () => {
                   Issue Logged Successfully
                 </h4>
                 <p className="text-xs text-slate-600 leading-relaxed">
-                  Thank you! Your request has been delivered to the Council Secretariat. Our team will review it and get back to you via email or phone.
+                  Thank you! Your request has been delivered to the Council Secretariat. Our team will respond via email or WhatsApp shortly.
                 </p>
                 <button
                   type="button"
@@ -245,13 +357,17 @@ export const SupportWidget: React.FC = () => {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                      Phone / WhatsApp
+                      <span className="inline-flex items-center gap-1">
+                        <MessageCircle className="w-3 h-3 text-emerald-600" />
+                        WhatsApp Number <span className="text-rose-500">*</span>
+                      </span>
                     </label>
                     <input
                       type="tel"
-                      value={formData.phone}
-                      onChange={e => setFormData({ ...formData, phone: e.target.value })}
-                      placeholder="+92 300 0000000"
+                      required
+                      value={formData.whatsapp}
+                      onChange={e => setFormData({ ...formData, whatsapp: e.target.value })}
+                      placeholder="+92 300 1234567"
                       className="w-full px-3 py-2.5 rounded-xl border border-slate-300 bg-white text-xs focus:ring-2 focus:ring-indigo-200 focus:border-indigo-600 focus:outline-none"
                     />
                   </div>
@@ -270,6 +386,7 @@ export const SupportWidget: React.FC = () => {
                     <option value="Certificate / Cohort Verification">Certificate / Cohort Verification</option>
                     <option value="Volunteer / Fellowship Application">Volunteer / Fellowship Application</option>
                     <option value="Event / Meeting Access Issue">Event / Meeting Access Issue</option>
+                    <option value="Website / Portal Bug Report">Website / Portal Technical Issue</option>
                     <option value="University / School Partnership">University / School Partnership</option>
                   </select>
                 </div>
@@ -283,7 +400,7 @@ export const SupportWidget: React.FC = () => {
                     required
                     value={formData.message}
                     onChange={e => setFormData({ ...formData, message: e.target.value })}
-                    placeholder="Please explain the complete issue you are facing (include cohort name, date, or error details if applicable)..."
+                    placeholder="Please explain the complete issue you are facing (include cohort name, reference code, or error details if applicable)..."
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-xs focus:ring-2 focus:ring-indigo-200 focus:border-indigo-600 focus:outline-none"
                   />
                 </div>
