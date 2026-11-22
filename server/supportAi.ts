@@ -5,7 +5,7 @@ import {
   Content,
   GenerateContentResponse
 } from '@google/genai';
-import { db } from './db.ts';
+import { db, readDirectEnvFile } from './db.ts';
 import { ContactMessage } from '../src/types.ts';
 
 export const SUPPORT_AI_MODEL = 'gemini-3.5-flash-lite';
@@ -19,11 +19,29 @@ const unavailableModels = new Set<string>();
 let cachedClient: GoogleGenAI | null = null;
 let cachedApiKey = '';
 
+function cleanEnvValue(value?: string): string {
+  return (value || '').trim().replace(/^["']|["']$/g, '').trim();
+}
+
+function resolveGeminiApiKey(): string {
+  const fromProcess =
+    cleanEnvValue(process.env.GEMINI_API_KEY) ||
+    cleanEnvValue(process.env.GOOGLE_API_KEY);
+  if (fromProcess) return fromProcess;
+
+  const fromFiles = readDirectEnvFile();
+  return (
+    cleanEnvValue(fromFiles.GEMINI_API_KEY) ||
+    cleanEnvValue(fromFiles.GOOGLE_API_KEY) ||
+    ''
+  );
+}
+
 function getGeminiClient(): GoogleGenAI {
-  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+  const apiKey = resolveGeminiApiKey();
   if (!apiKey) {
     throw new Error(
-      'GEMINI_API_KEY is not configured on the server. Add your key in Settings > Secrets.'
+      'GEMINI_API_KEY is not available to the server process. Confirm GEMINI_API_KEY is set in your .env file (or Settings > Secrets), passed to the container environment, and restart/recreate the server.'
     );
   }
   if (!cachedClient || cachedApiKey !== apiKey) {
