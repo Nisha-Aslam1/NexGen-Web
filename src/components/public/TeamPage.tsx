@@ -85,19 +85,9 @@ export const TeamPage: React.FC = () => {
             const bioPreview = (mem.bio || '').trim();
 
             return (
-              <div
+              <article
                 key={mem.id}
-                onClick={() => setSelectedMember(mem)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    setSelectedMember(mem);
-                  }
-                }}
-                tabIndex={0}
-                role="button"
-                aria-label={`Open full profile for ${mem.name}`}
-                className="h-full bg-white rounded-3xl border border-slate-200 hover:border-indigo-200 overflow-hidden shadow-xs hover:shadow-lg transition-all flex flex-col group cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                className="h-full bg-white rounded-3xl border border-slate-200 hover:border-indigo-200 overflow-hidden shadow-xs hover:shadow-lg transition-all flex flex-col group relative"
               >
                 <div className="aspect-square bg-slate-900 overflow-hidden relative shrink-0">
                   <img
@@ -138,13 +128,19 @@ export const TeamPage: React.FC = () => {
                   </div>
 
                   <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
-                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-950 group-hover:text-amber-700 transition-colors">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedMember(mem)}
+                      aria-haspopup="dialog"
+                      aria-label={`View full profile for ${mem.name}, ${mem.position}`}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-950 group-hover:text-amber-700 transition-colors cursor-pointer after:absolute after:inset-0 after:z-0 focus:outline-none focus:ring-2 focus:ring-indigo-400 rounded-lg p-0.5 text-left"
+                    >
                       <span>View Full Profile</span>
                       <ArrowUpRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-                    </span>
+                    </button>
 
                     <div
-                      className="flex items-center gap-2 text-slate-400"
+                      className="relative z-10 flex items-center gap-2 text-slate-400"
                       onClick={(e) => e.stopPropagation()}
                     >
                       {linkedin && (
@@ -152,7 +148,7 @@ export const TeamPage: React.FC = () => {
                           href={linkedin}
                           target="_blank"
                           rel="noopener noreferrer"
-                          aria-label={`${mem.name} LinkedIn`}
+                          aria-label={`${mem.name} LinkedIn Profile`}
                           className="p-1 hover:text-indigo-950 transition-colors"
                         >
                           <Linkedin className="w-4 h-4" />
@@ -163,7 +159,7 @@ export const TeamPage: React.FC = () => {
                           href={twitter}
                           target="_blank"
                           rel="noopener noreferrer"
-                          aria-label={`${mem.name} Twitter`}
+                          aria-label={`${mem.name} Twitter Profile`}
                           className="p-1 hover:text-indigo-950 transition-colors"
                         >
                           <Twitter className="w-4 h-4" />
@@ -172,7 +168,7 @@ export const TeamPage: React.FC = () => {
                       {mem.email && (
                         <a
                           href={`mailto:${mem.email}`}
-                          aria-label={`Email ${mem.name}`}
+                          aria-label={`Send email to ${mem.name}`}
                           className="p-1 hover:text-indigo-950 transition-colors"
                         >
                           <Mail className="w-4 h-4" />
@@ -181,7 +177,7 @@ export const TeamPage: React.FC = () => {
                     </div>
                   </div>
                 </div>
-              </div>
+              </article>
             );
           })}
         </div>
@@ -199,19 +195,9 @@ export const TeamPage: React.FC = () => {
             {programLeads.map(mem => {
               const bioPreview = (mem.bio || '').trim();
               return (
-                <div
+                <article
                   key={mem.id}
-                  onClick={() => setSelectedMember(mem)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      setSelectedMember(mem);
-                    }
-                  }}
-                  tabIndex={0}
-                  role="button"
-                  aria-label={`Open full profile for ${mem.name}`}
-                  className="h-full bg-white rounded-3xl border border-slate-200 hover:border-indigo-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col group cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  className="h-full bg-white rounded-3xl border border-slate-200 hover:border-indigo-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col group relative"
                 >
                   <div className="aspect-square bg-slate-100 overflow-hidden relative shrink-0">
                     <img
@@ -247,24 +233,29 @@ export const TeamPage: React.FC = () => {
                     </div>
 
                     <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2">
-                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-950 group-hover:text-amber-700 transition-colors">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedMember(mem)}
+                        aria-haspopup="dialog"
+                        aria-label={`View full profile for ${mem.name}, ${mem.position}`}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-950 group-hover:text-amber-700 transition-colors cursor-pointer after:absolute after:inset-0 after:z-0 focus:outline-none focus:ring-2 focus:ring-indigo-400 rounded-lg p-0.5 text-left"
+                      >
                         <span>View Profile</span>
                         <ArrowUpRight className="w-3 h-3" />
-                      </span>
+                      </button>
 
                       {mem.email && (
                         <a
                           href={`mailto:${mem.email}`}
-                          onClick={(e) => e.stopPropagation()}
-                          aria-label={`Email ${mem.name}`}
-                          className="p-1 text-slate-400 hover:text-indigo-950 transition-colors"
+                          aria-label={`Send email to ${mem.name}`}
+                          className="relative z-10 p-1 text-slate-400 hover:text-indigo-950 transition-colors"
                         >
                           <Mail className="w-4 h-4" />
                         </a>
                       )}
                     </div>
                   </div>
-                </div>
+                </article>
               );
             })}
           </div>

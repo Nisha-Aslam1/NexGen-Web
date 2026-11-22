@@ -633,19 +633,9 @@ export const HomePage: React.FC = () => {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 items-stretch">
           {leadershipPreview.map(mem => (
-            <div
+            <article
               key={mem.id}
-              onClick={() => setSelectedMember(mem)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  setSelectedMember(mem);
-                }
-              }}
-              tabIndex={0}
-              role="button"
-              aria-label={`Open full profile for ${mem.name}`}
-              className="h-full bg-white rounded-3xl border border-slate-200 hover:border-indigo-200 overflow-hidden shadow-sm hover:shadow-md transition-all group flex flex-col cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              className="h-full bg-white rounded-3xl border border-slate-200 hover:border-indigo-200 overflow-hidden shadow-sm hover:shadow-md transition-all group flex flex-col relative"
             >
               <div className="aspect-square bg-slate-100 overflow-hidden relative shrink-0">
                 <img
@@ -678,11 +668,19 @@ export const HomePage: React.FC = () => {
                   </p>
                 </div>
                 <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] font-semibold text-indigo-950 group-hover:text-amber-700 transition-colors">
-                  <span>View Profile</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
+                  <button
+                    type="button"
+                    onClick={() => setSelectedMember(mem)}
+                    aria-haspopup="dialog"
+                    aria-label={`View full profile for ${mem.name}, ${mem.position}`}
+                    className="w-full flex items-center justify-between cursor-pointer after:absolute after:inset-0 after:z-0 focus:outline-none focus:ring-2 focus:ring-indigo-400 rounded-lg py-1 text-indigo-950 group-hover:text-amber-700 font-semibold"
+                  >
+                    <span>View Profile</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
-            </div>
+            </article>
           ))}
         </div>
       </section>
