@@ -302,18 +302,25 @@ export const SupportWidget: React.FC = () => {
           <div className="bg-slate-900 p-4 sm:p-5 text-white border-b border-slate-800">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
-                <img
-                  src="/logo.png"
-                  alt="NexGen Council"
-                  onError={(e) => {
-                    const img = e.currentTarget;
-                    if (!img.dataset.fallbackApplied) {
-                      img.dataset.fallbackApplied = '1';
-                      img.style.display = 'none';
-                    }
-                  }}
-                  className="h-10 w-10 rounded-full bg-white/10 p-1 object-cover border border-amber-400/40"
-                />
+                <picture>
+                  <source srcSet="/logo.webp" type="image/webp" />
+                  <img
+                    src="/logo.png"
+                    alt="NexGen Council"
+                    width={40}
+                    height={40}
+                    loading="lazy"
+                    decoding="async"
+                    onError={(e) => {
+                      const img = e.currentTarget;
+                      if (!img.dataset.fallbackApplied) {
+                        img.dataset.fallbackApplied = '1';
+                        img.style.display = 'none';
+                      }
+                    }}
+                    className="h-10 w-10 rounded-full bg-white/10 p-1 object-cover border border-amber-400/40"
+                  />
+                </picture>
                 <div>
                   <h3 className="font-serif text-base font-bold leading-tight">
                     NexGen Support Desk
@@ -770,19 +777,26 @@ export const SupportWidget: React.FC = () => {
         aria-label="Open Customer Support"
         className="bg-transparent border-none p-0 focus:outline-none transition-transform duration-200 hover:scale-105 active:scale-95 cursor-pointer"
       >
-        <img
-          src="/NexGen-Support-2.png"
-          alt="Support"
-          onError={(e) => {
-            const img = e.currentTarget;
-            if (!img.dataset.fallbackApplied) {
-              img.dataset.fallbackApplied = '1';
-              img.src = '/logo.png';
-              img.className = 'w-14 h-14 rounded-full object-contain bg-white p-1 shadow-xl border border-indigo-200 select-none';
-            }
-          }}
-          className="w-28 sm:w-36 h-auto object-contain drop-shadow-xl select-none"
-        />
+        <picture>
+          <source srcSet="/NexGen-Support-2.webp" type="image/webp" />
+          <img
+            src="/NexGen-Support-2.png"
+            alt="Customer Support"
+            width={144}
+            height={96}
+            loading="lazy"
+            decoding="async"
+            onError={(e) => {
+              const img = e.currentTarget;
+              if (!img.dataset.fallbackApplied) {
+                img.dataset.fallbackApplied = '1';
+                img.src = '/logo.png';
+                img.className = 'w-14 h-14 rounded-full object-contain bg-white p-1 shadow-xl border border-indigo-200 select-none';
+              }
+            }}
+            className="w-28 sm:w-36 h-auto object-contain drop-shadow-xl select-none"
+          />
+        </picture>
       </button>
     </div>
   );

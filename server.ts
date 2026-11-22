@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
+import compression from 'compression';
 import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs';
@@ -46,6 +47,15 @@ const PORT = 3000;
 
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+app.use(compression({
+  threshold: 1024,
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) {
+      return false;
+    }
+    return compression.filter(req, res);
+  }
+}));
 
 function resolveSessionSecret(): string {
   const envSecret = (process.env.SESSION_SECRET || '').trim();
@@ -2497,9 +2507,11 @@ async function startServer() {
   });
 
   app.use('/uploads', express.static(publicUploadsDir, {
+    maxAge: '7d',
     setHeaders: (res) => {
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
     }
   }));
 
@@ -2604,7 +2616,26 @@ async function startServer() {
     });
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath, { index: false }));
+    // Long-term immutable caching for Vite hashed production assets (/assets/*)
+    app.use('/assets', express.static(path.join(distPath, 'assets'), {
+      immutable: true,
+      maxAge: '1y',
+      setHeaders: (res) => {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    }));
+    // Static assets (images, webp, png, fonts, robots.txt, sitemap)
+    app.use(express.static(distPath, {
+      index: false,
+      maxAge: '1d',
+      setHeaders: (res, filePath) => {
+        if (/\.(png|jpe?g|webp|svg|ico|gif)$/i.test(filePath)) {
+          res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+        } else if (/\.(woff2?|ttf|eot)$/i.test(filePath)) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      }
+    }));
     app.get('*', (req, res) => {
       try {
         const indexPath = path.join(distPath, 'index.html');

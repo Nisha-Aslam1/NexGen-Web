@@ -229,23 +229,29 @@ export const HomePage: React.FC = () => {
             {/* Right Visual Card */}
             <div className="lg:col-span-5 relative">
               <div className="relative rounded-3xl overflow-hidden shadow-xl border border-slate-200/90 bg-white group flex flex-col justify-between">
-                <img
-                  src="/banner.png"
-                  alt="NexGen Women Empowerment and Youth Leadership Council official poster showcasing flagship community initiatives"
-                  loading="eager"
-                  fetchPriority="high"
-                  referrerPolicy="no-referrer"
-                  className="w-full h-auto object-contain block transition-transform duration-500 group-hover:scale-[1.01] cursor-pointer"
-                  onClick={() => setShowPosterModal(true)}
-                  onError={(e) => {
-                    const el = e.currentTarget;
-                    if (!el.dataset.fallbackApplied) {
-                      el.dataset.fallbackApplied = '1';
-                      el.src =
-                        'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=900&auto=format&fit=crop&q=80';
-                    }
-                  }}
-                />
+                <picture>
+                  <source srcSet="/banner.webp" type="image/webp" />
+                  <img
+                    src="/banner.png"
+                    width={1920}
+                    height={476}
+                    alt="NexGen Women Empowerment and Youth Leadership Council official poster showcasing flagship community initiatives"
+                    loading="eager"
+                    fetchPriority="high"
+                    decoding="async"
+                    referrerPolicy="no-referrer"
+                    className="w-full h-auto object-contain block transition-transform duration-500 group-hover:scale-[1.01] cursor-pointer"
+                    onClick={() => setShowPosterModal(true)}
+                    onError={(e) => {
+                      const el = e.currentTarget;
+                      if (!el.dataset.fallbackApplied) {
+                        el.dataset.fallbackApplied = '1';
+                        el.src =
+                          'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=900&auto=format&fit=crop&q=80';
+                      }
+                    }}
+                  />
+                </picture>
 
                 {/* Full-screen expand button */}
                 <button
@@ -278,6 +284,7 @@ export const HomePage: React.FC = () => {
                     }}
                     className="p-3 rounded-xl bg-indigo-950 text-white hover:bg-indigo-900 transition-colors shrink-0 cursor-pointer shadow-sm"
                     title="Apply to Cohort"
+                    aria-label="Apply to 30-Day Leadership Cohort"
                   >
                     <ArrowRight className="w-4 h-4" />
                   </button>
@@ -430,6 +437,10 @@ export const HomePage: React.FC = () => {
                   <img
                     src={prg.coverImage || '/banner.png'}
                     alt={prg.title}
+                    width={640}
+                    height={400}
+                    loading="lazy"
+                    decoding="async"
                     referrerPolicy="no-referrer"
                     onError={(e) => {
                       const el = e.currentTarget;
@@ -640,6 +651,10 @@ export const HomePage: React.FC = () => {
                 <img
                   src={mem.image || '/logo.png'}
                   alt={mem.name}
+                  width={384}
+                  height={384}
+                  loading="lazy"
+                  decoding="async"
                   referrerPolicy="no-referrer"
                   onError={(e) => {
                     const el = e.currentTarget;
@@ -708,6 +723,10 @@ export const HomePage: React.FC = () => {
                     <img
                       src={item.coverImage || '/banner.png'}
                       alt={item.title}
+                      width={640}
+                      height={360}
+                      loading="lazy"
+                      decoding="async"
                       referrerPolicy="no-referrer"
                       onError={(e) => {
                         const el = e.currentTarget;
@@ -796,6 +815,7 @@ export const HomePage: React.FC = () => {
             <button
               onClick={() => setSelectedProgram(null)}
               className="absolute top-5 right-5 text-slate-400 hover:text-slate-700 p-2 rounded-full cursor-pointer"
+              aria-label="Close program details modal"
             >
               ✕
             </button>
@@ -804,6 +824,10 @@ export const HomePage: React.FC = () => {
               <img
                 src={selectedProgram.coverImage || '/banner.png'}
                 alt={selectedProgram.title}
+                width={640}
+                height={360}
+                loading="lazy"
+                decoding="async"
                 referrerPolicy="no-referrer"
                 onError={(e) => {
                   const el = e.currentTarget;
@@ -950,17 +974,25 @@ export const HomePage: React.FC = () => {
                 onClick={() => setShowPosterModal(false)}
                 className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
                 title="Close modal"
+                aria-label="Close modal"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="overflow-auto max-h-[75vh] flex items-center justify-center bg-slate-50 rounded-2xl p-2 sm:p-4">
-              <img
-                src="/banner.png"
-                alt="NexGen Council Official Poster - Full"
-                className="w-full h-auto max-h-[70vh] object-contain rounded-xl shadow-xs"
-              />
+              <picture>
+                <source srcSet="/banner.webp" type="image/webp" />
+                <img
+                  src="/banner.png"
+                  width={1920}
+                  height={476}
+                  loading="lazy"
+                  decoding="async"
+                  alt="NexGen Council Official Poster - Full"
+                  className="w-full h-auto max-h-[70vh] object-contain rounded-xl shadow-xs"
+                />
+              </picture>
             </div>
 
             <div className="flex items-center justify-between pt-2">

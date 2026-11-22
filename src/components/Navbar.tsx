@@ -77,14 +77,21 @@ export const Navbar: React.FC = () => {
             aria-label="NexGen Council Home"
           >
             <div className="relative w-9 h-9 sm:w-10 sm:h-10 rounded-xl overflow-hidden bg-white p-1 border border-slate-200/90 shadow-2xs transition-transform duration-200 group-hover:scale-105 flex items-center justify-center shrink-0">
-              <img
-                src="/logo.png"
-                alt="NexGen Council Logo"
-                className="w-full h-full object-contain filter drop-shadow-2xs"
-                onError={(e) => {
-                  (e.target as HTMLElement).style.display = 'none';
-                }}
-              />
+              <picture>
+                <source srcSet="/logo.webp" type="image/webp" />
+                <img
+                  src="/logo.png"
+                  alt="NexGen Council Logo"
+                  width={40}
+                  height={40}
+                  loading="eager"
+                  decoding="async"
+                  className="w-full h-full object-contain filter drop-shadow-2xs"
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = 'none';
+                  }}
+                />
+              </picture>
             </div>
             <div className="flex flex-col justify-center">
               <span className="font-serif font-bold text-base sm:text-lg tracking-tight text-slate-900 group-hover:text-indigo-950 transition-colors leading-none whitespace-nowrap">

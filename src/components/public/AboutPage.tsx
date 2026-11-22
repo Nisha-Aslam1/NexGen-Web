@@ -329,13 +329,20 @@ export const AboutPage: React.FC = () => {
               <figure className="w-full flex flex-col justify-between rounded-2xl border border-stone-200 bg-slate-950 p-8 sm:p-10 text-center">
                 <div className="flex-1 flex items-center justify-center py-4">
                   {!logoFailed ? (
-                    <img
-                      src="/logo.png"
-                      alt="NexGen Women Empowerment & Youth Leadership Council Official Logo"
-                      referrerPolicy="no-referrer"
-                      onError={() => setLogoFailed(true)}
-                      className="w-44 h-44 sm:w-52 sm:h-52 object-contain"
-                    />
+                    <picture>
+                      <source srcSet="/logo.webp" type="image/webp" />
+                      <img
+                        src="/logo.png"
+                        alt="NexGen Women Empowerment & Youth Leadership Council Official Logo"
+                        width={208}
+                        height={208}
+                        loading="lazy"
+                        decoding="async"
+                        referrerPolicy="no-referrer"
+                        onError={() => setLogoFailed(true)}
+                        className="w-44 h-44 sm:w-52 sm:h-52 object-contain"
+                      />
+                    </picture>
                   ) : (
                     <div className="w-44 h-44 rounded-full border border-amber-400/30 bg-indigo-950 flex items-center justify-center">
                       <Compass className="w-16 h-16 text-amber-400" />
