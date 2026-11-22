@@ -19,7 +19,9 @@ import {
   MeetingMessage,
   MeetingAttendance,
   AdmissionStatus,
-  EmailLog
+  EmailLog,
+  SupportConversation,
+  SupportChatMessage
 } from '../src/types.ts';
 import { syncSchemaToMongo, loadOrSeedMongo, mongoUpsert, mongoDelete, mongoClearCollections, isMongoConnected } from './mongo.ts';
 
@@ -156,6 +158,7 @@ export interface DatabaseSchema {
   meetings?: Meeting[];
   meetingParticipants?: MeetingParticipant[];
   meetingMessages?: MeetingMessage[];
+  supportConversations?: SupportConversation[];
   minValidTokenIssuedAt?: number;
 }
 
@@ -582,7 +585,8 @@ function getSeedData(): DatabaseSchema {
     emailLogs: [],
     meetings: [],
     meetingParticipants: [],
-    meetingMessages: []
+    meetingMessages: [],
+    supportConversations: []
   };
 }
 
@@ -594,6 +598,7 @@ class Database {
     if (!this.data.meetingParticipants) this.data.meetingParticipants = [];
     if (!this.data.meetingMessages) this.data.meetingMessages = [];
     if (!this.data.emailLogs) this.data.emailLogs = [];
+    if (!this.data.supportConversations) this.data.supportConversations = [];
   }
 
   constructor() {
@@ -1658,6 +1663,172 @@ class Database {
     this.data.contacts = this.data.contacts.filter(c => c.id !== id);
     this.save();
     mongoDelete('contacts', id).catch(() => {});
+  }
+
+  // --- AI Support Widget 7-Day Conversation Memory & Admin Logs ---
+  purgeExpiredSupportConversations(): number {
+    this.ensureMeetingArrays();
+    const retentionMs = 7 * 24 * 60 * 60 * 1000;
+    const cutoffMs = Date.now() - retentionMs;
+    const prevList = this.data.supportConversations || [];
+    if (prevList.length === 0) return 0;
+
+    let changed = false;
+    let deletedCount = 0;
+    const surviving: SupportConversation[] = [];
+
+    for (const conv of prevList) {
+      const recentMsgs = (conv.messages || []).filter(m => {
+        const t = new Date(m.timestamp).getTime();
+        return !Number.isNaN(t) && t >= cutoffMs;
+      });
+      const updatedMs = new Date(conv.updatedAt || conv.createdAt).getTime();
+
+      if (recentMsgs.length === 0 || Number.isNaN(updatedMs) || updatedMs < cutoffMs) {
+        changed = true;
+        deletedCount++;
+        mongoDelete('supportConversations', conv.id).catch(() => {});
+        continue;
+      }
+
+      if (recentMsgs.length !== (conv.messages || []).length) {
+        changed = true;
+        const latestTs = recentMsgs[recentMsgs.length - 1]?.timestamp || conv.updatedAt;
+        const updatedConv: SupportConversation = {
+          ...conv,
+          messages: recentMsgs,
+          updatedAt: latestTs,
+          expiresAt: new Date(new Date(latestTs).getTime() + retentionMs).toISOString()
+        };
+        surviving.push(updatedConv);
+        mongoUpsert('supportConversations', updatedConv.id, updatedConv).catch(() => {});
+      } else {
+        surviving.push(conv);
+      }
+    }
+
+    if (changed) {
+      this.data.supportConversations = surviving;
+      this.save();
+    }
+    return deletedCount;
+  }
+
+  getSupportConversations(search?: string): SupportConversation[] {
+    this.purgeExpiredSupportConversations();
+    let list = [...(this.data.supportConversations || [])];
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase();
+      list = list.filter(
+        c =>
+          (c.visitorName || '').toLowerCase().includes(q) ||
+          (c.visitorEmail || '').toLowerCase().includes(q) ||
+          (c.visitorWhatsapp || '').toLowerCase().includes(q) ||
+          c.sessionId.toLowerCase().includes(q) ||
+          (c.messages || []).some(m => m.text.toLowerCase().includes(q))
+      );
+    }
+    return list.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }
+
+  getSupportConversationBySession(sessionId: string): SupportConversation | null {
+    this.purgeExpiredSupportConversations();
+    return (this.data.supportConversations || []).find(c => c.sessionId === sessionId) || null;
+  }
+
+  getSupportConversationById(id: string): SupportConversation | null {
+    this.purgeExpiredSupportConversations();
+    return (this.data.supportConversations || []).find(c => c.id === id) || null;
+  }
+
+  appendSupportExchange(params: {
+    sessionId: string;
+    userText: string;
+    assistantText: string;
+    visitorName?: string;
+    visitorEmail?: string;
+    visitorWhatsapp?: string;
+    escalatedToHuman?: boolean;
+    linkedContactId?: string;
+  }): SupportConversation {
+    this.purgeExpiredSupportConversations();
+    const now = Date.now();
+    const retentionMs = 7 * 24 * 60 * 60 * 1000;
+    const nowIso = new Date(now).toISOString();
+    const expiresAt = new Date(now + retentionMs).toISOString();
+
+    const userMsg: SupportChatMessage = {
+      id: `msg_u_${now}_${Math.random().toString(36).slice(2, 6)}`,
+      role: 'user',
+      text: params.userText,
+      timestamp: nowIso
+    };
+
+    const assistantMsg: SupportChatMessage = {
+      id: `msg_a_${now + 1}_${Math.random().toString(36).slice(2, 6)}`,
+      role: 'assistant',
+      text: params.assistantText,
+      timestamp: new Date(now + 1).toISOString(),
+      escalatedTicketId: params.linkedContactId
+    };
+
+    const list = this.data.supportConversations!;
+    const idx = list.findIndex(c => c.sessionId === params.sessionId);
+
+    if (idx !== -1) {
+      const existing = list[idx];
+      const updatedMsgs = [...existing.messages, userMsg, assistantMsg].slice(-100);
+      const updated: SupportConversation = {
+        ...existing,
+        visitorName: params.visitorName || existing.visitorName,
+        visitorEmail: params.visitorEmail || existing.visitorEmail,
+        visitorWhatsapp: params.visitorWhatsapp || existing.visitorWhatsapp,
+        escalatedToHuman: Boolean(params.escalatedToHuman || existing.escalatedToHuman),
+        linkedContactId: params.linkedContactId || existing.linkedContactId,
+        messages: updatedMsgs,
+        updatedAt: nowIso,
+        expiresAt
+      };
+      list[idx] = updated;
+      this.save();
+      mongoUpsert('supportConversations', updated.id, updated).catch(() => {});
+      return updated;
+    }
+
+    const created: SupportConversation = {
+      id: `conv_${now}_${Math.random().toString(36).slice(2, 6)}`,
+      sessionId: params.sessionId,
+      visitorName: params.visitorName,
+      visitorEmail: params.visitorEmail,
+      visitorWhatsapp: params.visitorWhatsapp,
+      escalatedToHuman: Boolean(params.escalatedToHuman),
+      linkedContactId: params.linkedContactId,
+      messages: [userMsg, assistantMsg],
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      expiresAt
+    };
+
+    list.unshift(created);
+    if (list.length > 500) {
+      const dropped = list.pop();
+      if (dropped) mongoDelete('supportConversations', dropped.id).catch(() => {});
+    }
+    this.save();
+    mongoUpsert('supportConversations', created.id, created).catch(() => {});
+    return created;
+  }
+
+  deleteSupportConversation(id: string): boolean {
+    this.ensureMeetingArrays();
+    const prevLen = this.data.supportConversations!.length;
+    this.data.supportConversations = this.data.supportConversations!.filter(c => c.id !== id);
+    if (this.data.supportConversations!.length < prevLen) {
+      this.save();
+      mongoDelete('supportConversations', id).catch(() => {});
+      return true;
+    }
+    return false;
   }
 
   // --- Settings ---

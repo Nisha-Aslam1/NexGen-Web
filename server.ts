@@ -39,6 +39,7 @@ import {
   isValidEmailAddress,
   isValidImageUrl
 } from './server/email.ts';
+import { handleSupportAiChat, SUPPORT_AI_MODEL } from './server/supportAi.ts';
 
 const app = express();
 const PORT = 3000;
@@ -1649,6 +1650,95 @@ app.delete(['/api/contact/:id', '/api/contacts/:id'], requireAuth(['ADMIN']), (r
   res.json({ ok: true });
 });
 
+// 10a. Support Widget Gemini 3.1 Flash Lite AI Concierge & 7-Day Chat Memory
+app.get('/api/support-ai/history', (req, res) => {
+  const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId.trim() : '';
+  if (!sessionId || sessionId.length > 100) {
+    return res.json({ messages: [], conversationId: null, model: SUPPORT_AI_MODEL });
+  }
+  const conv = db.getSupportConversationBySession(sessionId);
+  return res.json({
+    conversationId: conv?.id || null,
+    escalatedToHuman: Boolean(conv?.escalatedToHuman),
+    linkedContactId: conv?.linkedContactId || null,
+    expiresAt: conv?.expiresAt || null,
+    messages: conv?.messages || [],
+    model: SUPPORT_AI_MODEL
+  });
+});
+
+app.post('/api/support-ai/chat', async (req, res) => {
+  try {
+    const { sessionId, message } = req.body || {};
+    const cleanSession = typeof sessionId === 'string' ? sessionId.trim() : '';
+    const cleanMessage = typeof message === 'string' ? message.trim() : '';
+
+    if (!cleanSession || !cleanMessage) {
+      return res.status(400).json({ error: 'Session ID and message are required.' });
+    }
+    if (cleanMessage.length > 2000) {
+      return res.status(400).json({ error: 'Message exceeds 2,000 character limit.' });
+    }
+
+    const result = await handleSupportAiChat({
+      sessionId: cleanSession,
+      message: cleanMessage,
+      ipAddress: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown'
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    const rawMsg = String(err?.message || 'AI Assistant could not respond right now.');
+    const lower = rawMsg.toLowerCase();
+    const statusCode = lower.includes('not configured')
+      ? 503
+      : lower.includes('api_key_invalid') || lower.includes('permission_denied')
+      ? 403
+      : lower.includes('resource_exhausted') || lower.includes('429')
+      ? 429
+      : 500;
+    res.status(statusCode).json({ error: rawMsg });
+  }
+});
+
+app.get(
+  '/api/support-ai/conversations',
+  requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'COMMUNICATIONS_OFFICER', 'VIEWER']),
+  (req, res) => {
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+    const conversations = db.getSupportConversations(search);
+    res.json({
+      retentionDays: 7,
+      model: SUPPORT_AI_MODEL,
+      conversations
+    });
+  }
+);
+
+app.delete(
+  '/api/support-ai/conversations/:id',
+  requireAuth(['ADMIN', 'COMMUNICATIONS_OFFICER']),
+  (req, res) => {
+    const existing = db.getSupportConversationById(req.params.id);
+    const deleted = db.deleteSupportConversation(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Conversation not found.' });
+    }
+    const actor = (req as any).user;
+    db.logActivity({
+      userId: actor?.id || 'admin',
+      userName: actor?.name || 'Administrator',
+      userRole: actor?.role || 'ADMIN',
+      action: 'AI_CONVERSATION_DELETED',
+      entityType: 'SupportConversation',
+      entityId: req.params.id,
+      details: `Deleted AI support conversation ${req.params.id}${existing?.visitorName ? ` (${existing.visitorName})` : ''}`,
+      ipAddress: req.ip || 'unknown'
+    });
+    res.json({ ok: true });
+  }
+);
+
 // 10b. Admin Resend Email Dispatch, Sender Identity & Sent History
 app.get('/api/email/settings', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'COMMUNICATIONS_OFFICER', 'VIEWER']), (req, res) => {
   res.json(db.getEmailSenderConfig());
@@ -2499,6 +2589,19 @@ async function startServer() {
   } catch (mErr: any) {
     console.warn('[MongoDB] Init warning:', mErr?.message || mErr);
   }
+
+  // Purge any AI support conversations older than 7 days and schedule hourly cleanup
+  try {
+    const purged = db.purgeExpiredSupportConversations();
+    if (purged > 0) {
+      console.log(`[Support AI] Purged ${purged} expired conversation(s) older than 7 days.`);
+    }
+  } catch {}
+  setInterval(() => {
+    try {
+      db.purgeExpiredSupportConversations();
+    } catch {}
+  }, 60 * 60 * 1000);
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`NexGen Council Server running on http://0.0.0.0:${PORT}`);

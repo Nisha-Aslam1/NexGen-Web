@@ -166,10 +166,33 @@ export interface ContactMessage {
   phone?: string;
   whatsapp?: string;
   source?: 'Support Widget' | 'Contact Page';
+  aiConversationId?: string;
   subject: string;
   message: string;
   status: 'Unread' | 'Read' | 'Replied';
   createdAt: string;
+}
+
+export interface SupportChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  timestamp: string;
+  escalatedTicketId?: string;
+}
+
+export interface SupportConversation {
+  id: string;
+  sessionId: string;
+  visitorName?: string;
+  visitorEmail?: string;
+  visitorWhatsapp?: string;
+  escalatedToHuman?: boolean;
+  linkedContactId?: string;
+  messages: SupportChatMessage[];
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
 }
 
 export interface WebsiteSettings {
