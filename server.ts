@@ -18,6 +18,7 @@ import {
   recordAnalyticsEvent,
   recordVisitorHeartbeat,
   getRealtimeInsights,
+  AnalyticsRange,
   mongoSaveMedia,
   mongoGetMedia,
   mongoRestoreAllMediaToDisk
@@ -2050,19 +2051,47 @@ app.post('/api/upload', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANA
   }
 });
 
-// 15. Real-time Analytics & Visitor Tracking (MongoDB-Backed)
+// 15. Real-time Analytics & Visitor Tracking (MongoDB + Persistent Fallback)
+const sanitizeTelemetryStr = (val: unknown, maxLen = 120): string | undefined => {
+  if (typeof val !== 'string') return undefined;
+  const cleaned = val.replace(/[\r\n\t<>]/g, ' ').trim();
+  return cleaned ? cleaned.slice(0, maxLen) : undefined;
+};
+
+const VALID_ANALYTICS_RANGES: AnalyticsRange[] = ['1h', '24h', '7d', '30d', 'all'];
+
+function parseAnalyticsQuery(req: Request): { range: AnalyticsRange; includeAdmin: boolean } {
+  const rawRange = String(req.query.range || '24h').toLowerCase() as AnalyticsRange;
+  const range: AnalyticsRange = VALID_ANALYTICS_RANGES.includes(rawRange) ? rawRange : '24h';
+  const includeAdmin = String(req.query.includeAdmin || '').toLowerCase() === 'true';
+  return { range, includeAdmin };
+}
+
 app.post('/api/analytics/track', async (req, res) => {
   try {
-    const { sessionId, path: reqPath, referrer, device, browser, os, screenWidth } = req.body;
+    const body = req.body || {};
+    const sessionId = sanitizeTelemetryStr(body.sessionId, 80);
     if (sessionId) {
       await recordAnalyticsEvent({
         sessionId,
-        path: reqPath || '/',
-        referrer,
-        device,
-        browser,
-        os,
-        screenWidth: Number(screenWidth) || undefined,
+        visitorId: sanitizeTelemetryStr(body.visitorId, 80),
+        isReturning: Boolean(body.isReturning),
+        isAdmin: typeof body.isAdmin === 'boolean' ? body.isAdmin : undefined,
+        path: sanitizeTelemetryStr(body.path, 160) || '/',
+        referrer: sanitizeTelemetryStr(body.referrer, 300),
+        referrerDomain: sanitizeTelemetryStr(body.referrerDomain, 120),
+        trafficSource: sanitizeTelemetryStr(body.trafficSource, 60),
+        utmSource: sanitizeTelemetryStr(body.utmSource, 80),
+        utmMedium: sanitizeTelemetryStr(body.utmMedium, 80),
+        utmCampaign: sanitizeTelemetryStr(body.utmCampaign, 100),
+        device: sanitizeTelemetryStr(body.device, 40),
+        browser: sanitizeTelemetryStr(body.browser, 50),
+        os: sanitizeTelemetryStr(body.os, 50),
+        screenWidth: Number(body.screenWidth) || undefined,
+        screenResolution: sanitizeTelemetryStr(body.screenResolution, 30),
+        viewport: sanitizeTelemetryStr(body.viewport, 30),
+        timezone: sanitizeTelemetryStr(body.timezone, 80),
+        language: sanitizeTelemetryStr(body.language, 30),
         ip: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress,
         timestamp: new Date().toISOString()
       });
@@ -2075,9 +2104,14 @@ app.post('/api/analytics/track', async (req, res) => {
 
 app.post('/api/analytics/heartbeat', async (req, res) => {
   try {
-    const { sessionId, path: reqPath } = req.body;
+    const body = req.body || {};
+    const sessionId = sanitizeTelemetryStr(body.sessionId, 80);
     if (sessionId) {
-      await recordVisitorHeartbeat(sessionId, reqPath || '/');
+      await recordVisitorHeartbeat(
+        sessionId,
+        sanitizeTelemetryStr(body.path, 160) || '/',
+        Number(body.durationDeltaSec) || 0
+      );
     }
     res.json({ ok: true });
   } catch {
@@ -2087,10 +2121,75 @@ app.post('/api/analytics/heartbeat', async (req, res) => {
 
 app.get('/api/analytics/realtime', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR', 'MEETING_HOST', 'VIEWER']), async (req, res) => {
   try {
-    const appsCount = db.getApplications({ perPage: 1000 }).total;
-    const volsCount = db.getVolunteers().length;
-    const insights = await getRealtimeInsights(appsCount, volsCount);
+    const { range, includeAdmin } = parseAnalyticsQuery(req);
+    const orgContext = db.getAnalyticsOrgContext();
+    const insights = await getRealtimeInsights(orgContext.totalApplications, orgContext.totalVolunteers, {
+      range,
+      includeAdmin,
+      orgContext
+    });
     res.json(insights);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/analytics/export', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR', 'MEETING_HOST', 'VIEWER']), async (req, res) => {
+  try {
+    const { range, includeAdmin } = parseAnalyticsQuery(req);
+    const format = String(req.query.format || 'csv').toLowerCase();
+    const orgContext = db.getAnalyticsOrgContext();
+    const insights = await getRealtimeInsights(orgContext.totalApplications, orgContext.totalVolunteers, {
+      range,
+      includeAdmin,
+      orgContext
+    });
+
+    if (format === 'json') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="nexgen-analytics-${range}.json"`);
+      return res.send(JSON.stringify(insights, null, 2));
+    }
+
+    const csvEscape = (v: unknown) => {
+      const s = String(v ?? '');
+      // Guard CSV formula injection & wrap commas/quotes cleanly
+      const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+      return `"${safe.replace(/"/g, '""')}"`;
+    };
+
+    const lines: string[] = [];
+    lines.push('SECTION,METRIC,VALUE,EXTRA');
+    lines.push(['Summary', 'Timeframe', insights.rangeMeta?.range, insights.rangeMeta?.generatedAt].map(csvEscape).join(','));
+    lines.push(['Summary', 'Scope', includeAdmin ? 'All Traffic (incl. Admin)' : 'Public Website Only', insights.rangeMeta?.storageMode].map(csvEscape).join(','));
+    lines.push(['Summary', 'Live Active Visitors', insights.activeVisitors, `Public: ${insights.activePublicVisitors} | Admin: ${insights.activeAdminVisitors}`].map(csvEscape).join(','));
+    lines.push(['Summary', 'Impressions (Selected Range)', insights.rangePageViews, `All-time: ${insights.totalPageViews}`].map(csvEscape).join(','));
+    lines.push(['Summary', 'Unique Sessions (Selected Range)', insights.engagement?.rangeUniqueSessions, `Unique Visitors: ${insights.engagement?.rangeUniqueVisitors}`].map(csvEscape).join(','));
+    lines.push(['Summary', 'Avg Session Duration (sec)', insights.engagement?.avgSessionDurationSec, `Pages/Session: ${insights.engagement?.avgPagesPerSession}`].map(csvEscape).join(','));
+    lines.push(['Summary', 'Bounce Rate (%)', insights.engagement?.bounceRate, `Returning Rate: ${insights.engagement?.returningRate}%`].map(csvEscape).join(','));
+    lines.push(['Summary', 'Intake Conversion Rate (%)', insights.conversionRate, `Apps: ${orgContext.totalApplications} | Approved: ${orgContext.approvedApplications}`].map(csvEscape).join(','));
+
+    lines.push('');
+    lines.push('TOP PAGES,PATH,VIEWS,UNIQUE SESSIONS / AVG DWELL SEC');
+    for (const p of insights.topPages || []) {
+      lines.push(['Top Page', p.page, p.views, `Sessions: ${p.uniqueVisitors} | Share: ${p.percentage}% | Avg Dwell: ${p.avgDwellSec}s`].map(csvEscape).join(','));
+    }
+
+    lines.push('');
+    lines.push('ACQUISITION CHANNELS,CHANNEL,IMPRESSIONS,SESSIONS / SHARE');
+    for (const ch of insights.acquisition?.channels || []) {
+      lines.push(['Channel', ch.name, ch.count, `Sessions: ${ch.sessions} | Share: ${ch.percentage}%`].map(csvEscape).join(','));
+    }
+
+    lines.push('');
+    lines.push('RECENT TELEMETRY EVENTS,TIMESTAMP,ROUTE,DETAILS');
+    for (const ev of insights.recentActivity || []) {
+      lines.push(['Event', ev.timestamp, ev.path, `${ev.device} | ${ev.browser} | ${ev.os} | ${ev.trafficSource || 'Direct'} | ${ev.timezone || ''}`].map(csvEscape).join(','));
+    }
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="nexgen-analytics-${range}.csv"`);
+    res.send('\uFEFF' + lines.join('\r\n'));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

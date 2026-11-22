@@ -1820,6 +1820,83 @@ class Database {
     };
   }
 
+  getAnalyticsOrgContext() {
+    this.ensureMeetingArrays();
+    const apps = this.data.applications || [];
+    const vols = this.data.volunteers || [];
+    const contacts = this.data.contacts || [];
+    const meetings = this.data.meetings || [];
+    const emailLogs = this.data.emailLogs || [];
+    const nowMs = Date.now();
+    const oneDayAgoMs = nowMs - 24 * 60 * 60 * 1000;
+
+    const pendingApplications = apps.filter(a => a.status === 'Pending').length;
+    const underReviewApplications = apps.filter(a => a.status === 'Under Review').length;
+    const approvedApplications = apps.filter(a => a.status === 'Approved').length;
+    const rejectedApplications = apps.filter(a => a.status === 'Rejected').length;
+
+    const activeVolunteers = vols.filter(v => v.status === 'Active').length;
+    const unreadInquiries = contacts.filter(c => c.status === 'Unread').length;
+    const widgetInquiries = contacts.filter(c => c.source === 'Support Widget').length;
+    const contactPageInquiries = contacts.filter(c => c.source !== 'Support Widget').length;
+
+    const liveMeetings = meetings.filter(m => m.status === 'Active').length;
+    const recentEmailLogs24h = emailLogs.filter(e => {
+      const t = new Date(e.sentAt).getTime();
+      return !Number.isNaN(t) && t >= oneDayAgoMs;
+    }).length;
+
+    const interestCounts: Record<string, number> = {};
+    const cityCounts: Record<string, number> = {};
+    apps.forEach(a => {
+      (a.interestAreas || []).forEach(ia => {
+        if (ia) interestCounts[ia] = (interestCounts[ia] || 0) + 1;
+      });
+      const rawCity = (a.city || '').trim();
+      if (rawCity) {
+        const normalizedCity = rawCity.charAt(0).toUpperCase() + rawCity.slice(1);
+        cityCounts[normalizedCity] = (cityCounts[normalizedCity] || 0) + 1;
+      }
+    });
+
+    vols.forEach(v => {
+      const rawCity = (v.city || '').trim();
+      if (rawCity && apps.length === 0) {
+        const normalizedCity = rawCity.charAt(0).toUpperCase() + rawCity.slice(1);
+        cityCounts[normalizedCity] = (cityCounts[normalizedCity] || 0) + 1;
+      }
+    });
+
+    return {
+      totalApplications: apps.length,
+      pendingApplications,
+      underReviewApplications,
+      approvedApplications,
+      rejectedApplications,
+      totalVolunteers: vols.length,
+      activeVolunteers,
+      totalInquiries: contacts.length,
+      unreadInquiries,
+      widgetInquiries,
+      contactPageInquiries,
+      totalPrograms: (this.data.programs || []).length,
+      totalEvents: (this.data.events || []).length,
+      totalNews: (this.data.news || []).length,
+      totalMeetings: meetings.length,
+      liveMeetings,
+      totalEmailsSent: emailLogs.length,
+      recentEmailLogs24h,
+      interestDistribution: Object.entries(interestCounts)
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 6),
+      cityDistribution: Object.entries(cityCounts)
+        .map(([city, count]) => ({ city, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 6)
+    };
+  }
+
   // ----------------------------------------------------
   // SELF-HOSTED JITSI MEETINGS ENGINE
   // ----------------------------------------------------
