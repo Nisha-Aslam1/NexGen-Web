@@ -1563,16 +1563,41 @@ app.delete('/api/gallery/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNI
   res.json({ ok: true });
 });
 
-// 10. Contact
-app.post(['/api/contact', '/api/contacts'], (req, res) => {
-  const { name, email, phone, whatsapp, source, subject, message } = req.body || {};
+// 10. Contact & Support Widget Inquiries
+app.post(['/api/contact', '/api/contacts', '/api/support-widget'], (req, res) => {
+  const { name, email, phone, whatsapp, source, channel, subject, message } = req.body || {};
   const cleanName = typeof name === 'string' ? name.trim() : '';
   const cleanEmail = typeof email === 'string' ? email.trim() : '';
+  const cleanSubject = (typeof subject === 'string' && subject.trim()) ? subject.trim() : 'General Inquiry';
   const cleanMessage = typeof message === 'string' ? message.trim() : '';
   const cleanPhone = typeof phone === 'string' ? phone.trim() : '';
-  const cleanWhatsapp = typeof whatsapp === 'string' ? whatsapp.trim() : cleanPhone;
-  const normalizedSource: 'Support Widget' | 'Contact Page' =
-    source === 'Support Widget' ? 'Support Widget' : 'Contact Page';
+  const explicitWhatsapp = typeof whatsapp === 'string' ? whatsapp.trim() : '';
+
+  const querySource = typeof req.query?.source === 'string' ? req.query.source.trim().toLowerCase() : '';
+  const bodySource = typeof source === 'string' ? source.trim().toLowerCase() : '';
+  const bodyChannel = typeof channel === 'string' ? channel.trim().toLowerCase() : '';
+  const rawOriginHint = bodySource || bodyChannel || querySource;
+
+  const widgetOnlySubjects = [
+    'Certificate / Cohort Verification',
+    'Volunteer / Fellowship Application',
+    'Event / Meeting Access Issue',
+    'Website / Portal Bug Report'
+  ];
+
+  let normalizedSource: 'Support Widget' | 'Contact Page' = 'Contact Page';
+  if (req.path === '/api/support-widget' || rawOriginHint.includes('widget')) {
+    normalizedSource = 'Support Widget';
+  } else if (rawOriginHint.includes('contact')) {
+    normalizedSource = 'Contact Page';
+  } else if (explicitWhatsapp.length > 0 || widgetOnlySubjects.includes(cleanSubject)) {
+    normalizedSource = 'Support Widget';
+  }
+
+  const cleanWhatsapp =
+    normalizedSource === 'Support Widget'
+      ? (explicitWhatsapp || cleanPhone)
+      : explicitWhatsapp;
 
   if (!cleanName || !cleanEmail || !cleanMessage) {
     return res.status(400).json({ error: 'Name, email, and message are required.' });
@@ -1584,10 +1609,10 @@ app.post(['/api/contact', '/api/contacts'], (req, res) => {
   const contact = db.createContact({
     name: cleanName,
     email: cleanEmail,
-    phone: cleanWhatsapp || cleanPhone || undefined,
+    phone: cleanPhone || cleanWhatsapp || undefined,
     whatsapp: cleanWhatsapp || undefined,
     source: normalizedSource,
-    subject: (typeof subject === 'string' && subject.trim()) ? subject.trim() : 'General Inquiry',
+    subject: cleanSubject,
     message: cleanMessage
   });
   db.logActivity({
@@ -1597,10 +1622,15 @@ app.post(['/api/contact', '/api/contacts'], (req, res) => {
     action: 'CONTACT_SUBMITTED',
     entityType: 'ContactMessage',
     entityId: contact.id,
-    details: `Inquiry received via ${normalizedSource} from ${cleanName} (${cleanEmail}): "${contact.subject}"`,
+    details: `Inquiry received via ${normalizedSource} from ${cleanName} (${cleanEmail}${cleanWhatsapp ? `, WhatsApp: ${cleanWhatsapp}` : ''}): "${contact.subject}"`,
     ipAddress: req.ip || 'unknown'
   });
-  res.status(201).json({ ok: true, message: 'Message sent successfully. Our team will contact you shortly.' });
+  res.status(201).json({
+    ok: true,
+    id: contact.id,
+    source: contact.source,
+    message: 'Message sent successfully. Our team will contact you shortly.'
+  });
 });
 
 app.get(['/api/contact', '/api/contacts'], requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'COMMUNICATIONS_OFFICER', 'VIEWER']), (req, res) => {
@@ -2343,7 +2373,10 @@ async function startServer() {
         const ga = process.env.GA_TRACKING_ID || settings.googleAnalyticsId;
         const html = injectSeoIntoHtml(template, metadata, siteUrl, gsc, ga);
         const statusCode = metadata.title.includes('404') ? 404 : 200;
-        res.status(statusCode).set({ 'Content-Type': 'text/html; charset=utf-8' }).send(html);
+        res.status(statusCode).set({
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store, no-cache, must-revalidate'
+        }).send(html);
       } catch (err: any) {
         res.status(500).send('Internal Server Error: ' + err.message);
       }

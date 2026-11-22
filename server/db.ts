@@ -1598,15 +1598,43 @@ class Database {
   }
 
   // --- Contacts ---
+  private normalizeContactSource(
+    contact: Partial<ContactMessage>
+  ): 'Support Widget' | 'Contact Page' {
+    const rawSource = typeof contact.source === 'string' ? contact.source.trim().toLowerCase() : '';
+    if (rawSource.includes('widget')) return 'Support Widget';
+    if (rawSource.includes('contact')) return 'Contact Page';
+
+    const hasWhatsapp = typeof contact.whatsapp === 'string' && contact.whatsapp.trim().length > 0;
+    if (hasWhatsapp) return 'Support Widget';
+
+    const widgetOnlySubjects = [
+      'Certificate / Cohort Verification',
+      'Volunteer / Fellowship Application',
+      'Event / Meeting Access Issue',
+      'Website / Portal Bug Report'
+    ];
+    if (contact.subject && widgetOnlySubjects.includes(contact.subject.trim())) {
+      return 'Support Widget';
+    }
+
+    return 'Contact Page';
+  }
+
   getContacts() {
-    return [...this.data.contacts].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+    return [...this.data.contacts]
+      .map(c => ({
+        ...c,
+        source: this.normalizeContactSource(c)
+      }))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   createContact(contact: Omit<ContactMessage, 'id' | 'status' | 'createdAt'>) {
+    const normalizedSource = this.normalizeContactSource(contact);
     const newMsg: ContactMessage = {
       ...contact,
+      source: normalizedSource,
       id: `cnt_${Date.now()}`,
       status: 'Unread',
       createdAt: new Date().toISOString()

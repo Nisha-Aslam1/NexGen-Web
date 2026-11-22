@@ -62,7 +62,7 @@ export const ContactPage: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      const res = await fetch('/api/contact', {
+      const res = await fetch('/api/contact?source=contact-page', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -75,7 +75,8 @@ export const ContactPage: React.FC = () => {
           phone: formData.phone.trim(),
           subject: formData.subject,
           message: formData.message.trim(),
-          source: 'Contact Page'
+          source: 'Contact Page',
+          channel: 'contact_page'
         })
       });
 

@@ -99,7 +99,7 @@ export const SupportWidget: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      const res = await fetch('/api/contact', {
+      const res = await fetch('/api/support-widget', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -113,7 +113,8 @@ export const SupportWidget: React.FC = () => {
           whatsapp: cleanWhatsapp,
           subject: formData.subject,
           message: cleanMessage,
-          source: 'Support Widget'
+          source: 'Support Widget',
+          channel: 'support_widget'
         })
       });
 

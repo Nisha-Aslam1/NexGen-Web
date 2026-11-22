@@ -14,8 +14,20 @@ import { ContactMessage } from '../../types.ts';
 
 type SourceFilter = 'All' | 'Support Widget' | 'Contact Page';
 
+const WIDGET_ONLY_SUBJECTS = [
+  'Certificate / Cohort Verification',
+  'Volunteer / Fellowship Application',
+  'Event / Meeting Access Issue',
+  'Website / Portal Bug Report'
+];
+
 function getMessageSource(msg: ContactMessage): 'Support Widget' | 'Contact Page' {
-  return msg.source === 'Support Widget' ? 'Support Widget' : 'Contact Page';
+  const raw = typeof msg.source === 'string' ? msg.source.trim().toLowerCase() : '';
+  if (raw.includes('widget')) return 'Support Widget';
+  if (raw.includes('contact')) return 'Contact Page';
+  if (typeof msg.whatsapp === 'string' && msg.whatsapp.trim().length > 0) return 'Support Widget';
+  if (msg.subject && WIDGET_ONLY_SUBJECTS.includes(msg.subject.trim())) return 'Support Widget';
+  return 'Contact Page';
 }
 
 function isUnreadStatus(status: string | undefined): boolean {
@@ -90,14 +102,16 @@ export const AdminContacts: React.FC = () => {
   const sourceCounts = useMemo(() => {
     let widget = 0;
     let contact = 0;
+    let unread = 0;
     for (const msg of messages) {
+      if (isUnreadStatus(msg.status)) unread++;
       if (getMessageSource(msg) === 'Support Widget') {
         widget++;
       } else {
         contact++;
       }
     }
-    return { all: messages.length, widget, contact };
+    return { all: messages.length, widget, contact, unread };
   }, [messages]);
 
   const filteredMessages = useMemo(() => {
@@ -138,6 +152,67 @@ export const AdminContacts: React.FC = () => {
           <RefreshCw className={`w-3.5 h-3.5 text-amber-400 ${loading ? 'animate-spin' : ''}`} />
           <span>Refresh Inbox</span>
         </button>
+      </div>
+
+      {/* Source Breakdown Summary Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <button
+          type="button"
+          onClick={() => setSourceFilter('All')}
+          className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
+            sourceFilter === 'All'
+              ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+              : 'bg-white text-slate-900 border-slate-200 hover:border-slate-300'
+          }`}
+        >
+          <p className={`text-[11px] font-bold uppercase tracking-wider ${sourceFilter === 'All' ? 'text-slate-300' : 'text-slate-500'}`}>
+            Total Inquiries
+          </p>
+          <p className="text-2xl font-bold mt-1">{sourceCounts.all}</p>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setSourceFilter('Support Widget')}
+          className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
+            sourceFilter === 'Support Widget'
+              ? 'bg-amber-50 text-amber-950 border-amber-400 shadow-sm'
+              : 'bg-white text-slate-900 border-slate-200 hover:border-amber-300'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-amber-800">
+              Support Widget
+            </p>
+            <Headphones className="w-4 h-4 text-amber-600" />
+          </div>
+          <p className="text-2xl font-bold mt-1 text-amber-950">{sourceCounts.widget}</p>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setSourceFilter('Contact Page')}
+          className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
+            sourceFilter === 'Contact Page'
+              ? 'bg-indigo-50 text-indigo-950 border-indigo-400 shadow-sm'
+              : 'bg-white text-slate-900 border-slate-200 hover:border-indigo-300'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-800">
+              Contact Page
+            </p>
+            <Globe className="w-4 h-4 text-indigo-600" />
+          </div>
+          <p className="text-2xl font-bold mt-1 text-indigo-950">{sourceCounts.contact}</p>
+        </button>
+
+        <div className="p-4 rounded-2xl border border-slate-200 bg-white">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">
+            Unread Queue
+          </p>
+          <p className="text-2xl font-bold mt-1 text-slate-900">{sourceCounts.unread}</p>
+        </div>
       </div>
 
       {/* Source Filters & Search Bar */}
@@ -220,11 +295,25 @@ export const AdminContacts: React.FC = () => {
                       }`}
                     >
                       <td className="py-3.5 px-4">
-                        <strong className="text-slate-900 block text-xs">{msg.name}</strong>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <strong className="text-slate-900 text-xs">{msg.name}</strong>
+                          <span
+                            className={`md:hidden inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold border ${
+                              src === 'Support Widget'
+                                ? 'bg-amber-100 text-amber-950 border-amber-200'
+                                : 'bg-indigo-50 text-indigo-950 border-indigo-200'
+                            }`}
+                          >
+                            {src}
+                          </span>
+                        </div>
                         <span className="text-[11px] text-slate-500 block">{msg.email}</span>
                         {contactNumber && (
                           <div className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-emerald-700 font-semibold">
                             <MessageCircle className="w-3 h-3 shrink-0" />
+                            <span className="text-[10px] text-slate-500 font-medium">
+                              {src === 'Support Widget' || msg.whatsapp ? 'WhatsApp:' : 'Phone:'}
+                            </span>
                             {waHref ? (
                               <a
                                 href={waHref}

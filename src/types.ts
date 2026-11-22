@@ -265,6 +265,7 @@ export interface EmailButton {
   url: string;
   style?: 'amber' | 'primary' | 'outline';
   align?: 'left' | 'center' | 'right';
+  placement?: 'top' | 'inline' | 'bottom';
 }
 
 export interface EmailLog {

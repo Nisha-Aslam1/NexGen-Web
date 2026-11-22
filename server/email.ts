@@ -445,60 +445,117 @@ export function sanitizeEmailButtons(
       item.style === 'primary' || item.style === 'outline' ? item.style : 'amber';
     const align: EmailButton['align'] =
       item.align === 'left' || item.align === 'right' ? item.align : 'center';
+    const placement: EmailButton['placement'] =
+      item.placement === 'top' || item.placement === 'inline' ? item.placement : 'bottom';
+    const safeId =
+      typeof item.id === 'string' && item.id.trim()
+        ? item.id.trim().replace(/[^a-zA-Z0-9_-]/g, '') || `btn_${i + 1}`
+        : `btn_${i + 1}`;
 
     valid.push({
-      id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `btn_${i + 1}`,
+      id: safeId,
       label: cleanLabel,
       url: safeUrl,
       style,
-      align
+      align,
+      placement
     });
   }
 
   return { valid, invalidCount };
 }
 
+function renderSingleEmailButtonHtml(btn: EmailButton): string {
+  const safeUrl = escapeHtml(btn.url);
+  const safeLabel = escapeHtml(btn.label);
+  const align = btn.align || 'center';
+
+  let tdStyle = 'background-color: #f59e0b; border-radius: 10px;';
+  let aStyle =
+    'display: inline-block; padding: 12px 26px; font-size: 14px; font-weight: 700; color: #0f172a; text-decoration: none; border-radius: 10px; mso-padding-alt: 0;';
+
+  if (btn.style === 'primary') {
+    tdStyle = 'background-color: #4f46e5; border-radius: 10px;';
+    aStyle =
+      'display: inline-block; padding: 12px 26px; font-size: 14px; font-weight: 700; color: #ffffff; text-decoration: none; border-radius: 10px; mso-padding-alt: 0;';
+  } else if (btn.style === 'outline') {
+    tdStyle = 'background-color: transparent; border: 2px solid #f59e0b; border-radius: 10px;';
+    aStyle =
+      'display: inline-block; padding: 10px 24px; font-size: 14px; font-weight: 700; color: #fbbf24; text-decoration: none; border-radius: 10px; mso-padding-alt: 0;';
+  }
+
+  return `
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 16px 0 10px 0;">
+      <tr>
+        <td align="${align}">
+          <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+            <tr>
+              <td align="center" style="${tdStyle}">
+                <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" style="${aStyle}">
+                  ${safeLabel}
+                </a>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>`;
+}
+
 function renderEmailButtonsHtml(buttons: EmailButton[]): string {
   if (!buttons || buttons.length === 0) return '';
+  return buttons.map(renderSingleEmailButtonHtml).join('\n');
+}
 
-  return buttons
-    .map(btn => {
-      const safeUrl = escapeHtml(btn.url);
-      const safeLabel = escapeHtml(btn.label);
-      const align = btn.align || 'center';
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
-      let tdStyle = 'background-color: #f59e0b; border-radius: 10px;';
-      let aStyle =
-        'display: inline-block; padding: 12px 26px; font-size: 14px; font-weight: 700; color: #0f172a; text-decoration: none; border-radius: 10px; mso-padding-alt: 0;';
+function applyButtonPlacements(
+  bodyHtml: string,
+  allButtons: EmailButton[]
+): { topButtonsHtml: string; processedBodyHtml: string; bottomButtonsHtml: string } {
+  const topButtons: EmailButton[] = [];
+  const bottomButtons: EmailButton[] = [];
+  let processedBodyHtml = bodyHtml || '';
 
-      if (btn.style === 'primary') {
-        tdStyle = 'background-color: #4f46e5; border-radius: 10px;';
-        aStyle =
-          'display: inline-block; padding: 12px 26px; font-size: 14px; font-weight: 700; color: #ffffff; text-decoration: none; border-radius: 10px; mso-padding-alt: 0;';
-      } else if (btn.style === 'outline') {
-        tdStyle = 'background-color: transparent; border: 2px solid #f59e0b; border-radius: 10px;';
-        aStyle =
-          'display: inline-block; padding: 10px 24px; font-size: 14px; font-weight: 700; color: #fbbf24; text-decoration: none; border-radius: 10px; mso-padding-alt: 0;';
+  for (const btn of allButtons) {
+    const safeId = escapeRegExp(btn.id);
+    const tokenPattern = new RegExp(`\\[\\[BUTTON:${safeId}\\]\\]`, 'g');
+    const wrappedTokenPattern = new RegExp(
+      `<(?:p|div)[^>]*>\\s*\\[\\[BUTTON:${safeId}\\]\\]\\s*(?:<br\\s*\\/?>\\s*)*<\\/(?:p|div)>`,
+      'gi'
+    );
+
+    const hasInlineToken = tokenPattern.test(processedBodyHtml);
+    tokenPattern.lastIndex = 0;
+
+    if (btn.placement === 'inline' || hasInlineToken) {
+      if (hasInlineToken) {
+        const singleBtnHtml = renderSingleEmailButtonHtml(btn);
+        processedBodyHtml = processedBodyHtml.replace(wrappedTokenPattern, singleBtnHtml);
+        processedBodyHtml = processedBodyHtml.replace(tokenPattern, singleBtnHtml);
+      } else {
+        // Fallback if inline was chosen but marker was removed from message text
+        bottomButtons.push(btn);
       }
+    } else if (btn.placement === 'top') {
+      topButtons.push(btn);
+    } else {
+      bottomButtons.push(btn);
+    }
+  }
 
-      return `
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 18px 0 6px 0;">
-          <tr>
-            <td align="${align}">
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0">
-                <tr>
-                  <td align="center" style="${tdStyle}">
-                    <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" style="${aStyle}">
-                      ${safeLabel}
-                    </a>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>`;
-    })
-    .join('\n');
+  // Strip any leftover orphan button markers whose buttons were deleted
+  processedBodyHtml = processedBodyHtml
+    .replace(/<(?:p|div)[^>]*>\s*\[\[BUTTON:[a-zA-Z0-9_-]+\]\]\s*(?:<br\s*\/?>\s*)*<\/(?:p|div)>/gi, '')
+    .replace(/\[\[BUTTON:[a-zA-Z0-9_-]+\]\]/g, '');
+
+  return {
+    topButtonsHtml: renderEmailButtonsHtml(topButtons),
+    processedBodyHtml,
+    bottomButtonsHtml: renderEmailButtonsHtml(bottomButtons)
+  };
 }
 
 export function buildNexGenEmailTemplate(
@@ -521,7 +578,7 @@ export function buildNexGenEmailTemplate(
   const allImages = Array.isArray(options?.images) ? options!.images : [];
   const allButtons = Array.isArray(options?.buttons) ? options!.buttons : [];
   const topImagesHtml = renderEmailImagesHtml(allImages, 'top');
-  const buttonsHtml = renderEmailButtonsHtml(allButtons);
+  const { topButtonsHtml, processedBodyHtml, bottomButtonsHtml } = applyButtonPlacements(bodyHtml, allButtons);
   const bottomImagesHtml = renderEmailImagesHtml(allImages, 'bottom');
 
   return `<!DOCTYPE html>
@@ -578,8 +635,9 @@ export function buildNexGenEmailTemplate(
           <!-- Main Body -->
           <tr>
             <td style="padding: 22px 32px 28px 32px; color: #e2e8f0; font-size: 15px; line-height: 1.65;">
-              ${bodyHtml}
-              ${buttonsHtml}
+              ${topButtonsHtml}
+              ${processedBodyHtml}
+              ${bottomButtonsHtml}
               ${bottomImagesHtml}
             </td>
           </tr>
@@ -798,8 +856,19 @@ export async function sendCouncilEmail(input: SendEmailInput): Promise<SendEmail
     siteUrl
   });
 
-  const buttonTextLines = sanitizedButtons.map(b => `${b.label}: ${b.url}`).join('\n');
-  const fullPlainText = [derivedPlainText, buttonTextLines].filter(Boolean).join('\n\n');
+  let plainWithInlineButtons = derivedPlainText;
+  const nonInlineButtons: EmailButton[] = [];
+  for (const btn of sanitizedButtons) {
+    const marker = `[[BUTTON:${btn.id}]]`;
+    if (plainWithInlineButtons.includes(marker)) {
+      plainWithInlineButtons = plainWithInlineButtons.split(marker).join(`${btn.label}: ${btn.url}`);
+    } else {
+      nonInlineButtons.push(btn);
+    }
+  }
+  plainWithInlineButtons = plainWithInlineButtons.replace(/\[\[BUTTON:[a-zA-Z0-9_-]+\]\]/g, '').trim();
+  const buttonTextLines = nonInlineButtons.map(b => `${b.label}: ${b.url}`).join('\n');
+  const fullPlainText = [plainWithInlineButtons, buttonTextLines].filter(Boolean).join('\n\n');
 
   // Resend API requires at least one address in `to`. If sending BCC/CC-only, fallback `to` to `[fromEmail]`
   const effectiveTo = toRecipients.length > 0 ? toRecipients : [fromEmail];

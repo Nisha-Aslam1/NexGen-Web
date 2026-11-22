@@ -491,6 +491,9 @@ export const AdminEmailComposer: React.FC = () => {
   const [newButtonUrl, setNewButtonUrl] = useState<string>('');
   const [newButtonStyle, setNewButtonStyle] = useState<'amber' | 'primary' | 'outline'>('amber');
   const [newButtonAlign, setNewButtonAlign] = useState<'left' | 'center' | 'right'>('center');
+  const [newButtonPlacement, setNewButtonPlacement] = useState<'top' | 'inline' | 'bottom'>('bottom');
+  const [editingButtonId, setEditingButtonId] = useState<string | null>(null);
+  const buttonsSectionRef = useRef<HTMLDivElement>(null);
 
   const [showPreview, setShowPreview] = useState<boolean>(false);
 
@@ -584,6 +587,14 @@ export const AdminEmailComposer: React.FC = () => {
     }
   }, []);
 
+  const captureEditorSelection = useCallback(() => {
+    if (!editorRef.current) return;
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0 && editorRef.current.contains(selection.anchorNode)) {
+      savedSelectionRef.current = selection.getRangeAt(0).cloneRange();
+    }
+  }, []);
+
   const syncEditorFromDom = useCallback(() => {
     if (!editorRef.current) return;
     const raw = editorRef.current.innerHTML;
@@ -592,7 +603,8 @@ export const AdminEmailComposer: React.FC = () => {
     htmlBodyRef.current = cleanHtml;
     setHtmlBody(cleanHtml);
     setMessage(plain);
-  }, []);
+    captureEditorSelection();
+  }, [captureEditorSelection]);
 
   const execEditorCommand = (command: string, value?: string) => {
     if (isSending || !editorRef.current) return;
@@ -798,6 +810,58 @@ export const AdminEmailComposer: React.FC = () => {
     setEmailImages(prev => prev.filter(img => img.id !== id));
   };
 
+  const stripButtonMarkerHtml = (rawHtml: string, buttonId: string): string => {
+    const escaped = buttonId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return rawHtml
+      .replace(
+        new RegExp(`<(?:p|div)[^>]*>\\s*\\[\\[BUTTON:${escaped}\\]\\]\\s*(?:<br\\s*\\/?>\\s*)*<\\/(?:p|div)>`, 'gi'),
+        ''
+      )
+      .replace(new RegExp(`\\[\\[BUTTON:${escaped}\\]\\]`, 'g'), '');
+  };
+
+  const removeButtonMarkerFromEditor = (buttonId: string) => {
+    const currentHtml = editorRef.current ? editorRef.current.innerHTML : htmlBodyRef.current;
+    if (!currentHtml || !currentHtml.includes(`[[BUTTON:${buttonId}]]`)) return;
+    const nextHtml = stripButtonMarkerHtml(currentHtml, buttonId);
+    setEditorHtmlProgrammatically(nextHtml);
+  };
+
+  const insertButtonMarkerIntoEditor = (buttonId: string, forceMoveToCursor = false) => {
+    const markerToken = `[[BUTTON:${buttonId}]]`;
+    const currentHtml = editorRef.current ? editorRef.current.innerHTML : htmlBodyRef.current;
+
+    if (!forceMoveToCursor && currentHtml.includes(markerToken)) {
+      return;
+    }
+
+    // Remove existing marker first if moving it
+    if (currentHtml.includes(markerToken)) {
+      const cleaned = stripButtonMarkerHtml(currentHtml, buttonId);
+      setEditorHtmlProgrammatically(cleaned);
+    }
+
+    if (editorRef.current && savedSelectionRef.current && editorRef.current.contains(savedSelectionRef.current.startContainer)) {
+      editorRef.current.focus();
+      const selection = window.getSelection();
+      if (selection) {
+        selection.removeAllRanges();
+        selection.addRange(savedSelectionRef.current);
+      }
+      document.execCommand('insertHTML', false, `<p>${markerToken}</p>`);
+      savedSelectionRef.current = null;
+      syncEditorFromDom();
+      return;
+    }
+
+    const baseHtml = stripButtonMarkerHtml(
+      editorRef.current ? editorRef.current.innerHTML : htmlBodyRef.current,
+      buttonId
+    ).trim();
+    const nextHtml = baseHtml ? `${baseHtml}<p>${markerToken}</p>` : `<p>${markerToken}</p>`;
+    setEditorHtmlProgrammatically(nextHtml);
+  };
+
   const handleAddButton = () => {
     const cleanLabel = newButtonLabel.trim();
     const cleanUrl = newButtonUrl.trim();
@@ -814,16 +878,21 @@ export const AdminEmailComposer: React.FC = () => {
       return;
     }
 
-    setEmailButtons(prev => [
-      ...prev,
-      {
-        id: `ebtn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        label: cleanLabel.slice(0, 60),
-        url: cleanUrl,
-        style: newButtonStyle,
-        align: newButtonAlign
-      }
-    ]);
+    const newBtnId = `ebtn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const newBtn: EmailButton = {
+      id: newBtnId,
+      label: cleanLabel.slice(0, 60),
+      url: cleanUrl,
+      style: newButtonStyle,
+      align: newButtonAlign,
+      placement: newButtonPlacement
+    };
+
+    setEmailButtons(prev => [...prev, newBtn]);
+    if (newButtonPlacement === 'inline') {
+      insertButtonMarkerIntoEditor(newBtnId, true);
+      addToast(`Added "${cleanLabel}" inside the message body.`, 'success');
+    }
     setNewButtonLabel('');
     setNewButtonUrl('');
   };
@@ -837,21 +906,36 @@ export const AdminEmailComposer: React.FC = () => {
       addToast('Maximum 5 CTA buttons allowed per email.', 'error');
       return;
     }
+    const newBtnId = `ebtn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     setEmailButtons(prev => [
       ...prev,
       {
-        id: `ebtn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: newBtnId,
         label: preset.label,
         url: preset.url,
         style: preset.style,
-        align: newButtonAlign
+        align: newButtonAlign,
+        placement: newButtonPlacement
       }
     ]);
+    if (newButtonPlacement === 'inline') {
+      insertButtonMarkerIntoEditor(newBtnId, true);
+    }
     addToast(`Added "${preset.label}" button.`, 'success');
   };
 
   const handleUpdateButton = (id: string, patch: Partial<EmailButton>) => {
     setEmailButtons(prev => prev.map(btn => (btn.id === id ? { ...btn, ...patch } : btn)));
+  };
+
+  const handleChangeButtonPlacement = (id: string, placement: 'top' | 'inline' | 'bottom') => {
+    handleUpdateButton(id, { placement });
+    if (placement === 'inline') {
+      insertButtonMarkerIntoEditor(id, false);
+      addToast('Button marker placed in message body. You can move [[BUTTON:...]] anywhere in your text!', 'info');
+    } else {
+      removeButtonMarkerFromEditor(id);
+    }
   };
 
   const handleMoveButton = (index: number, direction: -1 | 1) => {
@@ -866,7 +950,46 @@ export const AdminEmailComposer: React.FC = () => {
   };
 
   const handleRemoveButton = (id: string) => {
+    removeButtonMarkerFromEditor(id);
     setEmailButtons(prev => prev.filter(btn => btn.id !== id));
+    if (editingButtonId === id) setEditingButtonId(null);
+  };
+
+  const handlePlaceNewButtonAtCursor = () => {
+    captureEditorSelection();
+    setNewButtonPlacement('inline');
+    buttonsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    addToast('Set placement to "Inside Message (At Cursor)" — add your button below to insert it there.', 'info');
+  };
+
+  const renderSinglePreviewButton = (btn: EmailButton) => {
+    if (!btn.label.trim() || !isValidEmailButtonUrl(btn.url)) return null;
+    const alignClass =
+      btn.align === 'left'
+        ? 'justify-start'
+        : btn.align === 'right'
+        ? 'justify-end'
+        : 'justify-center';
+    const styleClass =
+      btn.style === 'primary'
+        ? 'bg-indigo-700 hover:bg-indigo-600 text-white border border-indigo-500'
+        : btn.style === 'outline'
+        ? 'bg-transparent hover:bg-amber-400/10 text-amber-400 border-2 border-amber-400'
+        : 'bg-amber-500 hover:bg-amber-400 text-slate-950 border border-amber-400';
+
+    return (
+      <div key={btn.id} className={`flex ${alignClass} my-3`}>
+        <a
+          href={resolveButtonPreviewUrl(btn.url, settings?.siteUrl)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`inline-flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold shadow-sm transition-colors ${styleClass}`}
+        >
+          <span>{btn.label}</span>
+          <ExternalLink className="w-3.5 h-3.5 opacity-80" />
+        </a>
+      </div>
+    );
   };
 
   const renderPreviewButtons = (buttonsList: EmailButton[]) => {
@@ -875,36 +998,82 @@ export const AdminEmailComposer: React.FC = () => {
     );
     if (validButtons.length === 0) return null;
 
-    return (
-      <div className="space-y-3 pt-2">
-        {validButtons.map(btn => {
-          const alignClass =
-            btn.align === 'left'
-              ? 'justify-start'
-              : btn.align === 'right'
-              ? 'justify-end'
-              : 'justify-center';
-          const styleClass =
-            btn.style === 'primary'
-              ? 'bg-indigo-700 hover:bg-indigo-600 text-white border border-indigo-500'
-              : btn.style === 'outline'
-              ? 'bg-transparent hover:bg-amber-400/10 text-amber-400 border-2 border-amber-400'
-              : 'bg-amber-500 hover:bg-amber-400 text-slate-950 border border-amber-400';
+    return <div className="space-y-1">{validButtons.map(renderSinglePreviewButton)}</div>;
+  };
 
-          return (
-            <div key={btn.id} className={`flex ${alignClass}`}>
-              <a
-                href={resolveButtonPreviewUrl(btn.url, settings?.siteUrl)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={`inline-flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold shadow-sm transition-colors ${styleClass}`}
-              >
-                <span>{btn.label}</span>
-                <ExternalLink className="w-3.5 h-3.5 opacity-80" />
-              </a>
-            </div>
+  const renderEmailBodyWithButtonPlacements = (
+    rawHtml: string,
+    fallbackPlain: string,
+    buttonsList: EmailButton[],
+    emptyHint?: string
+  ) => {
+    const validButtons = (buttonsList || []).filter(
+      b => b.label.trim() && isValidEmailButtonUrl(b.url)
+    );
+    const cleanHtml = rawHtml.trim() ? sanitizeClientEmailHtml(rawHtml) : '';
+    const sourceContent = cleanHtml || (fallbackPlain.trim() ? plainTextToEditorHtml(fallbackPlain) : '');
+
+    const topButtons: EmailButton[] = [];
+    const inlineButtonsMap = new Map<string, EmailButton>();
+    const bottomButtons: EmailButton[] = [];
+
+    for (const btn of validButtons) {
+      const marker = `[[BUTTON:${btn.id}]]`;
+      const hasMarker = sourceContent.includes(marker);
+      if (btn.placement === 'inline' || hasMarker) {
+        if (hasMarker) {
+          inlineButtonsMap.set(btn.id, btn);
+        } else {
+          bottomButtons.push(btn);
+        }
+      } else if (btn.placement === 'top') {
+        topButtons.push(btn);
+      } else {
+        bottomButtons.push(btn);
+      }
+    }
+
+    // Split sanitized HTML cleanly around inline button markers
+    const renderedSegments: React.ReactNode[] = [];
+    if (sourceContent) {
+      const parts = sourceContent.split(/(\[\[BUTTON:[a-zA-Z0-9_-]+\]\])/g);
+      parts.forEach((part, idx) => {
+        const markerMatch = part.match(/^\[\[BUTTON:([a-zA-Z0-9_-]+)\]\]$/);
+        if (markerMatch) {
+          const btn = inlineButtonsMap.get(markerMatch[1]);
+          if (btn) {
+            renderedSegments.push(
+              <React.Fragment key={`ibtn_${btn.id}_${idx}`}>
+                {renderSinglePreviewButton(btn)}
+              </React.Fragment>
+            );
+          }
+          return;
+        }
+        const strippedEmptyWrappers = part
+          .replace(/<p[^>]*>\s*(?:<br\s*\/?>\s*)*<\/p>/gi, '')
+          .trim();
+        if (strippedEmptyWrappers) {
+          renderedSegments.push(
+            <div
+              key={`seg_${idx}`}
+              className={RICH_CONTENT_DARK_CLASSES}
+              dangerouslySetInnerHTML={{ __html: part }}
+            />
           );
-        })}
+        }
+      });
+    }
+
+    return (
+      <div className="space-y-2">
+        {topButtons.length > 0 && renderPreviewButtons(topButtons)}
+        {renderedSegments.length > 0 ? (
+          <div className="space-y-1">{renderedSegments}</div>
+        ) : emptyHint ? (
+          <div className="text-sm text-slate-400 leading-relaxed min-h-[120px]">{emptyHint}</div>
+        ) : null}
+        {bottomButtons.length > 0 && renderPreviewButtons(bottomButtons)}
       </div>
     );
   };
@@ -1117,6 +1286,8 @@ export const AdminEmailComposer: React.FC = () => {
       setEmailButtons([]);
       setNewButtonLabel('');
       setNewButtonUrl('');
+      setNewButtonPlacement('bottom');
+      setEditingButtonId(null);
       setSelectedPreset('custom');
       setShowPreview(false);
     } catch (err: any) {
@@ -1139,6 +1310,7 @@ export const AdminEmailComposer: React.FC = () => {
     if (log.logoUrl !== undefined) setLogoUrl(log.logoUrl || '');
     setEmailImages(Array.isArray(log.images) ? log.images : []);
     setEmailButtons(Array.isArray(log.buttons) ? log.buttons : []);
+    setEditingButtonId(null);
     setToInput((log.to || []).join(', '));
     setCcInput(Array.isArray(log.cc) ? log.cc.join(', ') : '');
     setBccInput(Array.isArray(log.bcc) ? log.bcc.join(', ') : '');
@@ -1358,19 +1530,12 @@ export const AdminEmailComposer: React.FC = () => {
                     </div>
                   )}
 
-                  {htmlBody.trim() ? (
-                    <div
-                      className={`min-h-[120px] ${RICH_CONTENT_DARK_CLASSES}`}
-                      dangerouslySetInnerHTML={{ __html: sanitizeClientEmailHtml(htmlBody) }}
-                    />
-                  ) : (
-                    <div className="text-sm text-slate-400 leading-relaxed min-h-[120px]">
-                      Your formatted email message body will render here inside the branded email template.
-                    </div>
+                  {renderEmailBodyWithButtonPlacements(
+                    htmlBody,
+                    message,
+                    emailButtons,
+                    'Your formatted email message body will render here inside the branded email template.'
                   )}
-
-                  {/* CTA Action Buttons Preview */}
-                  {renderPreviewButtons(emailButtons)}
 
                   {/* Bottom Inline Images Preview */}
                   {emailImages.filter(img => (img.placement || 'bottom') === 'bottom').length > 0 && (
@@ -1822,6 +1987,22 @@ export const AdminEmailComposer: React.FC = () => {
                       >
                         <RemoveFormatting className="w-3.5 h-3.5" />
                       </button>
+
+                      <div className="w-px h-5 bg-slate-300 mx-0.5" />
+
+                      {/* Place Button at Cursor Shortcut */}
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          handlePlaceNewButtonAtCursor();
+                        }}
+                        title="Place a CTA button at current cursor position in message"
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-950 text-[11px] font-bold transition-colors cursor-pointer"
+                      >
+                        <ExternalLink className="w-3 h-3 text-amber-700" />
+                        <span>Place Button at Cursor</span>
+                      </button>
                     </div>
 
                     {/* Inline Insert Link Bar */}
@@ -1876,6 +2057,9 @@ export const AdminEmailComposer: React.FC = () => {
                         aria-label="Rich Email Message Body"
                         onInput={syncEditorFromDom}
                         onBlur={syncEditorFromDom}
+                        onKeyUp={captureEditorSelection}
+                        onMouseUp={captureEditorSelection}
+                        onFocus={captureEditorSelection}
                         className={RICH_CONTENT_LIGHT_CLASSES}
                       />
                     </div>
@@ -1883,7 +2067,10 @@ export const AdminEmailComposer: React.FC = () => {
                 </div>
 
                 {/* Email Action CTA Buttons Builder */}
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 space-y-3.5">
+                <div
+                  ref={buttonsSectionRef}
+                  className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 space-y-3.5"
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="font-semibold text-slate-800 flex items-center gap-1.5">
@@ -1891,7 +2078,7 @@ export const AdminEmailComposer: React.FC = () => {
                         <span>Call-to-Action (CTA) Buttons ({emailButtons.length}/5)</span>
                       </div>
                       <p className="text-[11px] text-slate-500 mt-0.5">
-                        Add clickable buttons inside your email (website links, volunteer form, meetings, WhatsApp, email, or phone).
+                        Add, edit, and choose exactly where each button sits (Above Message, Inside Message at Cursor, or Below Message).
                       </p>
                     </div>
                   </div>
@@ -1961,103 +2148,286 @@ export const AdminEmailComposer: React.FC = () => {
                     </select>
                   </div>
 
-                  <div className="flex justify-end">
+                  {/* Placement Selector + Add Button Row */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[11px] font-semibold text-slate-600 mr-1">
+                        Where to place:
+                      </span>
+                      {(
+                        [
+                          { id: 'top', label: 'Top (Above Message)' },
+                          { id: 'inline', label: 'Inside Message (At Cursor)' },
+                          { id: 'bottom', label: 'Bottom (Below Message)' }
+                        ] as const
+                      ).map(pos => (
+                        <button
+                          key={pos.id}
+                          type="button"
+                          disabled={isSending}
+                          onClick={() => setNewButtonPlacement(pos.id)}
+                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer ${
+                            newButtonPlacement === pos.id
+                              ? 'bg-amber-100 border-amber-400 text-amber-950 shadow-2xs'
+                              : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          {pos.label}
+                        </button>
+                      ))}
+                    </div>
+
                     <button
                       type="button"
                       disabled={isSending || emailButtons.length >= 5 || !newButtonLabel.trim() || !newButtonUrl.trim()}
                       onClick={handleAddButton}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-950 hover:bg-indigo-900 text-white font-semibold text-xs transition-colors cursor-pointer disabled:opacity-50"
+                      className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-950 hover:bg-indigo-900 text-white font-semibold text-xs transition-colors cursor-pointer disabled:opacity-50 shrink-0"
                     >
                       <Plus className="w-3.5 h-3.5 text-amber-400" />
                       <span>Add Button</span>
                     </button>
                   </div>
 
-                  {/* Configured Buttons List */}
+                  {/* Configured Buttons List with Edit + Placement Controls */}
                   {emailButtons.length > 0 && (
-                    <div className="space-y-2.5 pt-1">
-                      {emailButtons.map((btn, idx) => (
-                        <div
-                          key={btn.id}
-                          className="flex flex-col sm:flex-row sm:items-center gap-2.5 p-3 rounded-xl bg-white border border-slate-200 shadow-2xs"
-                        >
-                          <div className="flex-1 grid grid-cols-1 sm:grid-cols-12 gap-2">
-                            <input
-                              type="text"
-                              value={btn.label}
-                              onChange={e => handleUpdateButton(btn.id, { label: e.target.value })}
-                              placeholder="Button label"
-                              className="sm:col-span-4 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-300"
-                            />
-                            <input
-                              type="text"
-                              value={btn.url}
-                              onChange={e => handleUpdateButton(btn.id, { url: e.target.value })}
-                              placeholder="https://... or /path"
-                              className={`sm:col-span-4 px-2.5 py-1.5 rounded-lg border text-[11px] font-mono focus:outline-none focus:ring-1 ${
-                                isValidEmailButtonUrl(btn.url)
-                                  ? 'border-slate-200 text-slate-700 focus:ring-indigo-300'
-                                  : 'border-rose-300 bg-rose-50 text-rose-700 focus:ring-rose-300'
-                              }`}
-                            />
-                            <select
-                              value={btn.style || 'amber'}
-                              onChange={e =>
-                                handleUpdateButton(btn.id, {
-                                  style: e.target.value as 'amber' | 'primary' | 'outline'
-                                })
-                              }
-                              className="sm:col-span-2 px-2 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer"
-                            >
-                              <option value="amber">Gold Amber</option>
-                              <option value="primary">Indigo</option>
-                              <option value="outline">Outline</option>
-                            </select>
-                            <select
-                              value={btn.align || 'center'}
-                              onChange={e =>
-                                handleUpdateButton(btn.id, {
-                                  align: e.target.value as 'left' | 'center' | 'right'
-                                })
-                              }
-                              className="sm:col-span-2 px-2 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer"
-                            >
-                              <option value="center">Center</option>
-                              <option value="left">Left</option>
-                              <option value="right">Right</option>
-                            </select>
-                          </div>
+                    <div className="space-y-2.5 pt-2 border-t border-slate-200/80">
+                      {emailButtons.map((btn, idx) => {
+                        const isEditing = editingButtonId === btn.id;
+                        const activePlacement = btn.placement || 'bottom';
+                        const activeHtmlCheck = htmlBody || message || '';
+                        const hasMarkerInBody = activeHtmlCheck.includes(`[[BUTTON:${btn.id}]]`);
+                        const previewChipClass =
+                          btn.style === 'primary'
+                            ? 'bg-indigo-700 text-white border-indigo-600'
+                            : btn.style === 'outline'
+                            ? 'bg-slate-900 text-amber-300 border-amber-400'
+                            : 'bg-amber-400 text-slate-950 border-amber-500';
+                        const placementLabel =
+                          activePlacement === 'top'
+                            ? 'Top (Above Message)'
+                            : activePlacement === 'inline'
+                            ? 'Inside Message'
+                            : 'Bottom (Below Message)';
 
-                          <div className="flex items-center gap-1 self-end sm:self-center shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => handleMoveButton(idx, -1)}
-                              disabled={idx === 0}
-                              title="Move up"
-                              className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-100 disabled:opacity-30 cursor-pointer"
-                            >
-                              <ArrowUp className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleMoveButton(idx, 1)}
-                              disabled={idx === emailButtons.length - 1}
-                              title="Move down"
-                              className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-100 disabled:opacity-30 cursor-pointer"
-                            >
-                              <ArrowDown className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveButton(btn.id)}
-                              title="Remove button"
-                              className="p-1.5 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 cursor-pointer"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                        return (
+                          <div
+                            key={btn.id}
+                            className={`rounded-xl bg-white border transition-all shadow-2xs ${
+                              isEditing ? 'border-indigo-400 ring-2 ring-indigo-100' : 'border-slate-200'
+                            }`}
+                          >
+                            {/* Summary Row */}
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3">
+                              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                                <span className="text-[10px] font-bold text-slate-400 font-mono">
+                                  #{idx + 1}
+                                </span>
+                                <span
+                                  className={`inline-flex items-center gap-1 px-3 py-1 rounded-lg border text-[11px] font-bold truncate max-w-[200px] ${previewChipClass}`}
+                                >
+                                  {btn.label || 'Untitled Button'}
+                                </span>
+                                <span
+                                  className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                    activePlacement === 'top'
+                                      ? 'bg-sky-50 text-sky-900 border-sky-200'
+                                      : activePlacement === 'inline'
+                                      ? 'bg-amber-50 text-amber-950 border-amber-300'
+                                      : 'bg-indigo-50 text-indigo-900 border-indigo-200'
+                                  }`}
+                                >
+                                  Place: {placementLabel}
+                                </span>
+                                <span className="text-[10px] font-semibold uppercase text-slate-500">
+                                  Align: {btn.align || 'center'}
+                                </span>
+                                <span className="text-[11px] font-mono text-slate-400 truncate max-w-[180px]">
+                                  {btn.url}
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-1 self-end sm:self-center shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingButtonId(isEditing ? null : btn.id)}
+                                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
+                                    isEditing
+                                      ? 'bg-indigo-950 text-white border-indigo-950'
+                                      : 'bg-indigo-50 text-indigo-950 border-indigo-200 hover:bg-indigo-100'
+                                  }`}
+                                >
+                                  <Edit3 className="w-3 h-3" />
+                                  <span>{isEditing ? 'Close Edit' : 'Edit / Place'}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleMoveButton(idx, -1)}
+                                  disabled={idx === 0}
+                                  title="Move up"
+                                  className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-100 disabled:opacity-30 cursor-pointer"
+                                >
+                                  <ArrowUp className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleMoveButton(idx, 1)}
+                                  disabled={idx === emailButtons.length - 1}
+                                  title="Move down"
+                                  className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-100 disabled:opacity-30 cursor-pointer"
+                                >
+                                  <ArrowDown className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveButton(btn.id)}
+                                  title="Remove button"
+                                  className="p-1.5 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Inline Warning if Marker Deleted */}
+                            {activePlacement === 'inline' && !hasMarkerInBody && (
+                              <div className="mx-3 mb-2.5 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 flex flex-wrap items-center justify-between gap-2 text-[11px] text-amber-900">
+                                <span>
+                                  Marker <code className="font-mono font-bold">[[BUTTON:{btn.id}]]</code> is not inside your message yet (will fall back to Bottom unless inserted).
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => insertButtonMarkerIntoEditor(btn.id, true)}
+                                  className="px-2.5 py-1 rounded-md bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold cursor-pointer"
+                                >
+                                  Insert in Message Now
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Expanded Edit & Placement Panel */}
+                            {isEditing && (
+                              <div className="p-3.5 pt-3 border-t border-slate-100 bg-slate-50/70 rounded-b-xl space-y-3">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                  <div>
+                                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                      Button Label
+                                    </label>
+                                    <input
+                                      type="text"
+                                      value={btn.label}
+                                      onChange={e => handleUpdateButton(btn.id, { label: e.target.value })}
+                                      placeholder="Button label"
+                                      className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                      Target Link URL
+                                    </label>
+                                    <input
+                                      type="text"
+                                      value={btn.url}
+                                      onChange={e => handleUpdateButton(btn.id, { url: e.target.value })}
+                                      placeholder="https://... or /path"
+                                      className={`w-full px-3 py-2 rounded-lg border bg-white text-xs font-mono focus:outline-none focus:ring-2 ${
+                                        isValidEmailButtonUrl(btn.url)
+                                          ? 'border-slate-300 text-slate-800 focus:ring-indigo-300'
+                                          : 'border-rose-300 bg-rose-50 text-rose-700 focus:ring-rose-300'
+                                      }`}
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                  <div>
+                                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                      Button Color Style
+                                    </label>
+                                    <select
+                                      value={btn.style || 'amber'}
+                                      onChange={e =>
+                                        handleUpdateButton(btn.id, {
+                                          style: e.target.value as 'amber' | 'primary' | 'outline'
+                                        })
+                                      }
+                                      className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-800 cursor-pointer"
+                                    >
+                                      <option value="amber">Gold Amber</option>
+                                      <option value="primary">Council Indigo</option>
+                                      <option value="outline">Gold Outline</option>
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                      Horizontal Alignment
+                                    </label>
+                                    <select
+                                      value={btn.align || 'center'}
+                                      onChange={e =>
+                                        handleUpdateButton(btn.id, {
+                                          align: e.target.value as 'left' | 'center' | 'right'
+                                        })
+                                      }
+                                      className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-800 cursor-pointer"
+                                    >
+                                      <option value="center">Center</option>
+                                      <option value="left">Left</option>
+                                      <option value="right">Right</option>
+                                    </select>
+                                  </div>
+                                </div>
+
+                                {/* Placement Editor */}
+                                <div className="space-y-1.5">
+                                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                                    Email Position / Where to Place This Button
+                                  </label>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    {(
+                                      [
+                                        { id: 'top', label: 'Top (Above Message)' },
+                                        { id: 'inline', label: 'Inside Message (At Marker)' },
+                                        { id: 'bottom', label: 'Bottom (Below Message)' }
+                                      ] as const
+                                    ).map(pos => (
+                                      <button
+                                        key={pos.id}
+                                        type="button"
+                                        onClick={() => handleChangeButtonPlacement(btn.id, pos.id)}
+                                        className={`px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
+                                          activePlacement === pos.id
+                                            ? 'bg-indigo-950 text-white border-indigo-950'
+                                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                                        }`}
+                                      >
+                                        {pos.label}
+                                      </button>
+                                    ))}
+
+                                    {activePlacement === 'inline' && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          insertButtonMarkerIntoEditor(btn.id, true);
+                                          addToast('Moved button marker to your current cursor position.', 'success');
+                                        }}
+                                        className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 cursor-pointer"
+                                      >
+                                        Move Marker to Cursor
+                                      </button>
+                                    )}
+                                  </div>
+                                  {activePlacement === 'inline' && (
+                                    <p className="text-[10px] text-slate-500">
+                                      Tip: Keep <code className="font-mono font-semibold text-slate-700">[[BUTTON:{btn.id}]]</code> wherever you want this button to appear inside your message body.
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -2720,19 +3090,10 @@ export const AdminEmailComposer: React.FC = () => {
                 </div>
               )}
 
-              {selectedLog.html ? (
-                <div
-                  className={RICH_CONTENT_DARK_CLASSES}
-                  dangerouslySetInnerHTML={{ __html: sanitizeClientEmailHtml(selectedLog.html) }}
-                />
-              ) : (
-                <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                  {selectedLog.message}
-                </div>
-              )}
-
-              {Array.isArray(selectedLog.buttons) && selectedLog.buttons.length > 0 && (
-                renderPreviewButtons(selectedLog.buttons)
+              {renderEmailBodyWithButtonPlacements(
+                selectedLog.html || '',
+                selectedLog.message || '',
+                Array.isArray(selectedLog.buttons) ? selectedLog.buttons : []
               )}
 
               {selectedLog.images && selectedLog.images.filter(i => (i.placement || 'bottom') === 'bottom').length > 0 && (
