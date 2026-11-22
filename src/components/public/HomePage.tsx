@@ -633,7 +633,7 @@ export const HomePage: React.FC = () => {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 items-stretch">
           {leadershipPreview.map(mem => (
-            <article
+            <div
               key={mem.id}
               onClick={() => setSelectedMember(mem)}
               onKeyDown={(e) => {
@@ -682,7 +682,7 @@ export const HomePage: React.FC = () => {
                   <ArrowRight className="w-3.5 h-3.5" />
                 </div>
               </div>
-            </article>
+            </div>
           ))}
         </div>
       </section>

@@ -85,7 +85,7 @@ export const TeamPage: React.FC = () => {
             const bioPreview = (mem.bio || '').trim();
 
             return (
-              <article
+              <div
                 key={mem.id}
                 onClick={() => setSelectedMember(mem)}
                 onKeyDown={(e) => {
@@ -181,7 +181,7 @@ export const TeamPage: React.FC = () => {
                     </div>
                   </div>
                 </div>
-              </article>
+              </div>
             );
           })}
         </div>
@@ -199,7 +199,7 @@ export const TeamPage: React.FC = () => {
             {programLeads.map(mem => {
               const bioPreview = (mem.bio || '').trim();
               return (
-                <article
+                <div
                   key={mem.id}
                   onClick={() => setSelectedMember(mem)}
                   onKeyDown={(e) => {
@@ -264,7 +264,7 @@ export const TeamPage: React.FC = () => {
                       )}
                     </div>
                   </div>
-                </article>
+                </div>
               );
             })}
           </div>
