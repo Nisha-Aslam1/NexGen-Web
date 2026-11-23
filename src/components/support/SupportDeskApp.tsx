@@ -125,6 +125,8 @@ export const SupportDeskApp: React.FC = () => {
   // Realtime & Notifications State
   const [wsConnected, setWsConnected] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [typingSessions, setTypingSessions] = useState<Record<string, boolean>>({});
+  const typingTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | 'unsupported'>(() => {
     if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
     return Notification.permission;
@@ -263,6 +265,20 @@ export const SupportDeskApp: React.FC = () => {
             if (conv) {
               setConversations(prev => mergeConversationList(prev, conv));
             }
+          } else if (payload.type === 'support:visitor_typing') {
+            const sid = payload.sessionId || payload.conversationId;
+            const isTyping = Boolean(payload.isTyping);
+            if (sid) {
+              setTypingSessions(prev => ({ ...prev, [sid]: isTyping }));
+              if (isTyping) {
+                if (typingTimersRef.current[sid]) {
+                  clearTimeout(typingTimersRef.current[sid]);
+                }
+                typingTimersRef.current[sid] = setTimeout(() => {
+                  setTypingSessions(prev => ({ ...prev, [sid]: false }));
+                }, 4000);
+              }
+            }
           } else if (payload.type === 'support:new_ticket') {
             const contact = payload.contact;
             if (contact) {
@@ -292,8 +308,16 @@ export const SupportDeskApp: React.FC = () => {
 
     connect();
 
+    // Resilient polling fallback whenever reverse proxies delay or close WebSockets
+    const pollTimer = setInterval(() => {
+      if (!closedByUser && (!ws || ws.readyState !== WebSocket.OPEN)) {
+        fetchConversations();
+      }
+    }, 6000);
+
     return () => {
       closedByUser = true;
+      clearInterval(pollTimer);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (ws) {
         try {
@@ -307,6 +331,14 @@ export const SupportDeskApp: React.FC = () => {
     () => conversations.find(c => c.id === selectedId) || null,
     [conversations, selectedId]
   );
+
+  const isVisitorTyping = useMemo(() => {
+    if (!selectedConversation) return false;
+    return Boolean(
+      typingSessions[selectedConversation.sessionId] ||
+      typingSessions[selectedConversation.id]
+    );
+  }, [selectedConversation, typingSessions]);
 
   // Scroll chat to newest message whenever selected chat updates
   useEffect(() => {
@@ -389,22 +421,21 @@ export const SupportDeskApp: React.FC = () => {
     }
   };
 
-  const handleDownloadAndroidSource = async () => {
+  const handleAssignConversation = async (agentName: string) => {
+    if (!selectedConversation || !agentName) return;
     try {
-      const res = await authFetch('/api/support-live/android-project.zip');
-      if (!res.ok) throw new Error('Download failed.');
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'nexgen-support-android-project.zip';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      addToast('Android Studio project (.zip) downloaded! Open in Android Studio or GitHub Actions to build your .apk.', 'success');
+      const res = await authFetch(`/api/support-live/conversations/${selectedConversation.id}/assign`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentName })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.conversation) {
+        setConversations(prev => mergeConversationList(prev, data.conversation));
+        addToast(`Assigned conversation to ${agentName}`, 'success');
+      }
     } catch {
-      addToast('Could not download Android APK project right now.', 'error');
+      addToast('Could not assign conversation.', 'error');
     }
   };
 
@@ -702,15 +733,7 @@ export const SupportDeskApp: React.FC = () => {
             {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4 text-slate-400" />}
           </button>
 
-          <button
-            type="button"
-            onClick={handleDownloadAndroidSource}
-            title="Download Native Android Studio APK Source (.zip)"
-            className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white cursor-pointer flex items-center gap-1 text-xs font-semibold"
-          >
-            <Smartphone className="w-4 h-4 text-emerald-300" />
-            <span className="hidden lg:inline">Android .APK Project</span>
-          </button>
+
 
           <button
             type="button"
@@ -825,6 +848,11 @@ export const SupportDeskApp: React.FC = () => {
                             LIVE HUMAN
                           </span>
                         )}
+                        {conv.assignedAgentName && (
+                          <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-900 text-[9px] font-bold">
+                            {conv.assignedAgentName}
+                          </span>
+                        )}
                         {conv.status === 'resolved' && (
                           <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 text-[9px] font-bold">
                             RESOLVED
@@ -837,7 +865,16 @@ export const SupportDeskApp: React.FC = () => {
 
                       <div className="flex items-center justify-between gap-2 mt-1">
                         <p className="text-xs text-slate-600 truncate">
-                          {lastMsg ? stripSupportFormattingForPreview(lastMsg.text) : 'No messages yet'}
+                          {typingSessions[conv.sessionId] || typingSessions[conv.id] ? (
+                            <span className="text-emerald-700 font-bold inline-flex items-center gap-1 animate-pulse">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-bounce" />
+                              <span>Typing...</span>
+                            </span>
+                          ) : lastMsg ? (
+                            stripSupportFormattingForPreview(lastMsg.text)
+                          ) : (
+                            'No messages yet'
+                          )}
                         </p>
                         {unreadCount > 0 && (
                           <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-rose-600 text-white text-[10px] font-bold flex items-center justify-center shrink-0">
@@ -883,7 +920,7 @@ export const SupportDeskApp: React.FC = () => {
                     <ArrowLeft className="w-4 h-4" />
                   </button>
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h2 className="font-bold text-sm text-slate-900 truncate">
                         {selectedConversation.visitorName || `Visitor (${selectedConversation.sessionId.slice(-5)})`}
                       </h2>
@@ -896,6 +933,25 @@ export const SupportDeskApp: React.FC = () => {
                       >
                         {selectedConversation.status === 'resolved' ? 'Resolved' : 'Active'}
                       </span>
+                      {selectedConversation.assignedAgentName ? (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-indigo-50 border border-indigo-200 text-indigo-900">
+                          Assigned: {selectedConversation.assignedAgentName}
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-50 border border-amber-300 text-amber-900 animate-pulse">
+                          Unassigned · First to reply gets assigned
+                        </span>
+                      )}
+                      {isVisitorTyping && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-300 text-emerald-800 text-[11px] font-bold animate-pulse shadow-2xs">
+                          <span className="flex items-center gap-0.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-bounce" />
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-bounce [animation-delay:0.15s]" />
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-bounce [animation-delay:0.3s]" />
+                          </span>
+                          <span>Visitor is typing...</span>
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 text-[11px] text-slate-500 mt-0.5 flex-wrap">
                       {selectedConversation.visitorEmail && (
@@ -922,27 +978,41 @@ export const SupportDeskApp: React.FC = () => {
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleToggleResolve}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shrink-0 ${
-                    selectedConversation.status === 'resolved'
-                      ? 'bg-indigo-100 text-indigo-900 hover:bg-indigo-200'
-                      : 'bg-emerald-600 text-white hover:bg-emerald-700'
-                  }`}
-                >
-                  {selectedConversation.status === 'resolved' ? (
-                    <>
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>Reopen</span>
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Resolve</span>
-                    </>
-                  )}
-                </button>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={selectedConversation.assignedAgentName || ''}
+                    onChange={e => handleAssignConversation(e.target.value)}
+                    className="px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-medium text-slate-700 focus:outline-none focus:border-indigo-600 hidden sm:block"
+                  >
+                    <option value="">Assign to Coordinator...</option>
+                    <option value={currentUser?.name || 'Coordinator'}>Assign to Me ({currentUser?.name})</option>
+                    <option value="Secretariat Team">Secretariat Team</option>
+                    <option value="Volunteer Directorate">Volunteer Directorate</option>
+                    <option value="Tech Support Desk">Tech Support Desk</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={handleToggleResolve}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                      selectedConversation.status === 'resolved'
+                        ? 'bg-indigo-100 text-indigo-900 hover:bg-indigo-200'
+                        : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                    }`}
+                  >
+                    {selectedConversation.status === 'resolved' ? (
+                      <>
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Reopen</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Resolve</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
 
               {/* Chat Transcript */}
@@ -972,8 +1042,20 @@ export const SupportDeskApp: React.FC = () => {
                             AI Assistant
                           </span>
                         )}
-                        <span className="text-[10px] text-slate-400 font-mono">
+                        <span className="text-[10px] text-slate-400 font-mono inline-flex items-center gap-0.5">
                           {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {isHumanAgent && (
+                            <span
+                              className="inline-flex items-center ml-1"
+                              title={msg.isRead ? `Read by visitor at ${new Date(msg.readAt || '').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Delivered to visitor widget'}
+                            >
+                              {msg.isRead ? (
+                                <span className="text-sky-500 font-bold text-[11px] tracking-tight" aria-label="Read">✓✓</span>
+                              ) : (
+                                <span className="text-slate-400 font-medium text-[11px]" aria-label="Delivered">✓</span>
+                              )}
+                            </span>
+                          )}
                         </span>
                       </div>
 
@@ -995,6 +1077,22 @@ export const SupportDeskApp: React.FC = () => {
                     </div>
                   );
                 })}
+
+                {isVisitorTyping && (
+                  <div className="flex flex-col items-start animate-fade-in pt-1">
+                    <div className="flex items-center gap-1.5 mb-1 px-1">
+                      <span className="text-[10px] font-bold text-emerald-700">
+                        {selectedConversation.visitorName || 'Visitor'}
+                      </span>
+                      <span className="text-[10px] text-emerald-600 font-medium">is typing...</span>
+                    </div>
+                    <div className="bg-white border border-emerald-200 rounded-2xl rounded-bl-sm px-3.5 py-2.5 shadow-2xs inline-flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce" />
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce [animation-delay:0.15s]" />
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce [animation-delay:0.3s]" />
+                    </div>
+                  </div>
+                )}
                 <div ref={chatBottomRef} />
               </div>
 

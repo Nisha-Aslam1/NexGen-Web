@@ -145,13 +145,60 @@ export const SupportWidget: React.FC = () => {
   const [visitorDetails, setVisitorDetails] = useState({ name: '', email: '', whatsapp: '' });
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const isOpenRef = useRef(isOpen);
+  const wsRef = useRef<WebSocket | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isTypingRef = useRef(false);
+
+  const sendTypingStatus = (typing: boolean) => {
+    if (isTypingRef.current === typing) return;
+    isTypingRef.current = typing;
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(
+          JSON.stringify({
+            type: 'support:visitor_typing',
+            sessionId,
+            isTyping: typing,
+            visitorName: visitorDetails.name.trim() || undefined
+          })
+        );
+        return;
+      } catch {}
+    }
+
+    fetch('/api/support-live/typing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId,
+        isTyping: typing,
+        visitorName: visitorDetails.name.trim() || undefined
+      })
+    }).catch(() => {});
+  };
+
+  const handleChatInputChange = (val: string) => {
+    setAiInput(val);
+    if (val.trim()) {
+      sendTypingStatus(true);
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(() => {
+        sendTypingStatus(false);
+      }, 2500);
+    } else {
+      sendTypingStatus(false);
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    }
+  };
 
   useEffect(() => {
     isOpenRef.current = isOpen;
     if (isOpen) {
       setUnreadHumanReplies(0);
+      fetch(`/api/support-live/conversations/${encodeURIComponent(sessionId)}/read`, { method: 'PATCH' }).catch(() => {});
     }
-  }, [isOpen]);
+  }, [isOpen, sessionId]);
 
   useEffect(() => {
     try {
@@ -230,7 +277,9 @@ export const SupportWidget: React.FC = () => {
 
       try {
         ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
       } catch {
+        wsRef.current = null;
         setWsConnected(false);
         return;
       }
@@ -270,6 +319,8 @@ export const SupportWidget: React.FC = () => {
                   `Live Support reply from ${payload.message?.senderName || 'Coordinator'}`,
                   'info'
                 );
+              } else {
+                fetch(`/api/support-live/conversations/${encodeURIComponent(sessionId)}/read`, { method: 'PATCH' }).catch(() => {});
               }
             }
           }
@@ -277,6 +328,7 @@ export const SupportWidget: React.FC = () => {
       };
 
       ws.onclose = () => {
+        if (wsRef.current === ws) wsRef.current = null;
         setWsConnected(false);
         if (!closedByUser) {
           attempts += 1;
@@ -286,14 +338,44 @@ export const SupportWidget: React.FC = () => {
       };
 
       ws.onerror = () => {
+        if (wsRef.current === ws) wsRef.current = null;
         setWsConnected(false);
       };
     };
 
     connect();
 
+    const pollTimer = setInterval(async () => {
+      if (closedByUser || (ws && ws.readyState === WebSocket.OPEN) || chatMode !== 'human') return;
+      try {
+        const res = await fetch(`/api/support-ai/history?sessionId=${encodeURIComponent(sessionId)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (Array.isArray(data.messages)) {
+          setAiMessages(prev => {
+            if (data.messages.length > prev.length) {
+              const latest = data.messages[data.messages.length - 1];
+              if (latest?.role === 'agent') {
+                playVisitorReplyChime();
+                if (!isOpenRef.current) {
+                  setUnreadHumanReplies(u => u + 1);
+                } else {
+                  fetch(`/api/support-live/conversations/${encodeURIComponent(sessionId)}/read`, { method: 'PATCH' }).catch(() => {});
+                }
+              }
+            }
+            return data.messages;
+          });
+        }
+        if (data.assignedAgentName) setAssignedAgentName(data.assignedAgentName);
+        if (data.status === 'resolved' || data.status === 'open') setChatStatus(data.status);
+      } catch {}
+    }, 6000);
+
     return () => {
       closedByUser = true;
+      if (wsRef.current === ws) wsRef.current = null;
+      clearInterval(pollTimer);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (ws) {
         try {
@@ -311,8 +393,18 @@ export const SupportWidget: React.FC = () => {
 
   const handleRequestLiveHuman = async (withDetails = false) => {
     if (handoffLoading) return;
+    const cleanName = visitorDetails.name.trim();
+    if (!cleanName || cleanName.length < 2) {
+      setShowHandoffCard(true);
+      setAiError('Please enter your full name (at least 2 letters) before connecting to live human coordinators.');
+      return;
+    }
+
     setAiError(null);
     setHandoffLoading(true);
+    sendTypingStatus(false);
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+
     try {
       const pendingText = aiInput.trim();
       const res = await fetch('/api/support-live/handoff', {
@@ -320,9 +412,9 @@ export const SupportWidget: React.FC = () => {
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
           sessionId,
-          name: withDetails ? visitorDetails.name.trim() || undefined : undefined,
-          email: withDetails ? visitorDetails.email.trim() || undefined : undefined,
-          whatsapp: withDetails ? visitorDetails.whatsapp.trim() || undefined : undefined,
+          name: cleanName,
+          email: visitorDetails.email.trim() || undefined,
+          whatsapp: visitorDetails.whatsapp.trim() || undefined,
           message: pendingText || undefined
         })
       });
@@ -337,7 +429,7 @@ export const SupportWidget: React.FC = () => {
       if (data.conversation && Array.isArray(data.conversation.messages)) {
         setAiMessages(data.conversation.messages);
       }
-      addToast('Live Human Support activated! Coordinators have been notified.', 'success');
+      addToast('Live Human Support activated! Secretariat coordinators have been notified.', 'success');
     } catch (err: any) {
       setAiError(err?.message || 'Could not connect to live support.');
     } finally {
@@ -360,13 +452,22 @@ export const SupportWidget: React.FC = () => {
   };
 
   const handleSendLiveHumanMessage = async (textToSend: string) => {
+    const cleanName = visitorDetails.name.trim();
+    if (!cleanName || cleanName.length < 2) {
+      setShowHandoffCard(true);
+      setAiError('Please enter your full name before sending messages to live coordinators.');
+      return;
+    }
+
+    sendTypingStatus(false);
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     setAiError(null);
     setAiInput('');
 
     const optimisticUserMsg: SupportChatMessage = {
       id: `tmp_u_${Date.now()}`,
       role: 'user',
-      senderName: visitorDetails.name || undefined,
+      senderName: cleanName || undefined,
       text: textToSend,
       timestamp: new Date().toISOString()
     };
@@ -381,7 +482,7 @@ export const SupportWidget: React.FC = () => {
         body: JSON.stringify({
           sessionId,
           text: textToSend,
-          name: visitorDetails.name.trim() || undefined,
+          name: cleanName,
           email: visitorDetails.email.trim() || undefined,
           whatsapp: visitorDetails.whatsapp.trim() || undefined
         })
@@ -412,10 +513,16 @@ export const SupportWidget: React.FC = () => {
     }
 
     if (overrideText === 'Connect me with a human coordinator') {
-      setShowHandoffCard(true);
+      if (visitorDetails.name.trim().length >= 2) {
+        await handleRequestLiveHuman(true);
+      } else {
+        setShowHandoffCard(true);
+      }
       return;
     }
 
+    sendTypingStatus(false);
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     setAiError(null);
     if (!overrideText) setAiInput('');
 
@@ -449,6 +556,16 @@ export const SupportWidget: React.FC = () => {
 
       if (!res.ok) {
         throw new Error(data.error || 'AI Assistant could not process your request right now.');
+      }
+
+      if (data.visitorName) {
+        setVisitorDetails(d => ({ ...d, name: data.visitorName || d.name }));
+      }
+
+      if (data.assignedToHuman) {
+        setChatMode('human');
+        setShowHandoffCard(false);
+        addToast('Connected to Live Human Support! Secretariat coordinators alerted.', 'success');
       }
 
       if (Array.isArray(data.messages) && data.messages.length > 0) {
@@ -684,7 +801,13 @@ export const SupportWidget: React.FC = () => {
                   ) : (
                     <button
                       type="button"
-                      onClick={() => setShowHandoffCard(!showHandoffCard)}
+                      onClick={() => {
+                        if (visitorDetails.name.trim().length >= 2) {
+                          handleRequestLiveHuman(true);
+                        } else {
+                          setShowHandoffCard(true);
+                        }
+                      }}
                       className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-2xs cursor-pointer"
                     >
                       <Headphones className="w-3 h-3" />
@@ -706,64 +829,100 @@ export const SupportWidget: React.FC = () => {
                 </div>
               </div>
 
-              {/* Optional Live Human Handoff Card */}
-              {showHandoffCard && chatMode !== 'human' && (
-                <div className="p-3 bg-emerald-50/90 border-b border-emerald-200 space-y-2.5">
+              {/* Mandatory Name Before Starting Live Human Support Card */}
+              {showHandoffCard && (
+                <div className="p-3.5 bg-emerald-50 border-b border-emerald-200 space-y-2.5 shadow-2xs">
                   <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
-                        <UserCheck className="w-3.5 h-3.5 text-emerald-700" />
-                        <span>Connect to Live Secretariat Coordinator</span>
-                      </p>
-                      <p className="text-[11px] text-emerald-800 mt-0.5">
-                        Coordinators receive instant alerts on their Support App and reply right here in real time.
-                      </p>
+                    <div className="flex items-start gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+                        <Headphones className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-emerald-950 flex items-center gap-1">
+                          <span>Connect to Live Coordinator</span>
+                        </p>
+                        <p className="text-[11px] text-emerald-800 leading-snug">
+                          Coordinators receive live alerts. Enter your full name below to start chat:
+                        </p>
+                      </div>
                     </div>
                     <button
                       type="button"
                       onClick={() => setShowHandoffCard(false)}
-                      className="text-emerald-700 hover:text-emerald-950 p-0.5 cursor-pointer"
-                      aria-label="Close live connect panel"
+                      className="text-emerald-700 hover:text-emerald-950 p-1 rounded-lg hover:bg-emerald-100/60 cursor-pointer"
+                      aria-label="Close"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <input
-                      type="text"
-                      value={visitorDetails.name}
-                      onChange={e => setVisitorDetails(d => ({ ...d, name: e.target.value }))}
-                      placeholder="Your Name (optional)"
-                      className="px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-white text-[11px] text-slate-900 focus:outline-none focus:border-emerald-600"
-                    />
-                    <input
-                      type="tel"
-                      value={visitorDetails.whatsapp}
-                      onChange={e => setVisitorDetails(d => ({ ...d, whatsapp: e.target.value }))}
-                      placeholder="WhatsApp (optional)"
-                      className="px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-white text-[11px] text-slate-900 focus:outline-none focus:border-emerald-600"
-                    />
-                  </div>
-
-                  <button
-                    type="button"
-                    disabled={handoffLoading}
-                    onClick={() => handleRequestLiveHuman(true)}
-                    className="w-full py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50"
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleRequestLiveHuman(true);
+                    }}
+                    className="space-y-2"
                   >
-                    {handoffLoading ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Connecting...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Headphones className="w-3.5 h-3.5" />
-                        <span>Start Live Human Chat Now</span>
-                      </>
-                    )}
-                  </button>
+                    <div>
+                      <label className="block text-[10px] font-bold text-emerald-900 uppercase tracking-wider mb-1">
+                        Your Full Name <span className="text-rose-600">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        autoFocus
+                        value={visitorDetails.name}
+                        onChange={e => setVisitorDetails(d => ({ ...d, name: e.target.value }))}
+                        placeholder="Enter your name (required)"
+                        className="w-full px-3 py-1.5 rounded-lg border border-emerald-300 bg-white text-xs text-slate-900 focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] font-medium text-emerald-800 mb-0.5">
+                          WhatsApp (recommended)
+                        </label>
+                        <input
+                          type="tel"
+                          value={visitorDetails.whatsapp}
+                          onChange={e => setVisitorDetails(d => ({ ...d, whatsapp: e.target.value }))}
+                          placeholder="+92 300 1234567"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-white text-[11px] text-slate-900 focus:outline-none focus:border-emerald-600"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-medium text-emerald-800 mb-0.5">
+                          Email (optional)
+                        </label>
+                        <input
+                          type="email"
+                          value={visitorDetails.email}
+                          onChange={e => setVisitorDetails(d => ({ ...d, email: e.target.value }))}
+                          placeholder="name@email.com"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-white text-[11px] text-slate-900 focus:outline-none focus:border-emerald-600"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={handoffLoading || visitorDetails.name.trim().length < 2}
+                      className="w-full py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                    >
+                      {handoffLoading ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Connecting to Coordinators...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Headphones className="w-3.5 h-3.5" />
+                          <span>Start Live Human Chat</span>
+                        </>
+                      )}
+                    </button>
+                  </form>
                 </div>
               )}
 
@@ -897,7 +1056,7 @@ export const SupportWidget: React.FC = () => {
                 <input
                   type="text"
                   value={aiInput}
-                  onChange={e => setAiInput(e.target.value)}
+                  onChange={e => handleChatInputChange(e.target.value)}
                   disabled={aiLoading}
                   placeholder={
                     chatMode === 'human'

@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">NexGen Support Desk</string>
-    <string name="service_channel_name">Live Support Connection</string>
-    <string name="urgent_channel_name">Incoming Visitor Messages</string>
-    <string name="reply_action_label">Reply Live</string>
-    <string name="reply_hint">Type reply to visitor…</string>
-</resources>

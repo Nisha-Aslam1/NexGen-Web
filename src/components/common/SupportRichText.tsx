@@ -21,6 +21,7 @@ interface ExtractedPageButton {
 }
 
 const PAGE_TOKEN_REGEX = /\[\[PAGE:([a-z-]+)\|([^\]]+)\]\]/gi;
+const WRAPPED_PAGE_TOKEN_REGEX = /(?:`|\*\*|__|\*)*\s*\[\[PAGE:([a-z-]+)\|([^\]]+)\]\]\s*(?:`|\*\*|__|\*)*/gi;
 
 function extractAndCleanSupportText(rawText: string): {
   cleanedText: string;
@@ -58,14 +59,21 @@ function extractAndCleanSupportText(rawText: string): {
         continue;
       }
 
-      // Inline mention inside a real sentence -> replace token with clean label
+      // Inline mention inside a real sentence -> strip wrapping backticks/asterisks and replace with clean **Label**
       const cleanLine = rawLine
-        .replace(new RegExp(PAGE_TOKEN_REGEX.source, 'gi'), (_, __, label) => `**${String(label).trim()}**`)
+        .replace(new RegExp(WRAPPED_PAGE_TOKEN_REGEX.source, 'gi'), (_, __, label) => ` **${String(label).trim()}** `)
+        .replace(/\s+([.,!?;:])/g, '$1')
+        .replace(/\*{4,}([^*\n]+?)\*{4,}/g, '**$1**')
+        .replace(/`\*\*([^*\n]+?)\*\*`/g, '**$1**')
+        .replace(/ {2,}/g, ' ')
         .replace(/\s*\|\s*$/, '')
         .trim();
       processedLines.push(cleanLine);
     } else {
-      processedLines.push(rawLine);
+      const normalizedLine = rawLine
+        .replace(/\*{4,}([^*\n]+?)\*{4,}/g, '**$1**')
+        .replace(/`\*\*([^*\n]+?)\*\*`/g, '**$1**');
+      processedLines.push(normalizedLine);
     }
   }
 

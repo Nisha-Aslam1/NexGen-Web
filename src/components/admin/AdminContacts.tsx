@@ -17,7 +17,8 @@ import {
   MessageSquareText,
   X,
   Send,
-  Smartphone
+  Smartphone,
+  Loader2
 } from 'lucide-react';
 import { ContactMessage, SupportConversation } from '../../types.ts';
 import {
@@ -92,6 +93,7 @@ export const AdminContacts: React.FC = () => {
   const [confirmDeleteConvId, setConfirmDeleteConvId] = useState<string | null>(null);
   const [liveReplyText, setLiveReplyText] = useState('');
   const [sendingLiveReply, setSendingLiveReply] = useState(false);
+  const [downloadingAndroidZip, setDownloadingAndroidZip] = useState(false);
 
   const fetchMessages = useCallback(async () => {
     setLoading(true);
@@ -210,10 +212,46 @@ export const AdminContacts: React.FC = () => {
   };
 
   const handleDownloadAndroidSource = async () => {
+    if (downloadingAndroidZip) return;
+    setDownloadingAndroidZip(true);
     try {
+      const ticketRes = await authFetch('/api/support-live/android-project-ticket', {
+        method: 'POST',
+        headers: { Accept: 'application/json' }
+      });
+      const ticketData = await ticketRes.json().catch(() => null);
+      if (ticketRes.ok && ticketData?.downloadUrl) {
+        const a = document.createElement('a');
+        a.href = ticketData.downloadUrl;
+        a.download = ticketData.fileName || 'nexgen-support-android-project.zip';
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        addToast(
+          'Native Android APK project (.zip) downloading! Build via Android Studio or GitHub Actions.',
+          'success'
+        );
+        return;
+      }
+
+      if (ticketRes.status !== 404) {
+        throw new Error(ticketData?.error || `Download failed (HTTP ${ticketRes.status}).`);
+      }
+
       const res = await authFetch('/api/support-live/android-project.zip');
-      if (!res.ok) throw new Error('Download failed.');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || `Download failed (HTTP ${res.status}).`);
+      }
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('text/html')) {
+        throw new Error('Server returned an unexpected HTML page instead of the ZIP archive.');
+      }
       const blob = await res.blob();
+      if (!blob || blob.size === 0) {
+        throw new Error('Downloaded archive was empty.');
+      }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -221,10 +259,15 @@ export const AdminContacts: React.FC = () => {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
-      addToast('Native Android APK project (.zip) downloaded! Build via Android Studio or GitHub Actions.', 'success');
-    } catch {
-      addToast('Could not download Android APK project right now.', 'error');
+      setTimeout(() => URL.revokeObjectURL(url), 20000);
+      addToast(
+        'Native Android APK project (.zip) downloaded! Build via Android Studio or GitHub Actions.',
+        'success'
+      );
+    } catch (err: any) {
+      addToast(err?.message || 'Could not download Android APK project right now.', 'error');
+    } finally {
+      setDownloadingAndroidZip(false);
     }
   };
 
@@ -357,11 +400,16 @@ export const AdminContacts: React.FC = () => {
           <button
             type="button"
             onClick={handleDownloadAndroidSource}
+            disabled={downloadingAndroidZip}
             title="Download Native Kotlin Android Project (.zip) to compile real .apk"
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-950 hover:bg-indigo-900 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-950 hover:bg-indigo-900 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer disabled:opacity-60"
           >
-            <Smartphone className="w-3.5 h-3.5 text-amber-300" />
-            <span>Android .APK Project (.zip)</span>
+            {downloadingAndroidZip ? (
+              <Loader2 className="w-3.5 h-3.5 text-amber-300 animate-spin" />
+            ) : (
+              <Smartphone className="w-3.5 h-3.5 text-amber-300" />
+            )}
+            <span>{downloadingAndroidZip ? 'Preparing ZIP...' : 'Android .APK Project (.zip)'}</span>
           </button>
 
           <button

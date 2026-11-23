@@ -180,6 +180,8 @@ export interface SupportChatMessage {
   timestamp: string;
   senderName?: string;
   escalatedTicketId?: string;
+  isRead?: boolean;
+  readAt?: string;
 }
 
 export interface SupportConversation {

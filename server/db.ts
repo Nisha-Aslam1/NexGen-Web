@@ -1874,8 +1874,9 @@ class Database {
         visitorWhatsapp: params.visitorWhatsapp?.trim() || existing.visitorWhatsapp,
         mode: 'human',
         status: 'open',
-        humanRequestedAt: existing.humanRequestedAt || nowIso,
+        humanRequestedAt: nowIso,
         escalatedToHuman: true,
+        assignedAgentName: undefined,
         unreadByAgent: (existing.unreadByAgent || 0) + 1,
         messages: [...(existing.messages || []), ...newMessages].slice(-150),
         updatedAt: nowIso,
@@ -1896,6 +1897,7 @@ class Database {
       mode: 'human',
       status: 'open',
       humanRequestedAt: nowIso,
+      assignedAgentName: undefined,
       unreadByAgent: 1,
       escalatedToHuman: true,
       messages: newMessages,
@@ -2018,7 +2020,7 @@ class Database {
       mode: 'human',
       status: 'open',
       escalatedToHuman: true,
-      assignedAgentName: params.agentName || existing.assignedAgentName,
+      assignedAgentName: existing.assignedAgentName || params.agentName || 'Council Coordinator',
       unreadByAgent: 0,
       messages: [...(existing.messages || []), agentMsg].slice(-150),
       updatedAt: nowIso,
@@ -2036,8 +2038,41 @@ class Database {
     const list = this.data.supportConversations!;
     const idx = list.findIndex(c => c.id === conversationId || c.sessionId === conversationId);
     if (idx === -1) return null;
-    if ((list[idx].unreadByAgent || 0) === 0) return list[idx];
-    const updated: SupportConversation = { ...list[idx], unreadByAgent: 0 };
+    const existing = list[idx];
+    const nowIso = new Date().toISOString();
+    let changed = false;
+    const updatedMessages = (existing.messages || []).map(m => {
+      if (m.role === 'agent' && !m.isRead) {
+        changed = true;
+        return { ...m, isRead: true, readAt: nowIso };
+      }
+      return m;
+    });
+
+    if ((existing.unreadByAgent || 0) === 0 && !changed) return existing;
+
+    const updated: SupportConversation = {
+      ...existing,
+      unreadByAgent: 0,
+      messages: updatedMessages
+    };
+    list[idx] = updated;
+    this.save();
+    mongoUpsert('supportConversations', updated.id, updated).catch(() => {});
+    return updated;
+  }
+
+  assignSupportConversation(conversationId: string, agentName: string): SupportConversation | null {
+    this.ensureMeetingArrays();
+    const list = this.data.supportConversations!;
+    const idx = list.findIndex(c => c.id === conversationId || c.sessionId === conversationId);
+    if (idx === -1) return null;
+    const existing = list[idx];
+    const updated: SupportConversation = {
+      ...existing,
+      assignedAgentName: agentName.trim() || undefined,
+      updatedAt: new Date().toISOString()
+    };
     list[idx] = updated;
     this.save();
     mongoUpsert('supportConversations', updated.id, updated).catch(() => {});

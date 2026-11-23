@@ -6,15 +6,111 @@ import {
   GenerateContentResponse
 } from '@google/genai';
 import { db, readDirectEnvFile } from './db.ts';
-import { ContactMessage } from '../src/types.ts';
+import { ContactMessage, SupportChatMessage } from '../src/types.ts';
 
-export const SUPPORT_AI_MODEL = 'gemini-3.5-flash-lite';
+export const SUPPORT_AI_MODEL = 'gemini-4-hydrogen';
 const MODEL_CANDIDATES = [
-  'gemini-3.5-flash-lite',
-  'gemini-3.1-flash-lite',
-  'gemini-4-hydrogen'
+  'gemini-4-hydrogen',
+  'gemini-3.1-flash-lite'
 ] as const;
 const unavailableModels = new Set<string>();
+
+export type DetectedSupportLanguage = 'english' | 'roman_urdu' | 'urdu_script' | 'match_latest';
+
+const STRONG_ROMAN_URDU_WORDS = new Set([
+  'assalam', 'asalam', 'assalamu', 'walaikum', 'walikum', 'aoa', 'wsalam', 'salam',
+  'mujhe', 'muja', 'mujh', 'mjhe', 'mje', 'mujhko',
+  'aap', 'apka', 'apki', 'apke', 'aapka', 'aapki', 'aapke', 'aapko', 'apko', 'apna', 'apni', 'apne',
+  'mera', 'meri', 'mere', 'tera', 'teri', 'tere', 'hmara', 'hamara', 'hamari', 'hamare', 'unka', 'unki', 'unke', 'uska', 'uski', 'uske',
+  'kya', 'kia', 'kaise', 'kese', 'kesa', 'kesi', 'kaisa', 'kaisi', 'kahan', 'kaha', 'kidhar', 'kab', 'kyun', 'kyu', 'kyunki', 'kaun', 'konsa', 'konsi', 'konse', 'kitna', 'kitni', 'kitne',
+  'hai', 'hain', 'hoon', 'hun', 'hoga', 'hogi', 'honge', 'hota', 'hoti', 'hote', 'tha', 'thi', 'theek', 'thik', 'sahi', 'bilkul', 'zaroor', 'zarur',
+  'karna', 'krna', 'karni', 'krni', 'karne', 'krne', 'karo', 'kro', 'kara', 'karen', 'kren', 'karein', 'karta', 'krta', 'karti', 'krti', 'karte', 'krte', 'karu', 'kru', 'karunga', 'karungi', 'kiya', 'karwayen', 'karwana',
+  'chahiye', 'chahie', 'chahta', 'chahti', 'chhta', 'chhti', 'chahte', 'chhte', 'mangta', 'mangti',
+  'nahi', 'nhi', 'nahin', 'abhi', 'phir', 'phr', 'agar', 'magar', 'lekin', 'lakin', 'yeh', 'woh', 'bhi', 'koi', 'kuch', 'bohat', 'boht', 'bahut', 'bht', 'zyada', 'ziada', 'acha', 'achha', 'achhi', 'achi', 'behtar', 'shukriya', 'shukria', 'meherbani', 'janab', 'bhai', 'behn', 'behan',
+  'batao', 'btao', 'bataye', 'btaye', 'batayein', 'btayein', 'batana', 'btana', 'bataen', 'btaen', 'bata', 'samjhao', 'smjhao', 'samjha', 'smjha', 'pata', 'pta', 'maloom', 'malum',
+  'sakta', 'sakti', 'sakte', 'sagta', 'sagti', 'sagte', 'raha', 'rahi', 'rahe', 'gaya', 'gayi', 'gaye', 'chuka', 'chuki', 'chuke', 'milega', 'milegi', 'milenge', 'milta', 'milti', 'milte', 'dena', 'lena', 'jana', 'aana', 'dekhna', 'bhejo', 'bhejna', 'likhna', 'likho',
+  'tareeqa', 'tarika', 'madad', 'rabta', 'raabta', 'sawalat', 'sawal', 'jawab', 'masla', 'masail', 'baat', 'waqt', 'jagah', 'liye', 'liya', 'waja', 'wajah', 'wala', 'wali', 'wale', 'jaise', 'jese', 'jahan', 'jab', 'tab', 'hamesha', 'sirf', 'fakat', 'chahye', 'chaiye'
+]);
+
+const SECONDARY_ROMAN_URDU_WORDS = new Set([
+  'ka', 'ki', 'ke', 'ko', 'se', 'ne', 'ha', 'hn', 'ho', 'ma', 'mein', 'main', 'hum', 'ham',
+  'ye', 'wo', 'ap', 'kr', 'pe', 'par', 'tak', 'hi', 'na', 'sab', 'kam', 'da', 'di', 'de',
+  'js', 'tu', 'mat', 'si', 'us', 'ab', 'jb', 'tb', 'q', 'b', 'k'
+]);
+
+const NEUTRAL_SHORT_WORDS = new Set([
+  'ok', 'okay', 'yes', 'no', 'hm', 'hmm', 'hi', 'hello', 'hey', 'thanks', 'thank', 'you', 'please', 'pls', 'plz'
+]);
+
+function classifySingleTextLanguage(text: string): DetectedSupportLanguage | 'neutral' {
+  const clean = (text || '').trim();
+  if (!clean) return 'neutral';
+
+  // Urdu / Arabic script detection
+  if (/[\u0600-\u06FF]/.test(clean)) {
+    return 'urdu_script';
+  }
+
+  // Other non-Latin scripts (e.g., Hindi Devanagari, CJK, Cyrillic)
+  if (/[^\u0000-\u024F\s\d.,!?@#$%^&*()_+\-=[\]{};':"\\|<>/?~`]/.test(clean)) {
+    return 'match_latest';
+  }
+
+  // Strip email addresses, URLs, and NG-XXXX style reference codes before analyzing words
+  const stripped = clean
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/\S+@\S+\.\S+/g, ' ')
+    .replace(/\bNG[-_A-Z0-9]+\b/gi, ' ');
+
+  const tokens = stripped.toLowerCase().match(/[a-z]+/g) || [];
+  if (tokens.length === 0) return 'neutral';
+
+  let strongRu = 0;
+  let secondaryRu = 0;
+  let nonNeutralWords = 0;
+
+  for (const tok of tokens) {
+    if (STRONG_ROMAN_URDU_WORDS.has(tok)) {
+      strongRu += 1;
+    } else if (SECONDARY_ROMAN_URDU_WORDS.has(tok)) {
+      secondaryRu += 1;
+    }
+    if (!NEUTRAL_SHORT_WORDS.has(tok)) {
+      nonNeutralWords += 1;
+    }
+  }
+
+  if (strongRu >= 1 || secondaryRu >= 2) {
+    return 'roman_urdu';
+  }
+
+  if (nonNeutralWords === 0 && tokens.length <= 3) {
+    return 'neutral';
+  }
+
+  return 'english';
+}
+
+export function detectVisitorLanguage(
+  currentMessage: string,
+  history: SupportChatMessage[] = []
+): DetectedSupportLanguage {
+  const direct = classifySingleTextLanguage(currentMessage);
+  if (direct !== 'neutral') {
+    return direct;
+  }
+
+  // Inherit from the most recent visitor message if current turn is just "NG-1234", email, phone, or "ok"
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const msg = history[i];
+    if (msg.role === 'user' && msg.text) {
+      const prev = classifySingleTextLanguage(msg.text);
+      if (prev !== 'neutral') return prev;
+    }
+  }
+
+  return 'english';
+}
 
 let cachedClient: GoogleGenAI | null = null;
 let cachedApiKey = '';
@@ -138,7 +234,71 @@ const getOrganizationOverviewDeclaration: FunctionDeclaration = {
   }
 };
 
-function buildWebsiteKnowledgePrompt(): string {
+const assignToLiveHumanDeclaration: FunctionDeclaration = {
+  name: 'assign_to_live_human_support',
+  description:
+    'Connects the visitor to Live Human Support and sends an instant notification alert to all Secretariat coordinators and admins. Whichever coordinator replies first will be automatically assigned to this visitor. You MUST collect the visitor full name before invoking this tool (if name is missing, ask for their name first).',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      visitorName: {
+        type: Type.STRING,
+        description: 'The full name of the visitor (REQUIRED).'
+      },
+      reason: {
+        type: Type.STRING,
+        description: 'Brief reason or issue summary for connecting to live human coordinator support.'
+      },
+      visitorWhatsapp: {
+        type: Type.STRING,
+        description: 'Optional WhatsApp phone number of the visitor.'
+      },
+      visitorEmail: {
+        type: Type.STRING,
+        description: 'Optional email address of the visitor.'
+      }
+    },
+    required: ['visitorName', 'reason']
+  }
+};
+
+function buildLanguageMandate(detectedLang: DetectedSupportLanguage): {
+  topRule: string;
+  bottomReminder: string;
+} {
+  if (detectedLang === 'roman_urdu') {
+    return {
+      topRule:
+        'ACTIVE TURN LANGUAGE: ROMAN URDU (Latin script Urdu). You MUST reply 100% in natural, polite Pakistani Roman Urdu! NEVER respond with full English sentences or Arabic/Nastaliq Urdu script when the user writes Roman Urdu. Even if website database records or tool outputs return English JSON, translate and explain everything clearly in everyday Roman Urdu (keeping only proper nouns/UI names like "Volunteer", "Track Application", "Reference Code NG-XXXX", and "NexGen Council" in English). Example Roman Urdu tone: "Assalam-o-Alaikum! NexGen Council mein volunteer ban\'ne ka tareeqa 100% free aur bohat aasan hai:\n1. Neeche diye gaye **Apply as Volunteer** button par click karein.\n2. Apni details form mein fill karein.\n3. Submit karne ke baad aapko ek Reference Code (`NG-XXXX`) milega jis se aap apni application ka status check kar sakte hain."',
+      bottomReminder:
+        'CRITICAL FINAL CHECK BEFORE SENDING: Is your entire reply written in natural Pakistani Roman Urdu matching the user message? Never switch to English paragraphs! Put [[PAGE:...]] tags ONLY on their own final line (never inside sentences, never wrapped in backticks ` or **).'
+    };
+  }
+  if (detectedLang === 'urdu_script') {
+    return {
+      topRule:
+        'ACTIVE TURN LANGUAGE: URDU (Arabic/Nastaliq script اردو). You MUST write your complete response in polite, natural, clear Urdu script (اردو). Translate any English tool/database facts smoothly into Urdu, keeping only Reference Codes (e.g., NG-XXXX) or email addresses in English characters.',
+      bottomReminder:
+        'CRITICAL FINAL CHECK BEFORE SENDING: Write your complete reply in clear Urdu script (اردو). Put [[PAGE:...]] tags ONLY on their own final line without wrapping them in backticks ` or **.'
+    };
+  }
+  if (detectedLang === 'match_latest') {
+    return {
+      topRule:
+        'ACTIVE TURN LANGUAGE: Match the exact language and script used in the visitor latest message naturally and fluently.',
+      bottomReminder:
+        'CRITICAL FINAL CHECK BEFORE SENDING: Reply in the exact same language and script as the visitor latest message. Put [[PAGE:...]] tags ONLY on their own final line without backticks ` or **.'
+    };
+  }
+  return {
+    topRule:
+      'ACTIVE TURN LANGUAGE: ENGLISH. Reply cleanly and naturally in warm, concise English. Do NOT mix in Roman Urdu unless the visitor writes in Roman Urdu.',
+    bottomReminder:
+      'CRITICAL FINAL CHECK BEFORE SENDING: Keep your reply in crisp, helpful English. Inside prose/list steps write bold labels like **Volunteer** or **Track Application** cleanly without brackets, and place [[PAGE:...]] tags ONLY on their own separate final line with NO backticks ` or ** wrapping them.'
+  };
+}
+
+function buildWebsiteKnowledgePrompt(detectedLang: DetectedSupportLanguage): string {
   const settings = db.getSettings();
   const programs = db.getPrograms(true);
   const events = db.getEvents().filter(e => e.status !== 'Draft');
@@ -146,6 +306,7 @@ function buildWebsiteKnowledgePrompt(): string {
   const team = db.getTeam(true);
   const gallery = db.getGallery();
   const orgStats = db.getAnalyticsOrgContext();
+  const langMandate = buildLanguageMandate(detectedLang);
 
   const programsText =
     programs.length > 0
@@ -225,15 +386,21 @@ function buildWebsiteKnowledgePrompt(): string {
     settings.organizationName || 'NexGen Women Empowerment & Youth Leadership Council'
   }**.
 
+### 0. STRICT LANGUAGE RULE (HIGHEST PRIORITY)
+- ${langMandate.topRule}
+- If the visitor switches language mid-conversation (for instance, first English then Roman Urdu, or Roman Urdu then English), IMMEDIATELY switch to match their LATEST message.
+
 ### 1. YOUR IDENTITY & COMMUNICATION STYLE
-- Respond warmly, clearly, accurately, and concisely (ideal length: 2–5 short sentences or clean bullet points unless the user asks for detailed steps).
-- **Language Matching**: Reply in the exact language/script the visitor uses — English, Urdu, or Roman Urdu (e.g., if they write in Roman Urdu like "mujhe volunteer apply karna ha", reply naturally and professionally in Roman Urdu!).
+- Respond warmly, clearly, accurately, and concisely (ideal length: 2–5 short sentences or clean numbered steps/bullets unless the user asks for detailed steps).
 - **Strict Honesty & Privacy**:
   - Use the live knowledge below AND call your tools (\`search_website_knowledge\`, \`get_organization_overview\`, \`check_application_status\`) whenever someone asks deeper questions about programs, events, news, leaders, stats, or application status.
   - NEVER invent fake fees, dates, phone numbers, or share private admin credentials, private WhatsApp group invite URLs, private meeting passwords/links, or other visitors' personal details.
-- **Clickable Website Navigation Buttons (FORMATTING RULE)**:
-  When guiding the visitor to pages on this website, place button tags on their own clean line at the end separated ONLY by spaces (NEVER join them with \`|\` pipes or commas!). Use ONLY these exact tags:
-  \`[[PAGE:home|Home]]\` \`[[PAGE:about|About Us]]\` \`[[PAGE:programs|Explore Programs]]\` \`[[PAGE:events|View Events]]\` \`[[PAGE:news|Latest News]]\` \`[[PAGE:gallery|Photo Gallery]]\` \`[[PAGE:team|Leadership Team]]\` \`[[PAGE:volunteer|Apply as Volunteer]]\` \`[[PAGE:track|Track Application]]\` \`[[PAGE:contact|Contact Page]]\`
+- **Clickable Website Navigation Buttons (STRICT FORMATTING RULE)**:
+  - NEVER put \`[[PAGE:...]]\` tags inside numbered steps or prose sentences, and NEVER wrap \`[[PAGE:...]]\` tags inside backticks (\`) or bold asterisks (**)!
+  - Inside prose/steps, simply write natural page names (for example: **Apply as Volunteer** or **Track Application**).
+  - Then, ONLY at the very bottom of your reply on its own separate final line, place the 1–2 most relevant button tags separated ONLY by single spaces (NEVER join with \`|\` pipes or commas):
+  [[PAGE:home|Home]] [[PAGE:about|About Us]] [[PAGE:programs|Explore Programs]] [[PAGE:events|View Events]] [[PAGE:news|Latest News]] [[PAGE:gallery|Photo Gallery]] [[PAGE:team|Leadership Team]] [[PAGE:volunteer|Apply as Volunteer]] [[PAGE:track|Track Application]] [[PAGE:contact|Contact Page]]
+  (You may customize the label after the \`|\` to match the visitor's language if helpful, e.g., \`[[PAGE:volunteer|Volunteer Apply Karein]]\`, while keeping the page key before \`|\` strictly lowercase English.)
 
 ### 2. ORGANIZATION PROFILE, LIVE STATS & WEBSITE DIRECTORY
 - **Name**: ${settings.organizationName}
@@ -278,19 +445,21 @@ ${teamText}
 ### 8. PHOTO GALLERY ARCHIVE HIGHLIGHTS (${gallery.length})
 ${galleryText}
 
-### 9. HUMAN SUPPORT ESCALATION PROTOCOL (CRITICAL!)
+### 9. HUMAN SUPPORT & LIVE COORDINATOR PROTOCOL (CRITICAL!)
 Follow these rules strictly whenever a visitor needs real human assistance (Secretariat staff / Admin / Coordinator):
-- **When to escalate**:
-  1. The visitor explicitly asks to speak with a real human, admin, coordinator, or team member; OR
-  2. You cannot resolve their personal request with website info alone (e.g., missing certificate verification, technical/account problem, application correction, urgent event access issue, complaint, partnership inquiry).
-- **Mandatory Step-by-Step Collection BEFORE Calling \`escalate_to_human_secretariat\`**:
-  Do NOT call \`escalate_to_human_secretariat\` until you have ALL four items in the conversation memory:
-  1. **Complete Issue Details**: If the visitor only says something vague like "I need help" or "human se baat karni ha", first ask them politely to explain their complete issue so the team can prepare.
-  2. **Full Name**
-  3. **Email Address**
-  4. **WhatsApp Number** (must include country code / at least 7 digits; WhatsApp is required for Support Widget tickets).
-  Ask cleanly for whichever of these items are still missing (you can ask for Name, Email, WhatsApp, and Issue summary in one friendly message).
-- **Submitting**: Once all 4 items are collected, immediately call \`escalate_to_human_secretariat\` with clean, structured arguments, and then confirm warmly to the visitor that their ticket has been sent to the Council Secretariat Admin Panel and provide their Ticket ID!`;
+- **1. Live Human Coordinator Connect (\`assign_to_live_human_support\`)**:
+  - Use this whenever the visitor asks to speak to a real human, coordinator, or admin, or when their question requires real human staff.
+  - **MANDATORY NAME REQUIREMENT**: You MUST know the visitor's Full Name before calling \`assign_to_live_human_support\`. If the visitor has not provided their name yet, ask them warmly in their language:
+    - Roman Urdu: "Main aapko Live Human Support se connect kar raha hoon. Barah-e-karam pehle apna mukammal naam batayein."
+    - Urdu script: "میں آپ کو لائیو انسانی کوآرڈینیٹر سے منسلک کر رہا ہوں۔ براہِ کرم پہلے اپنا نام بتائیں۔"
+    - English: "I would be happy to connect you with our Secretariat coordinators. Could you please share your full name first?"
+  - As soon as the visitor shares their name, IMMEDIATELY call \`assign_to_live_human_support\`.
+  - All online coordinators/admins will be alerted with loud sound and notifications, and whichever coordinator replies first will be assigned to this visitor.
+- **2. Formal Inquiry Ticket (\`escalate_to_human_secretariat\`)**:
+  - Use this if the visitor specifically wants to log an offline inquiry ticket (collecting Name, Email, WhatsApp with country code, and Issue details).
+
+### 10. FINAL QUALITY REMINDER
+- ${langMandate.bottomReminder}`;
 }
 
 async function generateWithRetry(
@@ -302,6 +471,7 @@ async function generateWithRetry(
   const tools = [
     {
       functionDeclarations: [
+        assignToLiveHumanDeclaration,
         escalateToHumanDeclaration,
         checkApplicationStatusDeclaration,
         searchWebsiteKnowledgeDeclaration,
@@ -378,6 +548,7 @@ export async function handleSupportAiChat(params: {
   sessionId: string;
   message: string;
   ipAddress?: string;
+  onLiveHandoff?: (data: { conversation: any; message: any }) => void;
 }) {
   const cleanSessionId = params.sessionId.trim().slice(0, 100);
   const cleanMessage = params.message.trim().slice(0, 2000);
@@ -386,13 +557,15 @@ export async function handleSupportAiChat(params: {
   }
 
   const ai = getGeminiClient();
-  const systemInstruction = buildWebsiteKnowledgePrompt();
 
   // Load 7-day persisted conversation memory for this visitor session
   const existingConv = db.getSupportConversationBySession(cleanSessionId);
   const historyMessages = (existingConv?.messages || [])
     .filter(m => m.text && m.text.trim())
     .slice(-24);
+
+  const detectedLang = detectVisitorLanguage(cleanMessage, historyMessages);
+  const systemInstruction = buildWebsiteKnowledgePrompt(detectedLang);
 
   const contents: Content[] = historyMessages.map(m => ({
     role: m.role === 'assistant' ? 'model' : 'user',
@@ -409,9 +582,10 @@ export async function handleSupportAiChat(params: {
   let activeModelUsed = genResult.modelUsed;
 
   let escalatedTicket: ContactMessage | null = null;
-  let collectedName: string | undefined;
-  let collectedEmail: string | undefined;
-  let collectedWhatsapp: string | undefined;
+  let assignedLiveHuman: ReturnType<typeof db.requestHumanSupportHandoff> | null = null;
+  let collectedName: string | undefined = existingConv?.visitorName;
+  let collectedEmail: string | undefined = existingConv?.visitorEmail;
+  let collectedWhatsapp: string | undefined = existingConv?.visitorWhatsapp;
 
   // Handle up to 3 function call rounds (knowledge lookup + status check +/or escalation)
   const workingContents: Content[] = [...contents];
@@ -594,7 +768,7 @@ export async function handleSupportAiChat(params: {
               response: {
                 ok: false,
                 error:
-                  'Missing or invalid contact/issue fields. Politely ask the visitor for their full name, valid email address, valid WhatsApp number (with country code, at least 7 digits), and complete issue details before submitting.'
+                  'Missing or invalid contact/issue fields. Politely ask the visitor in their language for their full name, valid email address, valid WhatsApp number (with country code, at least 7 digits), and complete issue details before submitting.'
               }
             }
           });
@@ -640,6 +814,56 @@ export async function handleSupportAiChat(params: {
             }
           });
         }
+      } else if (call.name === 'assign_to_live_human_support') {
+        const name = String(args.visitorName || collectedName || '').trim();
+        const reason = String(args.reason || cleanMessage || 'Visitor requested live human coordinator support').trim();
+        const whatsapp = String(args.visitorWhatsapp || collectedWhatsapp || '').trim();
+        const email = String(args.visitorEmail || collectedEmail || '').trim();
+
+        if (!name || name.length < 2) {
+          fnResponseParts.push({
+            functionResponse: {
+              id: call.id,
+              name: call.name,
+              response: {
+                ok: false,
+                error:
+                  'Visitor full name is required before connecting to live human coordinators. Politely ask the visitor in their language for their full name first.'
+              }
+            }
+          });
+        } else {
+          const handoffResult = db.requestHumanSupportHandoff({
+            sessionId: cleanSessionId,
+            visitorName: name,
+            visitorEmail: email || undefined,
+            visitorWhatsapp: whatsapp || undefined,
+            initialMessage: reason
+          });
+
+          collectedName = name;
+          if (email) collectedEmail = email;
+          if (whatsapp) collectedWhatsapp = whatsapp;
+          assignedLiveHuman = handoffResult;
+
+          if (params.onLiveHandoff) {
+            params.onLiveHandoff(handoffResult);
+          }
+
+          fnResponseParts.push({
+            functionResponse: {
+              id: call.id,
+              name: call.name,
+              response: {
+                ok: true,
+                connected: true,
+                visitorName: name,
+                message:
+                  'Visitor is now connected to Live Human Support! All online Secretariat coordinators and admins have been alerted. Whichever coordinator replies first will be assigned to this visitor.'
+              }
+            }
+          });
+        }
       }
     }
 
@@ -654,11 +878,25 @@ export async function handleSupportAiChat(params: {
     activeModelUsed = genResult.modelUsed;
   }
 
-  const replyText =
-    (response.text || '').trim() ||
-    (escalatedTicket
-      ? `Your support request has been forwarded to our Secretariat team (Ticket ID: ${escalatedTicket.id}). Our coordinators will reach out via email or WhatsApp shortly.`
-      : 'I apologize, I could not generate a response right now. Please try rephrasing or use the Human Ticket tab to reach our Secretariat directly.');
+  const fallbackReply = escalatedTicket
+    ? detectedLang === 'roman_urdu'
+      ? `Aapki support request hamari Secretariat team ko forward kar di gayi hai (Ticket ID: ${escalatedTicket.id}). Hamare coordinators jald email ya WhatsApp par aap se rabta kareinge.`
+      : detectedLang === 'urdu_script'
+      ? `آپ کی سپورٹ درخواست ہماری سیکریٹریٹ ٹیم کو بھیج دی گئی ہے (ٹکٹ آئی ڈی: ${escalatedTicket.id})۔ ہمارے کوآرڈینیٹرز جلد آپ سے ای میل یا واٹس ایپ پر رابطہ کریں گے۔`
+      : `Your support request has been forwarded to our Secretariat team (Ticket ID: ${escalatedTicket.id}). Our coordinators will reach out via email or WhatsApp shortly.`
+    : assignedLiveHuman
+    ? detectedLang === 'roman_urdu'
+      ? `Aapko Live Human Support se connect kar diya gaya hai! Hamare Secretariat coordinators ko alert bhej diya gaya hai. Jo bhi coordinator pehle reply karega, wo aapko yahan guide karega.`
+      : detectedLang === 'urdu_script'
+      ? `آپ کو لائیو انسانی کوآرڈینیٹر سے منسلک کر دیا گیا ہے! ہمارے سیکریٹریٹ کو اطلاع بھیج دی گئی ہے۔ جو کوآرڈینیٹر پہلے جواب دے گا وہ آپ کی رہنمائی کرے گا۔`
+      : `You are now connected to Live Human Support! All Council Secretariat coordinators have been alerted. The first available coordinator will reply to you here shortly.`
+    : detectedLang === 'roman_urdu'
+    ? 'Maazrat, abhi jawab generate karne mein masla aa raha hai. Barah-e-karam apna sawal dobara likhein ya upar **Live Human** button par click karke seedha coordinator se baat karein.'
+    : detectedLang === 'urdu_script'
+    ? 'معذرت، اس وقت جواب تیار کرنے میں مسئلہ پیش آ رہا ہے۔ براہِ کرم اپنا سوال دوبارہ لکھیں یا براہِ راست انسانی معاون سے رابطہ کریں۔'
+    : 'I apologize, I could not generate a response right now. Please try rephrasing or switch to Live Human above to reach our Secretariat directly.';
+
+  const replyText = (response.text || '').trim() || fallbackReply;
 
   const savedConversation = db.appendSupportExchange({
     sessionId: cleanSessionId,
@@ -667,16 +905,26 @@ export async function handleSupportAiChat(params: {
     visitorName: collectedName,
     visitorEmail: collectedEmail,
     visitorWhatsapp: collectedWhatsapp,
-    escalatedToHuman: Boolean(escalatedTicket),
+    escalatedToHuman: Boolean(escalatedTicket || assignedLiveHuman),
     linkedContactId: escalatedTicket?.id
   });
+
+  if (assignedLiveHuman) {
+    db.switchSupportConversationMode(cleanSessionId, 'human');
+  }
+
+  const finalConversation = db.getSupportConversationBySession(cleanSessionId) || savedConversation;
 
   return {
     ok: true,
     model: activeModelUsed,
+    detectedLanguage: detectedLang,
     reply: replyText,
-    conversationId: savedConversation.id,
-    expiresAt: savedConversation.expiresAt,
+    conversationId: finalConversation.id,
+    expiresAt: finalConversation.expiresAt,
+    assignedToHuman: Boolean(assignedLiveHuman),
+    visitorName: finalConversation.visitorName,
+    mode: finalConversation.mode,
     escalatedTicket: escalatedTicket
       ? {
           id: escalatedTicket.id,
@@ -684,6 +932,6 @@ export async function handleSupportAiChat(params: {
           name: escalatedTicket.name
         }
       : null,
-    messages: savedConversation.messages
+    messages: finalConversation.messages
   };
 }
