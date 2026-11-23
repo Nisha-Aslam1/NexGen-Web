@@ -1825,6 +1825,264 @@ class Database {
     return created;
   }
 
+  // --- Live Human Support Chat Methods ---
+  requestHumanSupportHandoff(params: {
+    sessionId: string;
+    visitorName?: string;
+    visitorEmail?: string;
+    visitorWhatsapp?: string;
+    initialMessage?: string;
+  }): { conversation: SupportConversation; message: SupportChatMessage | null } {
+    this.purgeExpiredSupportConversations();
+    this.ensureMeetingArrays();
+    const now = Date.now();
+    const retentionMs = 7 * 24 * 60 * 60 * 1000;
+    const nowIso = new Date(now).toISOString();
+    const expiresAt = new Date(now + retentionMs).toISOString();
+
+    const list = this.data.supportConversations!;
+    const idx = list.findIndex(c => c.sessionId === params.sessionId);
+
+    const newMessages: SupportChatMessage[] = [];
+    let visitorMsg: SupportChatMessage | null = null;
+    if (params.initialMessage && params.initialMessage.trim()) {
+      visitorMsg = {
+        id: `msg_u_${now}_${Math.random().toString(36).slice(2, 6)}`,
+        role: 'user',
+        text: params.initialMessage.trim(),
+        senderName: params.visitorName?.trim() || 'Website Visitor',
+        timestamp: nowIso
+      };
+      newMessages.push(visitorMsg);
+    }
+
+    const systemNotice: SupportChatMessage = {
+      id: `msg_sys_${now + 1}_${Math.random().toString(36).slice(2, 6)}`,
+      role: 'agent',
+      senderName: 'NexGen Support Desk',
+      text: 'You are now connected to Live Human Support. A Secretariat coordinator has been notified and will reply here in real time.',
+      timestamp: new Date(now + 1).toISOString()
+    };
+    newMessages.push(systemNotice);
+
+    if (idx !== -1) {
+      const existing = list[idx];
+      const updated: SupportConversation = {
+        ...existing,
+        visitorName: params.visitorName?.trim() || existing.visitorName,
+        visitorEmail: params.visitorEmail?.trim() || existing.visitorEmail,
+        visitorWhatsapp: params.visitorWhatsapp?.trim() || existing.visitorWhatsapp,
+        mode: 'human',
+        status: 'open',
+        humanRequestedAt: existing.humanRequestedAt || nowIso,
+        escalatedToHuman: true,
+        unreadByAgent: (existing.unreadByAgent || 0) + 1,
+        messages: [...(existing.messages || []), ...newMessages].slice(-150),
+        updatedAt: nowIso,
+        expiresAt
+      };
+      list[idx] = updated;
+      this.save();
+      mongoUpsert('supportConversations', updated.id, updated).catch(() => {});
+      return { conversation: updated, message: visitorMsg || systemNotice };
+    }
+
+    const created: SupportConversation = {
+      id: `conv_${now}_${Math.random().toString(36).slice(2, 6)}`,
+      sessionId: params.sessionId,
+      visitorName: params.visitorName?.trim() || 'Website Visitor',
+      visitorEmail: params.visitorEmail?.trim(),
+      visitorWhatsapp: params.visitorWhatsapp?.trim(),
+      mode: 'human',
+      status: 'open',
+      humanRequestedAt: nowIso,
+      unreadByAgent: 1,
+      escalatedToHuman: true,
+      messages: newMessages,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      expiresAt
+    };
+
+    list.unshift(created);
+    if (list.length > 500) {
+      const dropped = list.pop();
+      if (dropped) mongoDelete('supportConversations', dropped.id).catch(() => {});
+    }
+    this.save();
+    mongoUpsert('supportConversations', created.id, created).catch(() => {});
+    return { conversation: created, message: visitorMsg || systemNotice };
+  }
+
+  addVisitorLiveMessage(params: {
+    sessionId: string;
+    text: string;
+    visitorName?: string;
+    visitorEmail?: string;
+    visitorWhatsapp?: string;
+  }): { conversation: SupportConversation; message: SupportChatMessage } {
+    this.purgeExpiredSupportConversations();
+    this.ensureMeetingArrays();
+    const now = Date.now();
+    const retentionMs = 7 * 24 * 60 * 60 * 1000;
+    const nowIso = new Date(now).toISOString();
+    const expiresAt = new Date(now + retentionMs).toISOString();
+
+    const list = this.data.supportConversations!;
+    const idx = list.findIndex(c => c.sessionId === params.sessionId);
+
+    const visitorMsg: SupportChatMessage = {
+      id: `msg_u_${now}_${Math.random().toString(36).slice(2, 6)}`,
+      role: 'user',
+      text: params.text.trim(),
+      senderName: params.visitorName?.trim() || (idx !== -1 ? list[idx].visitorName : undefined) || 'Website Visitor',
+      timestamp: nowIso
+    };
+
+    if (idx !== -1) {
+      const existing = list[idx];
+      const updated: SupportConversation = {
+        ...existing,
+        visitorName: params.visitorName?.trim() || existing.visitorName,
+        visitorEmail: params.visitorEmail?.trim() || existing.visitorEmail,
+        visitorWhatsapp: params.visitorWhatsapp?.trim() || existing.visitorWhatsapp,
+        mode: 'human',
+        status: 'open',
+        humanRequestedAt: existing.humanRequestedAt || nowIso,
+        escalatedToHuman: true,
+        unreadByAgent: (existing.unreadByAgent || 0) + 1,
+        messages: [...(existing.messages || []), visitorMsg].slice(-150),
+        updatedAt: nowIso,
+        expiresAt
+      };
+      list[idx] = updated;
+      this.save();
+      mongoUpsert('supportConversations', updated.id, updated).catch(() => {});
+      return { conversation: updated, message: visitorMsg };
+    }
+
+    const created: SupportConversation = {
+      id: `conv_${now}_${Math.random().toString(36).slice(2, 6)}`,
+      sessionId: params.sessionId,
+      visitorName: params.visitorName?.trim() || 'Website Visitor',
+      visitorEmail: params.visitorEmail?.trim(),
+      visitorWhatsapp: params.visitorWhatsapp?.trim(),
+      mode: 'human',
+      status: 'open',
+      humanRequestedAt: nowIso,
+      unreadByAgent: 1,
+      escalatedToHuman: true,
+      messages: [visitorMsg],
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      expiresAt
+    };
+
+    list.unshift(created);
+    if (list.length > 500) {
+      const dropped = list.pop();
+      if (dropped) mongoDelete('supportConversations', dropped.id).catch(() => {});
+    }
+    this.save();
+    mongoUpsert('supportConversations', created.id, created).catch(() => {});
+    return { conversation: created, message: visitorMsg };
+  }
+
+  addAgentLiveReply(params: {
+    conversationId: string;
+    text: string;
+    agentName: string;
+  }): { conversation: SupportConversation; message: SupportChatMessage } | null {
+    this.purgeExpiredSupportConversations();
+    this.ensureMeetingArrays();
+    const list = this.data.supportConversations!;
+    const idx = list.findIndex(c => c.id === params.conversationId || c.sessionId === params.conversationId);
+    if (idx === -1) return null;
+
+    const existing = list[idx];
+    const now = Date.now();
+    const retentionMs = 7 * 24 * 60 * 60 * 1000;
+    const nowIso = new Date(now).toISOString();
+    const expiresAt = new Date(now + retentionMs).toISOString();
+
+    const agentMsg: SupportChatMessage = {
+      id: `msg_agent_${now}_${Math.random().toString(36).slice(2, 6)}`,
+      role: 'agent',
+      text: params.text.trim(),
+      senderName: params.agentName || 'Council Coordinator',
+      timestamp: nowIso
+    };
+
+    const updated: SupportConversation = {
+      ...existing,
+      mode: 'human',
+      status: 'open',
+      escalatedToHuman: true,
+      assignedAgentName: params.agentName || existing.assignedAgentName,
+      unreadByAgent: 0,
+      messages: [...(existing.messages || []), agentMsg].slice(-150),
+      updatedAt: nowIso,
+      expiresAt
+    };
+
+    list[idx] = updated;
+    this.save();
+    mongoUpsert('supportConversations', updated.id, updated).catch(() => {});
+    return { conversation: updated, message: agentMsg };
+  }
+
+  markSupportConversationRead(conversationId: string): SupportConversation | null {
+    this.ensureMeetingArrays();
+    const list = this.data.supportConversations!;
+    const idx = list.findIndex(c => c.id === conversationId || c.sessionId === conversationId);
+    if (idx === -1) return null;
+    if ((list[idx].unreadByAgent || 0) === 0) return list[idx];
+    const updated: SupportConversation = { ...list[idx], unreadByAgent: 0 };
+    list[idx] = updated;
+    this.save();
+    mongoUpsert('supportConversations', updated.id, updated).catch(() => {});
+    return updated;
+  }
+
+  updateSupportConversationStatus(
+    conversationId: string,
+    status: 'open' | 'resolved',
+    mode?: 'ai' | 'human'
+  ): SupportConversation | null {
+    this.ensureMeetingArrays();
+    const list = this.data.supportConversations!;
+    const idx = list.findIndex(c => c.id === conversationId || c.sessionId === conversationId);
+    if (idx === -1) return null;
+    const updated: SupportConversation = {
+      ...list[idx],
+      status,
+      ...(mode ? { mode } : {}),
+      unreadByAgent: status === 'resolved' ? 0 : list[idx].unreadByAgent,
+      updatedAt: new Date().toISOString()
+    };
+    list[idx] = updated;
+    this.save();
+    mongoUpsert('supportConversations', updated.id, updated).catch(() => {});
+    return updated;
+  }
+
+  switchSupportConversationMode(sessionId: string, mode: 'ai' | 'human'): SupportConversation | null {
+    this.ensureMeetingArrays();
+    const list = this.data.supportConversations!;
+    const idx = list.findIndex(c => c.sessionId === sessionId);
+    if (idx === -1) return null;
+    const updated: SupportConversation = {
+      ...list[idx],
+      mode,
+      status: 'open',
+      updatedAt: new Date().toISOString()
+    };
+    list[idx] = updated;
+    this.save();
+    mongoUpsert('supportConversations', updated.id, updated).catch(() => {});
+    return updated;
+  }
+
   deleteSupportConversation(id: string): boolean {
     this.ensureMeetingArrays();
     const prevLen = this.data.supportConversations!.length;

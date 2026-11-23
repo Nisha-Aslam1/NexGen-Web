@@ -18,10 +18,38 @@ import {
   RotateCcw,
   UserCheck,
   Loader2,
-  Bot
+  Bot,
+  Headphones
 } from 'lucide-react';
 
 const SUPPORT_SESSION_STORAGE_KEY = 'nexgen_support_ai_session';
+const SUPPORT_LIVE_MODE_KEY = 'nexgen_support_live_mode';
+
+function playVisitorReplyChime() {
+  try {
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, now);
+    osc.frequency.exponentialRampToValueAtTime(880, now + 0.12);
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.exponentialRampToValueAtTime(0.12, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.3);
+    setTimeout(() => {
+      try {
+        ctx.close();
+      } catch {}
+    }, 450);
+  } catch {}
+}
 
 const QUICK_FAQS = [
   {
@@ -94,14 +122,42 @@ export const SupportWidget: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'ai' | 'ticket' | 'faq'>('ai');
   const [openFaq, setOpenFaq] = useState<number | null>(0);
 
-  // AI Concierge State (persisted for 7 days on backend)
+  // AI + Live Human Chat State (persisted for 7 days on backend)
   const [sessionId, setSessionId] = useState<string>(() => getOrCreateSupportSessionId(false));
   const [aiMessages, setAiMessages] = useState<SupportChatMessage[]>([]);
   const [aiInput, setAiInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [chatMode, setChatMode] = useState<'ai' | 'human'>(() => {
+    try {
+      return localStorage.getItem(SUPPORT_LIVE_MODE_KEY) === 'human' ? 'human' : 'ai';
+    } catch {
+      return 'ai';
+    }
+  });
+  const [assignedAgentName, setAssignedAgentName] = useState<string | null>(null);
+  const [chatStatus, setChatStatus] = useState<'open' | 'resolved'>('open');
+  const [wsConnected, setWsConnected] = useState(false);
+  const [unreadHumanReplies, setUnreadHumanReplies] = useState(0);
+  const [showHandoffCard, setShowHandoffCard] = useState(false);
+  const [handoffLoading, setHandoffLoading] = useState(false);
+  const [visitorDetails, setVisitorDetails] = useState({ name: '', email: '', whatsapp: '' });
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const isOpenRef = useRef(isOpen);
+
+  useEffect(() => {
+    isOpenRef.current = isOpen;
+    if (isOpen) {
+      setUnreadHumanReplies(0);
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SUPPORT_LIVE_MODE_KEY, chatMode);
+    } catch {}
+  }, [chatMode]);
 
   // Direct Human Ticket Form State
   const [formData, setFormData] = useState({
@@ -119,9 +175,9 @@ export const SupportWidget: React.FC = () => {
     setIsOpen(false);
   };
 
-  // Load saved 7-day AI conversation history when widget opens
+  // Load saved 7-day chat history when widget opens (or immediately if returning in Live Human mode)
   useEffect(() => {
-    if (!isOpen || historyLoaded) return;
+    if ((!isOpen && chatMode !== 'human') || historyLoaded) return;
     let active = true;
     (async () => {
       try {
@@ -130,6 +186,18 @@ export const SupportWidget: React.FC = () => {
           const data = await res.json();
           if (Array.isArray(data.messages)) {
             setAiMessages(data.messages);
+          }
+          if (data.mode === 'human' || data.mode === 'ai') {
+            setChatMode(data.mode);
+          }
+          if (data.assignedAgentName) setAssignedAgentName(data.assignedAgentName);
+          if (data.status === 'resolved' || data.status === 'open') setChatStatus(data.status);
+          if (data.visitorName || data.visitorEmail || data.visitorWhatsapp) {
+            setVisitorDetails({
+              name: data.visitorName || '',
+              email: data.visitorEmail || '',
+              whatsapp: data.visitorWhatsapp || ''
+            });
           }
         }
       } catch {
@@ -141,7 +209,99 @@ export const SupportWidget: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [isOpen, historyLoaded, sessionId]);
+  }, [isOpen, chatMode, historyLoaded, sessionId]);
+
+  // Real-time WebSocket listener for Live Human Coordinator replies
+  useEffect(() => {
+    if (!isOpen && chatMode !== 'human') {
+      setWsConnected(false);
+      return;
+    }
+
+    let closedByUser = false;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+
+    const connect = () => {
+      if (closedByUser) return;
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${proto}//${window.location.host}/ws/support?role=visitor&sessionId=${encodeURIComponent(sessionId)}`;
+
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch {
+        setWsConnected(false);
+        return;
+      }
+
+      ws.onopen = () => {
+        attempts = 0;
+        setWsConnected(true);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (!payload || !payload.type) return;
+
+          if (payload.type === 'support:agent_reply' || payload.type === 'support:conversation_updated') {
+            const conv = payload.conversation;
+            if (conv) {
+              if (Array.isArray(conv.messages)) {
+                setAiMessages(conv.messages);
+              }
+              if (conv.mode === 'human' || conv.mode === 'ai') {
+                setChatMode(conv.mode);
+              }
+              if (conv.assignedAgentName) {
+                setAssignedAgentName(conv.assignedAgentName);
+              }
+              if (conv.status === 'resolved' || conv.status === 'open') {
+                setChatStatus(conv.status);
+              }
+            }
+
+            if (payload.type === 'support:agent_reply') {
+              playVisitorReplyChime();
+              if (!isOpenRef.current) {
+                setUnreadHumanReplies(prev => prev + 1);
+                addToast(
+                  `Live Support reply from ${payload.message?.senderName || 'Coordinator'}`,
+                  'info'
+                );
+              }
+            }
+          }
+        } catch {}
+      };
+
+      ws.onclose = () => {
+        setWsConnected(false);
+        if (!closedByUser) {
+          attempts += 1;
+          const delay = Math.min(10000, 1500 * attempts);
+          reconnectTimer = setTimeout(connect, delay);
+        }
+      };
+
+      ws.onerror = () => {
+        setWsConnected(false);
+      };
+    };
+
+    connect();
+
+    return () => {
+      closedByUser = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) {
+        try {
+          ws.close();
+        } catch {}
+      }
+    };
+  }, [isOpen, chatMode, sessionId, addToast]);
 
   useEffect(() => {
     if (isOpen && activeTab === 'ai') {
@@ -149,9 +309,112 @@ export const SupportWidget: React.FC = () => {
     }
   }, [aiMessages, aiLoading, isOpen, activeTab]);
 
+  const handleRequestLiveHuman = async (withDetails = false) => {
+    if (handoffLoading) return;
+    setAiError(null);
+    setHandoffLoading(true);
+    try {
+      const pendingText = aiInput.trim();
+      const res = await fetch('/api/support-live/handoff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          name: withDetails ? visitorDetails.name.trim() || undefined : undefined,
+          email: withDetails ? visitorDetails.email.trim() || undefined : undefined,
+          whatsapp: withDetails ? visitorDetails.whatsapp.trim() || undefined : undefined,
+          message: pendingText || undefined
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || 'Could not connect to live human support right now.');
+      }
+      if (pendingText) setAiInput('');
+      setChatMode('human');
+      setChatStatus('open');
+      setShowHandoffCard(false);
+      if (data.conversation && Array.isArray(data.conversation.messages)) {
+        setAiMessages(data.conversation.messages);
+      }
+      addToast('Live Human Support activated! Coordinators have been notified.', 'success');
+    } catch (err: any) {
+      setAiError(err?.message || 'Could not connect to live support.');
+    } finally {
+      setHandoffLoading(false);
+    }
+  };
+
+  const handleSwitchBackToAi = async () => {
+    try {
+      const res = await fetch('/api/support-live/switch-mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ sessionId, mode: 'ai' })
+      });
+      if (res.ok) {
+        setChatMode('ai');
+        setShowHandoffCard(false);
+      }
+    } catch {}
+  };
+
+  const handleSendLiveHumanMessage = async (textToSend: string) => {
+    setAiError(null);
+    setAiInput('');
+
+    const optimisticUserMsg: SupportChatMessage = {
+      id: `tmp_u_${Date.now()}`,
+      role: 'user',
+      senderName: visitorDetails.name || undefined,
+      text: textToSend,
+      timestamp: new Date().toISOString()
+    };
+
+    setAiMessages(prev => [...prev, optimisticUserMsg]);
+    setAiLoading(true);
+
+    try {
+      const res = await fetch('/api/support-live/visitor-message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          text: textToSend,
+          name: visitorDetails.name.trim() || undefined,
+          email: visitorDetails.email.trim() || undefined,
+          whatsapp: visitorDetails.whatsapp.trim() || undefined
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || 'Could not deliver message.');
+      }
+      if (data.conversation && Array.isArray(data.conversation.messages)) {
+        setAiMessages(data.conversation.messages);
+      }
+    } catch (err: any) {
+      setAiError(err?.message || 'Unable to deliver live message.');
+      setAiMessages(prev => prev.filter(m => m.id !== optimisticUserMsg.id));
+      setAiInput(textToSend);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const handleSendAiMessage = async (overrideText?: string) => {
     const textToSend = (overrideText ?? aiInput).trim();
     if (!textToSend || aiLoading) return;
+
+    if (chatMode === 'human' && !overrideText) {
+      await handleSendLiveHumanMessage(textToSend);
+      return;
+    }
+
+    if (overrideText === 'Connect me with a human coordinator') {
+      setShowHandoffCard(true);
+      return;
+    }
 
     setAiError(null);
     if (!overrideText) setAiInput('');
@@ -222,6 +485,10 @@ export const SupportWidget: React.FC = () => {
     setSessionId(newSid);
     setAiMessages([]);
     setAiError(null);
+    setChatMode('ai');
+    setAssignedAgentName(null);
+    setChatStatus('open');
+    setShowHandoffCard(false);
     setHistoryLoaded(true);
   };
 
@@ -353,7 +620,7 @@ export const SupportWidget: React.FC = () => {
                 }`}
               >
                 <Bot className="w-3.5 h-3.5" />
-                <span>AI Guide</span>
+                <span>Live &amp; AI Chat</span>
               </button>
               <button
                 type="button"
@@ -385,20 +652,120 @@ export const SupportWidget: React.FC = () => {
           {/* Body */}
           {activeTab === 'ai' ? (
             <div className="flex flex-col h-[440px] bg-slate-50/70">
-              {/* Sub-header Bar */}
-              <div className="px-4 py-2 bg-white border-b border-slate-200/80 flex items-center justify-between text-[11px] text-slate-500">
-                <span>7-day conversation memory active</span>
-                {aiMessages.length > 0 && (
+              {/* Sub-header Bar with Live Human Switch */}
+              <div className="px-3.5 py-2 bg-white border-b border-slate-200/80 flex items-center justify-between gap-2 text-[11px]">
+                {chatMode === 'human' ? (
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="relative flex h-2 w-2 shrink-0">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                    </span>
+                    <span className="font-bold text-emerald-800 truncate">
+                      {assignedAgentName ? `Live: ${assignedAgentName}` : 'Live Human Support'}
+                    </span>
+                    {!wsConnected && (
+                      <span className="text-[10px] text-amber-700 font-medium">(Syncing)</span>
+                    )}
+                  </div>
+                ) : (
+                  <span className="text-slate-600 font-medium truncate">AI Guide · 7d Memory</span>
+                )}
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {chatMode === 'human' ? (
+                    <button
+                      type="button"
+                      onClick={handleSwitchBackToAi}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold cursor-pointer"
+                    >
+                      <Bot className="w-3 h-3 text-indigo-700" />
+                      <span>AI Mode</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setShowHandoffCard(!showHandoffCard)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-2xs cursor-pointer"
+                    >
+                      <Headphones className="w-3 h-3" />
+                      <span>Live Human</span>
+                    </button>
+                  )}
+
+                  {aiMessages.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleStartNewAiChat}
+                      title="Start new conversation"
+                      className="inline-flex items-center gap-1 text-indigo-700 hover:text-indigo-950 font-semibold cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>New</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Optional Live Human Handoff Card */}
+              {showHandoffCard && chatMode !== 'human' && (
+                <div className="p-3 bg-emerald-50/90 border-b border-emerald-200 space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                        <UserCheck className="w-3.5 h-3.5 text-emerald-700" />
+                        <span>Connect to Live Secretariat Coordinator</span>
+                      </p>
+                      <p className="text-[11px] text-emerald-800 mt-0.5">
+                        Coordinators receive instant alerts on their Support App and reply right here in real time.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowHandoffCard(false)}
+                      className="text-emerald-700 hover:text-emerald-950 p-0.5 cursor-pointer"
+                      aria-label="Close live connect panel"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={visitorDetails.name}
+                      onChange={e => setVisitorDetails(d => ({ ...d, name: e.target.value }))}
+                      placeholder="Your Name (optional)"
+                      className="px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-white text-[11px] text-slate-900 focus:outline-none focus:border-emerald-600"
+                    />
+                    <input
+                      type="tel"
+                      value={visitorDetails.whatsapp}
+                      onChange={e => setVisitorDetails(d => ({ ...d, whatsapp: e.target.value }))}
+                      placeholder="WhatsApp (optional)"
+                      className="px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-white text-[11px] text-slate-900 focus:outline-none focus:border-emerald-600"
+                    />
+                  </div>
+
                   <button
                     type="button"
-                    onClick={handleStartNewAiChat}
-                    className="inline-flex items-center gap-1 text-indigo-700 hover:text-indigo-950 font-semibold cursor-pointer"
+                    disabled={handoffLoading}
+                    onClick={() => handleRequestLiveHuman(true)}
+                    className="w-full py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50"
                   >
-                    <RotateCcw className="w-3 h-3" />
-                    <span>New Chat</span>
+                    {handoffLoading ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Connecting...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Headphones className="w-3.5 h-3.5" />
+                        <span>Start Live Human Chat Now</span>
+                      </>
+                    )}
                   </button>
-                )}
-              </div>
+                </div>
+              )}
 
               {/* Chat Transcript Scroll Area */}
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -406,16 +773,16 @@ export const SupportWidget: React.FC = () => {
                   <div className="space-y-3.5">
                     <div className="rounded-2xl bg-white border border-slate-200 p-3.5 text-xs text-slate-700 space-y-1.5 shadow-2xs">
                       <p className="font-bold text-slate-900">
-                        Welcome to NexGen Council AI Assistant
+                        Welcome to NexGen Council Support
                       </p>
                       <p className="leading-relaxed text-slate-600">
-                        Ask anything about our programs, volunteer applications, tracking codes, upcoming events, certificates, or request to connect with a real Secretariat coordinator in English, Urdu, or Roman Urdu.
+                        Ask our AI Guide anything right away, or tap <strong className="text-emerald-700">Live Human</strong> above to chat directly with a real Council Secretariat coordinator in English, Urdu, or Roman Urdu.
                       </p>
                     </div>
 
                     <div className="space-y-1.5">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1">
-                        Suggested Questions
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-1">
+                        Quick Actions &amp; Questions
                       </p>
                       <div className="grid grid-cols-1 gap-1.5">
                         {AI_STARTER_PROMPTS.map(prompt => (
@@ -440,14 +807,23 @@ export const SupportWidget: React.FC = () => {
                         msg.role === 'user' ? 'items-end' : 'items-start'
                       }`}
                     >
+                      {msg.role === 'agent' && (
+                        <span className="inline-flex items-center gap-1 px-1.5 mb-1 text-[10px] font-bold text-emerald-700">
+                          <UserCheck className="w-3 h-3" />
+                          <span>{msg.senderName || 'Council Coordinator'}</span>
+                        </span>
+                      )}
+
                       <div
                         className={`max-w-[88%] rounded-2xl px-3.5 py-2.5 text-xs ${
                           msg.role === 'user'
                             ? 'bg-indigo-950 text-white rounded-br-sm'
+                            : msg.role === 'agent'
+                            ? 'bg-emerald-50 border border-emerald-200 text-slate-900 rounded-bl-sm shadow-2xs'
                             : 'bg-white border border-slate-200 text-slate-700 rounded-bl-sm shadow-2xs'
                         }`}
                       >
-                        {msg.role === 'user' ? (
+                        {msg.role === 'user' || msg.role === 'agent' ? (
                           <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
                         ) : (
                           <SupportRichText
@@ -468,7 +844,7 @@ export const SupportWidget: React.FC = () => {
                         </div>
                       )}
 
-                      <span className="mt-1 px-1 text-[10px] text-slate-400 font-mono">
+                      <span className="mt-1 px-1 text-[10px] text-slate-500 font-mono">
                         {new Date(msg.timestamp).toLocaleTimeString([], {
                           hour: '2-digit',
                           minute: '2-digit'
@@ -478,11 +854,17 @@ export const SupportWidget: React.FC = () => {
                   ))
                 )}
 
+                {chatMode === 'human' && chatStatus === 'resolved' && (
+                  <div className="rounded-xl bg-slate-100 border border-slate-200 px-3 py-2 text-[11px] text-slate-700 text-center">
+                    This support session was marked resolved. Send a message anytime to reopen it.
+                  </div>
+                )}
+
                 {aiLoading && (
                   <div className="flex items-start">
                     <div className="rounded-2xl rounded-bl-sm bg-white border border-slate-200 px-3.5 py-2.5 text-xs text-slate-500 flex items-center gap-2 shadow-2xs">
                       <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />
-                      <span>Thinking...</span>
+                      <span>{chatMode === 'human' ? 'Sending...' : 'Thinking...'}</span>
                     </div>
                   </div>
                 )}
@@ -517,14 +899,22 @@ export const SupportWidget: React.FC = () => {
                   value={aiInput}
                   onChange={e => setAiInput(e.target.value)}
                   disabled={aiLoading}
-                  placeholder="Ask anything or request human support..."
+                  placeholder={
+                    chatMode === 'human'
+                      ? 'Message live human coordinator...'
+                      : 'Ask AI or click Live Human above...'
+                  }
                   className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-300 bg-slate-50 focus:bg-white text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-600 disabled:opacity-60"
                 />
                 <button
                   type="submit"
                   disabled={aiLoading || !aiInput.trim()}
-                  aria-label="Send message to AI Assistant"
-                  className="p-2.5 rounded-xl bg-indigo-950 hover:bg-indigo-900 text-white transition-colors disabled:opacity-40 cursor-pointer shrink-0"
+                  aria-label={chatMode === 'human' ? 'Send live message' : 'Send message to AI Assistant'}
+                  className={`p-2.5 rounded-xl text-white transition-colors disabled:opacity-40 cursor-pointer shrink-0 ${
+                    chatMode === 'human'
+                      ? 'bg-emerald-700 hover:bg-emerald-800'
+                      : 'bg-indigo-950 hover:bg-indigo-900'
+                  }`}
                 >
                   <Send className="w-4 h-4 text-amber-300" />
                 </button>
@@ -775,8 +1165,13 @@ export const SupportWidget: React.FC = () => {
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         aria-label="Open Customer Support"
-        className="bg-transparent border-none p-0 focus:outline-none transition-transform duration-200 hover:scale-105 active:scale-95 cursor-pointer"
+        className="relative bg-transparent border-none p-0 focus:outline-none transition-transform duration-200 hover:scale-105 active:scale-95 cursor-pointer"
       >
+        {!isOpen && unreadHumanReplies > 0 && (
+          <span className="absolute -top-1 right-1 z-10 min-w-[22px] h-[22px] px-1.5 rounded-full bg-rose-600 text-white text-[11px] font-bold flex items-center justify-center shadow-lg border-2 border-white animate-bounce">
+            {unreadHumanReplies}
+          </span>
+        )}
         <picture>
           <source srcSet="/NexGen-Support-2.webp" type="image/webp" />
           <img

@@ -1,5 +1,7 @@
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
+import http from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
 import compression from 'compression';
 import path from 'path';
 import crypto from 'crypto';
@@ -41,6 +43,7 @@ import {
   isValidImageUrl
 } from './server/email.ts';
 import { handleSupportAiChat, SUPPORT_AI_MODEL } from './server/supportAi.ts';
+import { buildDirectoryZipBuffer } from './server/zipExport.ts';
 
 const app = express();
 const PORT = 3000;
@@ -406,6 +409,39 @@ function requireAuth(allowedRoles?: Role[]) {
     (req as any).user = session;
     next();
   };
+}
+
+// Live Human Support WebSocket Registry (real-time bidirectional chat + agent alerts)
+const SUPPORT_AGENT_ROLES: Role[] = [
+  'SUPER_ADMIN',
+  'ADMIN',
+  'VOLUNTEER_MANAGER',
+  'CONTENT_MANAGER',
+  'COMMUNICATIONS_OFFICER'
+];
+const visitorSupportSockets = new Map<string, Set<WebSocket>>();
+const agentSupportSockets = new Set<WebSocket>();
+
+function safeWsSend(ws: WebSocket, payload: unknown) {
+  if (ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(JSON.stringify(payload));
+    } catch {}
+  }
+}
+
+function broadcastToSupportAgents(payload: unknown) {
+  for (const ws of agentSupportSockets) {
+    safeWsSend(ws, payload);
+  }
+}
+
+function broadcastToSupportVisitor(sessionId: string, payload: unknown) {
+  const set = visitorSupportSockets.get(sessionId);
+  if (!set) return;
+  for (const ws of set) {
+    safeWsSend(ws, payload);
+  }
 }
 
 // ----------------------------------------------------
@@ -1682,6 +1718,10 @@ app.post(['/api/contact', '/api/contacts', '/api/support-widget'], (req, res) =>
     details: `Inquiry received via ${normalizedSource} from ${cleanName} (${cleanEmail}${cleanWhatsapp ? `, WhatsApp: ${cleanWhatsapp}` : ''}): "${contact.subject}"`,
     ipAddress: req.ip || 'unknown'
   });
+  broadcastToSupportAgents({
+    type: 'support:new_ticket',
+    contact
+  });
   res.status(201).json({
     ok: true,
     id: contact.id,
@@ -1705,15 +1745,22 @@ app.delete(['/api/contact/:id', '/api/contacts/:id'], requireAuth(['ADMIN']), (r
   res.json({ ok: true });
 });
 
-// 10a. Support Widget Gemini 3.1 Flash Lite AI Concierge & 7-Day Chat Memory
+// 10a. Support Widget Gemini 3.1 Flash Lite AI Concierge, 7-Day Chat Memory & Live Human Support
 app.get('/api/support-ai/history', (req, res) => {
   const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId.trim() : '';
   if (!sessionId || sessionId.length > 100) {
-    return res.json({ messages: [], conversationId: null, model: SUPPORT_AI_MODEL });
+    return res.json({ messages: [], conversationId: null, mode: 'ai', status: 'open', model: SUPPORT_AI_MODEL });
   }
   const conv = db.getSupportConversationBySession(sessionId);
   return res.json({
     conversationId: conv?.id || null,
+    mode: conv?.mode || 'ai',
+    status: conv?.status || 'open',
+    assignedAgentName: conv?.assignedAgentName || null,
+    visitorName: conv?.visitorName || '',
+    visitorEmail: conv?.visitorEmail || '',
+    visitorWhatsapp: conv?.visitorWhatsapp || '',
+    unreadByAgent: conv?.unreadByAgent || 0,
     escalatedToHuman: Boolean(conv?.escalatedToHuman),
     linkedContactId: conv?.linkedContactId || null,
     expiresAt: conv?.expiresAt || null,
@@ -1741,6 +1788,15 @@ app.post('/api/support-ai/chat', async (req, res) => {
       ipAddress: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown'
     });
 
+    const conv = db.getSupportConversationBySession(cleanSession);
+    if (conv) {
+      broadcastToSupportAgents({
+        type: 'support:conversation_updated',
+        conversation: conv,
+        escalatedTicket: result.escalatedTicket || null
+      });
+    }
+
     res.json(result);
   } catch (err: any) {
     const rawMsg = String(err?.message || 'AI Assistant could not respond right now.');
@@ -1753,6 +1809,202 @@ app.post('/api/support-ai/chat', async (req, res) => {
       ? 429
       : 500;
     res.status(statusCode).json({ error: rawMsg });
+  }
+});
+
+// Public Visitor: Request Live Human Coordinator Handoff
+app.post('/api/support-live/handoff', (req, res) => {
+  const { sessionId, name, email, whatsapp, message } = req.body || {};
+  const cleanSession = typeof sessionId === 'string' ? sessionId.trim() : '';
+  if (!cleanSession || cleanSession.length > 100 || !/^[a-zA-Z0-9_-]{6,100}$/.test(cleanSession)) {
+    return res.status(400).json({ error: 'Valid support session ID is required.' });
+  }
+  const cleanMsg = typeof message === 'string' ? message.trim() : '';
+  if (cleanMsg.length > 2000) {
+    return res.status(400).json({ error: 'Message exceeds 2,000 character limit.' });
+  }
+
+  const { conversation, message: savedMsg } = db.requestHumanSupportHandoff({
+    sessionId: cleanSession,
+    visitorName: typeof name === 'string' ? name.slice(0, 80) : undefined,
+    visitorEmail: typeof email === 'string' ? email.slice(0, 120) : undefined,
+    visitorWhatsapp: typeof whatsapp === 'string' ? whatsapp.slice(0, 40) : undefined,
+    initialMessage: cleanMsg || undefined
+  });
+
+  broadcastToSupportAgents({
+    type: 'support:handoff',
+    conversation,
+    message: savedMsg
+  });
+  broadcastToSupportVisitor(cleanSession, {
+    type: 'support:conversation_updated',
+    conversation
+  });
+
+  res.status(201).json({
+    ok: true,
+    conversation
+  });
+});
+
+// Public Visitor: Send Live Message to Human Coordinator
+app.post('/api/support-live/visitor-message', (req, res) => {
+  const { sessionId, text, name, email, whatsapp } = req.body || {};
+  const cleanSession = typeof sessionId === 'string' ? sessionId.trim() : '';
+  const cleanText = typeof text === 'string' ? text.trim() : '';
+
+  if (!cleanSession || cleanSession.length > 100 || !/^[a-zA-Z0-9_-]{6,100}$/.test(cleanSession)) {
+    return res.status(400).json({ error: 'Valid support session ID is required.' });
+  }
+  if (!cleanText || cleanText.length > 2000) {
+    return res.status(400).json({ error: 'Message must be between 1 and 2,000 characters.' });
+  }
+
+  const { conversation, message } = db.addVisitorLiveMessage({
+    sessionId: cleanSession,
+    text: cleanText,
+    visitorName: typeof name === 'string' ? name.slice(0, 80) : undefined,
+    visitorEmail: typeof email === 'string' ? email.slice(0, 120) : undefined,
+    visitorWhatsapp: typeof whatsapp === 'string' ? whatsapp.slice(0, 40) : undefined
+  });
+
+  const payload = {
+    type: 'support:new_message',
+    conversationId: conversation.id,
+    sessionId: conversation.sessionId,
+    message,
+    conversation
+  };
+  broadcastToSupportAgents(payload);
+  broadcastToSupportVisitor(cleanSession, {
+    type: 'support:conversation_updated',
+    conversation
+  });
+
+  res.status(201).json({
+    ok: true,
+    message,
+    conversation
+  });
+});
+
+// Public Visitor: Switch chat mode between AI and Live Human
+app.post('/api/support-live/switch-mode', (req, res) => {
+  const { sessionId, mode } = req.body || {};
+  const cleanSession = typeof sessionId === 'string' ? sessionId.trim() : '';
+  const targetMode = mode === 'human' ? 'human' : 'ai';
+  if (!cleanSession || cleanSession.length > 100) {
+    return res.status(400).json({ error: 'Valid session ID is required.' });
+  }
+  const updated = db.switchSupportConversationMode(cleanSession, targetMode);
+  if (updated) {
+    broadcastToSupportAgents({ type: 'support:conversation_updated', conversation: updated });
+    broadcastToSupportVisitor(cleanSession, { type: 'support:conversation_updated', conversation: updated });
+  }
+  res.json({ ok: true, mode: targetMode, conversation: updated });
+});
+
+// Authenticated Agents: Fetch all live conversations (prioritizing live human & unread chats)
+app.get('/api/support-live/conversations', requireAuth(SUPPORT_AGENT_ROLES), (req, res) => {
+  const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+  const all = db.getSupportConversations(search);
+  const sorted = [...all].sort((a, b) => {
+    const aHumanUnread = (a.unreadByAgent || 0) > 0 ? 2 : a.mode === 'human' || a.escalatedToHuman ? 1 : 0;
+    const bHumanUnread = (b.unreadByAgent || 0) > 0 ? 2 : b.mode === 'human' || b.escalatedToHuman ? 1 : 0;
+    if (bHumanUnread !== aHumanUnread) return bHumanUnread - aHumanUnread;
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+  const totalUnread = sorted.reduce((acc, c) => acc + (c.unreadByAgent || 0), 0);
+  res.json({
+    conversations: sorted,
+    totalUnread
+  });
+});
+
+// Authenticated Agents: Send live reply to visitor (broadcast instantly to website widget & agent apps)
+app.post('/api/support-live/conversations/:id/reply', requireAuth(SUPPORT_AGENT_ROLES), (req, res) => {
+  const rawText = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  if (!rawText || rawText.length > 4000) {
+    return res.status(400).json({ error: 'Reply message must be between 1 and 4,000 characters.' });
+  }
+
+  const actor = (req as any).user as AuthSession;
+  const result = db.addAgentLiveReply({
+    conversationId: req.params.id,
+    text: rawText,
+    agentName: actor?.name || 'Council Coordinator'
+  });
+
+  if (!result) {
+    return res.status(404).json({ error: 'Conversation not found.' });
+  }
+
+  const eventPayload = {
+    type: 'support:agent_reply',
+    conversationId: result.conversation.id,
+    sessionId: result.conversation.sessionId,
+    message: result.message,
+    conversation: result.conversation
+  };
+
+  broadcastToSupportVisitor(result.conversation.sessionId, eventPayload);
+  broadcastToSupportAgents(eventPayload);
+
+  res.status(201).json({
+    ok: true,
+    message: result.message,
+    conversation: result.conversation
+  });
+});
+
+// Authenticated Agents: Mark conversation unread messages as read
+app.patch('/api/support-live/conversations/:id/read', requireAuth(SUPPORT_AGENT_ROLES), (req, res) => {
+  const updated = db.markSupportConversationRead(req.params.id);
+  if (!updated) {
+    return res.status(404).json({ error: 'Conversation not found.' });
+  }
+  broadcastToSupportAgents({
+    type: 'support:conversation_updated',
+    conversation: updated
+  });
+  res.json({ ok: true, conversation: updated });
+});
+
+// Authenticated Agents: Mark conversation resolved or reopened
+app.patch('/api/support-live/conversations/:id/status', requireAuth(SUPPORT_AGENT_ROLES), (req, res) => {
+  const status = req.body?.status === 'resolved' ? 'resolved' : 'open';
+  const mode = req.body?.mode === 'ai' || req.body?.mode === 'human' ? req.body.mode : undefined;
+  const updated = db.updateSupportConversationStatus(req.params.id, status, mode);
+  if (!updated) {
+    return res.status(404).json({ error: 'Conversation not found.' });
+  }
+  broadcastToSupportAgents({
+    type: 'support:conversation_updated',
+    conversation: updated
+  });
+  broadcastToSupportVisitor(updated.sessionId, {
+    type: 'support:conversation_updated',
+    conversation: updated
+  });
+  res.json({ ok: true, conversation: updated });
+});
+
+// Authenticated Agents: Download Native Android Studio Kotlin (.apk source + GitHub Action) bundle
+app.get('/api/support-live/android-project.zip', requireAuth(SUPPORT_AGENT_ROLES), (req, res) => {
+  const androidDir = path.resolve(process.cwd(), 'android-support-app');
+  if (!fs.existsSync(androidDir)) {
+    return res.status(404).json({ error: 'Android source project directory not found.' });
+  }
+  try {
+    const zipBuffer = buildDirectoryZipBuffer(androidDir, 'nexgen-support-android');
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="nexgen-support-android-project.zip"');
+    res.setHeader('Content-Length', String(zipBuffer.length));
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(zipBuffer);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to package Android project.' });
   }
 });
 
@@ -2616,9 +2868,14 @@ async function startServer() {
     res.send(generateSitemapXml(siteUrl));
   });
 
+  const httpServer = http.createServer(app);
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: { server: httpServer }
+      },
       appType: 'custom',
     });
     app.use(vite.middlewares);
@@ -2669,7 +2926,12 @@ async function startServer() {
       index: false,
       maxAge: '1d',
       setHeaders: (res, filePath) => {
-        if (/\.(png|jpe?g|webp|svg|ico|gif)$/i.test(filePath)) {
+        if (/sw\.js$/i.test(filePath)) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        } else if (/manifest\.webmanifest$/i.test(filePath)) {
+          res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-cache');
+        } else if (/\.(png|jpe?g|webp|svg|ico|gif)$/i.test(filePath)) {
           res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
         } else if (/\.(woff2?|ttf|eot)$/i.test(filePath)) {
           res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
@@ -2744,8 +3006,117 @@ async function startServer() {
     } catch {}
   }, 60 * 60 * 1000);
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`NexGen Council Server running on http://0.0.0.0:${PORT}`);
+  const supportWss = new WebSocketServer({ noServer: true });
+
+  const wsAliveMap = new WeakMap<WebSocket, boolean>();
+
+  supportWss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
+    wsAliveMap.set(ws, true);
+    ws.on('pong', () => {
+      wsAliveMap.set(ws, true);
+    });
+
+    const parsedUrl = new URL(req.url || '/ws/support', 'http://localhost');
+    const role = parsedUrl.searchParams.get('role');
+
+    if (role === 'agent') {
+      agentSupportSockets.add(ws);
+      safeWsSend(ws, { type: 'support:connected', role: 'agent' });
+      ws.on('close', () => {
+        agentSupportSockets.delete(ws);
+      });
+      ws.on('error', () => {
+        agentSupportSockets.delete(ws);
+      });
+    } else {
+      const sessionId = (parsedUrl.searchParams.get('sessionId') || '').trim();
+      if (!sessionId || !/^[a-zA-Z0-9_-]{6,100}$/.test(sessionId)) {
+        ws.close(1008, 'Invalid sessionId');
+        return;
+      }
+      if (!visitorSupportSockets.has(sessionId)) {
+        visitorSupportSockets.set(sessionId, new Set());
+      }
+      visitorSupportSockets.get(sessionId)!.add(ws);
+      safeWsSend(ws, { type: 'support:connected', role: 'visitor', sessionId });
+
+      const cleanup = () => {
+        const set = visitorSupportSockets.get(sessionId);
+        if (set) {
+          set.delete(ws);
+          if (set.size === 0) {
+            visitorSupportSockets.delete(sessionId);
+          }
+        }
+      };
+      ws.on('close', cleanup);
+      ws.on('error', cleanup);
+    }
+  });
+
+  const wsHeartbeatTimer = setInterval(() => {
+    for (const ws of supportWss.clients) {
+      if (wsAliveMap.get(ws) === false) {
+        try {
+          ws.terminate();
+        } catch {}
+        continue;
+      }
+      wsAliveMap.set(ws, false);
+      try {
+        ws.ping();
+      } catch {}
+    }
+  }, 25000).unref();
+
+  supportWss.on('close', () => clearInterval(wsHeartbeatTimer));
+
+  httpServer.on('upgrade', (request, socket, head) => {
+    try {
+      const parsedUrl = new URL(request.url || '/', 'http://localhost');
+      if (parsedUrl.pathname !== '/ws/support') {
+        const wsProto = String(request.headers['sec-websocket-protocol'] || '').toLowerCase();
+        if (process.env.NODE_ENV !== 'production' && (wsProto.includes('vite') || parsedUrl.pathname === '/')) {
+          return;
+        }
+        socket.destroy();
+        return;
+      }
+
+      const role = parsedUrl.searchParams.get('role') || 'visitor';
+      if (role === 'agent') {
+        const cookies = parseCookies(request.headers.cookie);
+        const queryToken = parsedUrl.searchParams.get('token') || undefined;
+        const authHeader = typeof request.headers.authorization === 'string' && request.headers.authorization.startsWith('Bearer ')
+          ? request.headers.authorization.slice(7).trim()
+          : undefined;
+        const session = verifyToken(queryToken || authHeader || cookies['ng_session']);
+        const roleNorm = normalizeRole(session?.role);
+        const allowed = SUPPORT_AGENT_ROLES.map(r => normalizeRole(r));
+        if (!session || (roleNorm !== 'SUPER_ADMIN' && !allowed.includes(roleNorm))) {
+          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+      } else {
+        const sessionId = (parsedUrl.searchParams.get('sessionId') || '').trim();
+        if (!sessionId || !/^[a-zA-Z0-9_-]{6,100}$/.test(sessionId)) {
+          socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+      }
+
+      supportWss.handleUpgrade(request, socket, head, (ws) => {
+        supportWss.emit('connection', ws, request);
+      });
+    } catch {
+      socket.destroy();
+    }
+  });
+
+  httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log(`NexGen Council Server + WebSocket Support running on http://0.0.0.0:${PORT}`);
   });
 }
 

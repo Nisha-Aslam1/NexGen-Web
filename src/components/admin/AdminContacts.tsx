@@ -15,7 +15,9 @@ import {
   UserCheck,
   Inbox,
   MessageSquareText,
-  X
+  X,
+  Send,
+  Smartphone
 } from 'lucide-react';
 import { ContactMessage, SupportConversation } from '../../types.ts';
 import {
@@ -69,7 +71,7 @@ function formatRetentionRemaining(expiresAt?: string, updatedAt?: string): strin
 }
 
 export const AdminContacts: React.FC = () => {
-  const { addToast } = useApp();
+  const { addToast, setActivePage } = useApp();
   const [mainView, setMainView] = useState<MainView>('inquiries');
 
   // Inquiries Inbox State
@@ -80,7 +82,7 @@ export const AdminContacts: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  // AI 7-Day Chat Logs State
+  // AI 7-Day Chat Logs & Live Support State
   const [conversations, setConversations] = useState<SupportConversation[]>([]);
   const [aiModelName, setAiModelName] = useState<string>('gemini-3.5-flash-lite');
   const [aiLoading, setAiLoading] = useState(false);
@@ -88,6 +90,8 @@ export const AdminContacts: React.FC = () => {
   const [aiFilter, setAiFilter] = useState<AiFilter>('all');
   const [selectedConv, setSelectedConv] = useState<SupportConversation | null>(null);
   const [confirmDeleteConvId, setConfirmDeleteConvId] = useState<string | null>(null);
+  const [liveReplyText, setLiveReplyText] = useState('');
+  const [sendingLiveReply, setSendingLiveReply] = useState(false);
 
   const fetchMessages = useCallback(async () => {
     setLoading(true);
@@ -176,6 +180,51 @@ export const AdminContacts: React.FC = () => {
       addToast('AI conversation deleted permanently', 'info');
     } catch (err: any) {
       addToast(err.message || 'Error deleting AI conversation', 'error');
+    }
+  };
+
+  const handleSendLiveReply = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedConv || !liveReplyText.trim() || sendingLiveReply) return;
+    const textToSend = liveReplyText.trim();
+    setSendingLiveReply(true);
+    try {
+      const res = await authFetch(`/api/support-live/conversations/${selectedConv.id}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: textToSend })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Could not send live reply.');
+      if (data.conversation) {
+        setSelectedConv(data.conversation);
+        setConversations(prev => prev.map(c => (c.id === data.conversation.id ? data.conversation : c)));
+      }
+      setLiveReplyText('');
+      addToast('Live reply delivered to visitor widget!', 'success');
+    } catch (err: any) {
+      addToast(err?.message || 'Error delivering live reply', 'error');
+    } finally {
+      setSendingLiveReply(false);
+    }
+  };
+
+  const handleDownloadAndroidSource = async () => {
+    try {
+      const res = await authFetch('/api/support-live/android-project.zip');
+      if (!res.ok) throw new Error('Download failed.');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'nexgen-support-android-project.zip';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      addToast('Native Android APK project (.zip) downloaded! Build via Android Studio or GitHub Actions.', 'success');
+    } catch {
+      addToast('Could not download Android APK project right now.', 'error');
     }
   };
 
@@ -292,9 +341,28 @@ export const AdminContacts: React.FC = () => {
               }`}
             >
               <Bot className="w-3.5 h-3.5" />
-              <span>AI Chat Logs · 7d ({conversations.length})</span>
+              <span>Live &amp; AI Chats · 7d ({conversations.length})</span>
             </button>
           </div>
+
+          <button
+            type="button"
+            onClick={() => setActivePage('support-desk')}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
+          >
+            <Headphones className="w-3.5 h-3.5 text-amber-300" />
+            <span>Open Live Support App</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleDownloadAndroidSource}
+            title="Download Native Kotlin Android Project (.zip) to compile real .apk"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-950 hover:bg-indigo-900 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
+          >
+            <Smartphone className="w-3.5 h-3.5 text-amber-300" />
+            <span>Android .APK Project (.zip)</span>
+          </button>
 
           <button
             type="button"
@@ -712,17 +780,29 @@ export const AdminContacts: React.FC = () => {
                           </td>
 
                           <td className="py-3.5 px-4 whitespace-nowrap">
-                            {conv.escalatedToHuman ? (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-900">
-                                <UserCheck className="w-3 h-3" />
-                                <span>Escalated to Ticket</span>
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-900">
-                                <Bot className="w-3 h-3" />
-                                <span>AI Guided</span>
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {conv.mode === 'human' ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-900">
+                                  <Headphones className="w-3 h-3" />
+                                  <span>Live Human</span>
+                                </span>
+                              ) : conv.escalatedToHuman ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-900">
+                                  <UserCheck className="w-3 h-3" />
+                                  <span>Escalated Ticket</span>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-900">
+                                  <Bot className="w-3 h-3" />
+                                  <span>AI Guided</span>
+                                </span>
+                              )}
+                              {(conv.unreadByAgent || 0) > 0 && (
+                                <span className="px-2 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-bold">
+                                  {conv.unreadByAgent} new
+                                </span>
+                              )}
+                            </div>
                           </td>
 
                           <td className="py-3.5 px-4 whitespace-nowrap">
@@ -983,13 +1063,19 @@ export const AdminContacts: React.FC = () => {
                     className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-xs leading-relaxed ${
                       msg.role === 'user'
                         ? 'bg-indigo-950 text-white rounded-br-sm'
+                        : msg.role === 'agent'
+                        ? 'bg-emerald-50 border border-emerald-200 text-slate-900 rounded-bl-sm'
                         : 'bg-white border border-slate-200 text-slate-800 rounded-bl-sm'
                     }`}
                   >
-                    <div className="text-[10px] font-bold uppercase tracking-wider opacity-70 mb-1">
-                      {msg.role === 'user' ? 'Visitor' : 'NexGen AI Concierge'}
+                    <div className="text-[10px] font-bold uppercase tracking-wider opacity-75 mb-1">
+                      {msg.role === 'user'
+                        ? msg.senderName || selectedConv.visitorName || 'Visitor'
+                        : msg.role === 'agent'
+                        ? `Coordinator · ${msg.senderName || 'Council Staff'}`
+                        : 'NexGen AI Concierge'}
                     </div>
-                    {msg.role === 'user' ? (
+                    {msg.role === 'user' || msg.role === 'agent' ? (
                       <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
                     ) : (
                       <SupportRichText text={msg.text} variant="light" />
@@ -1007,6 +1093,28 @@ export const AdminContacts: React.FC = () => {
               ))}
             </div>
 
+            <form
+              onSubmit={handleSendLiveReply}
+              className="px-4 py-3 border-t border-slate-200 bg-slate-50 flex items-center gap-2"
+            >
+              <input
+                type="text"
+                value={liveReplyText}
+                onChange={e => setLiveReplyText(e.target.value)}
+                disabled={sendingLiveReply}
+                placeholder="Reply live to visitor's website support widget..."
+                className="flex-1 px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-600"
+              />
+              <button
+                type="submit"
+                disabled={sendingLiveReply || !liveReplyText.trim()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold disabled:opacity-40 cursor-pointer shrink-0"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>{sendingLiveReply ? 'Sending...' : 'Reply Live'}</span>
+              </button>
+            </form>
+
             <div className="p-4 border-t border-slate-200 bg-white flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs text-slate-500">
                 Started: {new Date(selectedConv.createdAt).toLocaleString()}
@@ -1014,11 +1122,22 @@ export const AdminContacts: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
+                  onClick={() => {
+                    setSelectedConv(null);
+                    setActivePage('support-desk');
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-950 text-xs font-semibold cursor-pointer"
+                >
+                  <Headphones className="w-3.5 h-3.5" />
+                  <span>Mobile Support App</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => deleteConversation(selectedConv.id)}
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>Delete Conversation</span>
+                  <span>Delete</span>
                 </button>
                 <button
                   type="button"

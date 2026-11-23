@@ -31,7 +31,8 @@ import {
   KeyRound,
   Eye,
   EyeOff,
-  CheckCircle2
+  CheckCircle2,
+  Headphones
 } from 'lucide-react';
 
 export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -211,6 +212,21 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
                   </button>
                 );
               })}
+
+              {canAccessAdminTab('contacts', currentUser?.role) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActivePage('support-desk');
+                    setSidebarOpen(false);
+                  }}
+                  className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm transition-colors cursor-pointer text-left font-semibold text-amber-300 hover:text-amber-200 hover:bg-slate-800/80 border border-amber-400/20 mt-2"
+                >
+                  <Headphones className="w-4 h-4 text-amber-400" />
+                  <span className="flex-1">Live Support App</span>
+                  <ExternalLink className="w-3.5 h-3.5 opacity-75" />
+                </button>
+              )}
             </div>
           </div>
         </nav>

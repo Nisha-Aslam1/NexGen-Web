@@ -175,9 +175,10 @@ export interface ContactMessage {
 
 export interface SupportChatMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'agent';
   text: string;
   timestamp: string;
+  senderName?: string;
   escalatedTicketId?: string;
 }
 
@@ -187,6 +188,11 @@ export interface SupportConversation {
   visitorName?: string;
   visitorEmail?: string;
   visitorWhatsapp?: string;
+  mode?: 'ai' | 'human';
+  status?: 'open' | 'resolved';
+  humanRequestedAt?: string;
+  assignedAgentName?: string;
+  unreadByAgent?: number;
   escalatedToHuman?: boolean;
   linkedContactId?: string;
   messages: SupportChatMessage[];

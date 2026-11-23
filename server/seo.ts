@@ -667,12 +667,22 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
     };
   }
 
-  // Handle Admin & Protected Routes (NOINDEX)
-  if (cleanPath === '/admin' || cleanPath.startsWith('/admin/') || cleanPath === '/admin-login' || cleanPath === '/login') {
+  // Handle Admin, Support Desk App & Protected Routes (NOINDEX)
+  if (
+    cleanPath === '/support-desk' ||
+    cleanPath.startsWith('/support-desk/') ||
+    cleanPath === '/admin' ||
+    cleanPath.startsWith('/admin/') ||
+    cleanPath === '/admin-login' ||
+    cleanPath === '/login'
+  ) {
+    const isSupportDesk = cleanPath.startsWith('/support-desk');
     return {
-      title: `Council Staff Portal | ${orgName}`,
-      description: 'Secured administrative management portal for NexGen Council authorized personnel.',
-      canonicalUrl: `${siteUrl}/admin`,
+      title: isSupportDesk ? `NexGen Live Support Desk | ${orgName}` : `Council Staff Portal | ${orgName}`,
+      description: isSupportDesk
+        ? 'Real-time mobile support agent console for responding to NexGen Council website visitors.'
+        : 'Secured administrative management portal for NexGen Council authorized personnel.',
+      canonicalUrl: `${siteUrl}${isSupportDesk ? '/support-desk' : '/admin'}`,
       ogType: 'website',
       ogImage: defaultLogo,
       noindex: true
