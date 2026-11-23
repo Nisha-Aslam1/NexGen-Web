@@ -339,7 +339,7 @@ export const VolunteerForm: React.FC = () => {
                 {copiedCode ? <Check className="w-5 h-5 text-emerald-400" /> : <Copy className="w-5 h-5" />}
               </button>
             </div>
-            <p className="text-[11px] text-slate-400">
+            <p className="text-[11px] text-slate-300">
               Keep this reference code to check your review status anytime.
             </p>
           </div>
@@ -430,14 +430,14 @@ export const VolunteerForm: React.FC = () => {
                       ? 'bg-indigo-950 text-white ring-4 ring-indigo-100 shadow-md'
                       : isCompleted
                       ? 'bg-emerald-600 text-white'
-                      : 'bg-white text-slate-400 border-2 border-slate-200'
+                      : 'bg-white text-slate-600 border-2 border-slate-200'
                   }`}
                 >
                   {isCompleted ? <Check className="w-5 h-5" /> : <Icon className="w-4 h-4" />}
                 </div>
                 <span
                   className={`text-xs mt-2 font-medium hidden sm:block ${
-                    isCurrent ? 'text-indigo-950 font-bold' : isCompleted ? 'text-emerald-700' : 'text-slate-400'
+                    isCurrent ? 'text-indigo-950 font-bold' : isCompleted ? 'text-emerald-700' : 'text-slate-600'
                   }`}
                 >
                   {s.title}
@@ -894,19 +894,19 @@ export const VolunteerForm: React.FC = () => {
                 </span>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-slate-600">
                   <div>
-                    <span className="text-slate-400 block">Applicant:</span>
+                    <span className="text-slate-600 block">Applicant:</span>
                     <strong className="text-slate-900">{formData.fullName || '—'}</strong>
                   </div>
                   <div>
-                    <span className="text-slate-400 block">Email:</span>
+                    <span className="text-slate-600 block">Email:</span>
                     <strong className="text-slate-900 truncate block">{formData.email || '—'}</strong>
                   </div>
                   <div>
-                    <span className="text-slate-400 block">Location:</span>
+                    <span className="text-slate-600 block">Location:</span>
                     <strong className="text-slate-900">{formData.city || '—'}</strong>
                   </div>
                   <div>
-                    <span className="text-slate-400 block">Preferred Role:</span>
+                    <span className="text-slate-600 block">Preferred Role:</span>
                     <strong className="text-slate-900">{formData.preferredRole || '—'}</strong>
                   </div>
                 </div>

@@ -253,7 +253,7 @@ export const AdminMeetings: React.FC = () => {
       const headers: Record<string, string> = {};
       if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
 
-      const res = await fetch('/api/meetings', { headers });
+      const res = await fetch('/api/meetings', { headers, credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         setMeetings(data.meetings || []);
@@ -269,7 +269,7 @@ export const AdminMeetings: React.FC = () => {
     try {
       const headers: Record<string, string> = {};
       if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
-      const res = await fetch('/api/meetings-captures/all', { headers });
+      const res = await fetch('/api/meetings-captures/all', { headers, credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         setCaptures(data.captures || []);
@@ -281,7 +281,11 @@ export const AdminMeetings: React.FC = () => {
     try {
       const headers: Record<string, string> = {};
       if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
-      const res = await fetch(`/api/meetings/captures/${captureId}`, { method: 'DELETE', headers });
+      const res = await fetch(`/api/meetings/captures/${captureId}`, {
+        method: 'DELETE',
+        headers,
+        credentials: 'include'
+      });
       if (res.ok) {
         addToast('Capture deleted successfully.', 'success');
         fetchCaptures();
@@ -700,7 +704,10 @@ export const AdminMeetings: React.FC = () => {
         </button>
         <button
           type="button"
-          onClick={() => setActiveMainTab('captures')}
+          onClick={() => {
+            setActiveMainTab('captures');
+            fetchCaptures();
+          }}
           className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
             activeMainTab === 'captures'
               ? 'bg-white text-slate-900 shadow-sm'
@@ -1262,7 +1269,13 @@ export const AdminMeetings: React.FC = () => {
                                 <span className="font-semibold text-slate-900 block truncate max-w-xs">
                                   {cap.originalName || cap.filename}
                                 </span>
-                                <span className="text-[11px] text-slate-500 capitalize">{cap.kind}</span>
+                                <span className="text-[11px] text-slate-500 capitalize">
+                                  {cap.kind}
+                                  {typeof cap.durationSeconds === 'number' && cap.durationSeconds > 0
+                                    ? ` · ${Math.floor(cap.durationSeconds / 60)}:${String(cap.durationSeconds % 60).padStart(2, '0')}`
+                                    : ''}
+                                  {cap.kind === 'recording' ? (cap.hasAudio ? ' · Audio + Video' : ' · Video') : ''}
+                                </span>
                               </div>
                             </div>
                           </td>
@@ -1278,7 +1291,7 @@ export const AdminMeetings: React.FC = () => {
                             <span className="font-medium text-slate-700 block">
                               {(cap.sizeBytes / (1024 * 1024)).toFixed(2)} MB
                             </span>
-                            <span className="text-slate-400 text-[11px]">
+                            <span className="text-slate-500 text-[11px]">
                               {new Date(cap.createdAt).toLocaleString([], {
                                 month: 'short',
                                 day: 'numeric',
@@ -1306,7 +1319,7 @@ export const AdminMeetings: React.FC = () => {
                               </button>
                               <a
                                 href={cap.filename}
-                                download
+                                download={cap.originalName || true}
                                 className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold inline-flex items-center gap-1 transition-colors"
                               >
                                 <Download className="w-3.5 h-3.5" />
@@ -1357,7 +1370,7 @@ export const AdminMeetings: React.FC = () => {
 
             <div className="bg-slate-950 rounded-2xl overflow-hidden flex items-center justify-center p-2 min-h-[320px] max-h-[60vh]">
               {viewingCapture.kind === 'recording' ? (
-                <video src={viewingCapture.filename} controls className="max-w-full max-h-[50vh] rounded-xl" />
+                <video src={viewingCapture.filename} controls playsInline preload="metadata" className="max-w-full max-h-[50vh] rounded-xl" />
               ) : (
                 <img src={viewingCapture.filename} alt="Screenshot preview" className="max-w-full max-h-[50vh] object-contain rounded-xl" />
               )}
@@ -1370,7 +1383,7 @@ export const AdminMeetings: React.FC = () => {
               <div className="flex items-center gap-2">
                 <a
                   href={viewingCapture.filename}
-                  download
+                  download={viewingCapture.originalName || true}
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold inline-flex items-center gap-1.5"
                 >
                   <Download className="w-4 h-4" />

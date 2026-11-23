@@ -590,6 +590,7 @@ function getSeedData(): DatabaseSchema {
     meetings: [],
     meetingParticipants: [],
     meetingMessages: [],
+    meetingCaptures: [],
     supportConversations: []
   };
 }
@@ -2433,10 +2434,13 @@ class Database {
       if (Number.isNaN(t) || t < cutoffMs) {
         deletedCount++;
         mongoDelete('meetingCaptures', cap.id).catch(() => {});
-        try {
-          const filePath = path.join(process.cwd(), 'public', cap.filename.startsWith('/') ? cap.filename.slice(1) : cap.filename);
-          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        } catch {}
+        const relPath = cap.filename.startsWith('/') ? cap.filename.slice(1) : cap.filename;
+        for (const baseDir of ['public', 'data']) {
+          try {
+            const filePath = path.join(process.cwd(), baseDir, relPath);
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+          } catch {}
+        }
       } else {
         surviving.push(cap);
       }
@@ -2502,10 +2506,13 @@ class Database {
     this.data.meetingCaptures = list.filter(c => c.id !== id);
     this.save();
     mongoDelete('meetingCaptures', id).catch(() => {});
-    try {
-      const filePath = path.join(process.cwd(), 'public', target.filename.startsWith('/') ? target.filename.slice(1) : target.filename);
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    } catch {}
+    const relPath = target.filename.startsWith('/') ? target.filename.slice(1) : target.filename;
+    for (const baseDir of ['public', 'data']) {
+      try {
+        const filePath = path.join(process.cwd(), baseDir, relPath);
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      } catch {}
+    }
     return true;
   }
 }

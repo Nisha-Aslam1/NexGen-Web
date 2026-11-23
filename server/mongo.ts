@@ -277,6 +277,10 @@ export async function loadOrSeedMongo(fallbackData: DatabaseSchema): Promise<Dat
     const activityLogs = await dbInstance.collection('activityLogs').find({}).sort({ timestamp: -1 }).limit(200).toArray();
     const emailLogs = await dbInstance.collection('emailLogs').find({}).sort({ sentAt: -1 }).limit(500).toArray();
     const supportConversations = await dbInstance.collection('supportConversations').find({}).sort({ updatedAt: -1 }).limit(500).toArray();
+    const meetings = await dbInstance.collection('meetings').find({}).toArray();
+    const meetingParticipants = await dbInstance.collection('meeting_participants').find({}).toArray();
+    const meetingMessages = await dbInstance.collection('meeting_messages').find({}).toArray();
+    const meetingCaptures = await dbInstance.collection('meetingCaptures').find({}).sort({ createdAt: -1 }).toArray();
 
     const settingsDoc = await dbInstance.collection('settings').findOne({ _id: 'global_settings' as any });
 
@@ -307,6 +311,10 @@ export async function loadOrSeedMongo(fallbackData: DatabaseSchema): Promise<Dat
       settings: settingsDoc ? (({ _id, ...s }) => s)(settingsDoc as any) : fallbackData.settings,
       activityLogs: stripMongoId(activityLogs) as any,
       emailLogs: stripMongoId(emailLogs) as any,
+      meetings: meetings.length > 0 ? (stripMongoId(meetings) as any) : (fallbackData.meetings || []),
+      meetingParticipants: meetingParticipants.length > 0 ? (stripMongoId(meetingParticipants) as any) : (fallbackData.meetingParticipants || []),
+      meetingMessages: meetingMessages.length > 0 ? (stripMongoId(meetingMessages) as any) : (fallbackData.meetingMessages || []),
+      meetingCaptures: meetingCaptures.length > 0 ? (stripMongoId(meetingCaptures) as any) : (fallbackData.meetingCaptures || []),
       supportConversations: stripMongoId(supportConversations) as any
     };
   } catch (err: any) {
@@ -471,6 +479,10 @@ export async function syncSchemaToMongo(schema: DatabaseSchema) {
       contacts: schema.contacts,
       activityLogs: schema.activityLogs,
       emailLogs: schema.emailLogs || [],
+      meetings: schema.meetings || [],
+      meeting_participants: schema.meetingParticipants || [],
+      meeting_messages: schema.meetingMessages || [],
+      meetingCaptures: schema.meetingCaptures || [],
       supportConversations: schema.supportConversations || []
     };
 

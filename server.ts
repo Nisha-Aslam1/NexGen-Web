@@ -50,7 +50,11 @@ app.disable('x-powered-by');
 app.use(compression({
   threshold: 1024,
   filter: (req, res) => {
-    if (req.headers['x-no-compression']) {
+    if (
+      req.headers['x-no-compression'] ||
+      req.path.startsWith('/uploads/meetings/') ||
+      req.path.includes('/captures/upload')
+    ) {
       return false;
     }
     return compression.filter(req, res);
@@ -981,11 +985,11 @@ app.get('/api/system/security-status', requireAuth(['SUPER_ADMIN']), (req, res) 
 app.get('/api/auth/session', (req, res) => {
   const session = getSession(req);
   if (!session) {
-    return res.status(401).json({ authenticated: false });
+    return res.status(200).json({ authenticated: false, user: null });
   }
   const user = db.getUserById(session.userId);
   if (!user) {
-    return res.status(401).json({ authenticated: false });
+    return res.status(200).json({ authenticated: false, user: null });
   }
   res.json({
     authenticated: true,
@@ -2431,17 +2435,18 @@ app.post('/api/system/admin-credentials', requireAuth(['SUPER_ADMIN']), (req, re
 // ----------------------------------------------------
 
 async function startServer() {
-  // Ensure public/uploads and data/uploads directories exist
+  // Ensure public/uploads, data/uploads, and meeting capture directories exist
   const publicUploadsDir = path.join(process.cwd(), 'public', 'uploads');
   const persistentUploadsDir = path.join(process.cwd(), 'data', 'uploads');
-  if (!fs.existsSync(publicUploadsDir)) {
-    fs.mkdirSync(publicUploadsDir, { recursive: true });
-  }
-  if (!fs.existsSync(persistentUploadsDir)) {
-    fs.mkdirSync(persistentUploadsDir, { recursive: true });
+  const publicMeetingsDir = path.join(publicUploadsDir, 'meetings');
+  const persistentMeetingsDir = path.join(persistentUploadsDir, 'meetings');
+  for (const dirPath of [publicUploadsDir, persistentUploadsDir, publicMeetingsDir, persistentMeetingsDir]) {
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
   }
 
-  // Restore any persisted images from data/uploads to public/uploads on startup
+  // Restore any persisted images & meeting captures from data/uploads to public/uploads on startup
   try {
     const backupFiles = fs.readdirSync(persistentUploadsDir);
     for (const file of backupFiles) {
@@ -2451,9 +2456,44 @@ async function startServer() {
         fs.copyFileSync(srcPath, destPath);
       }
     }
+    const backupMeetingFiles = fs.readdirSync(persistentMeetingsDir);
+    for (const file of backupMeetingFiles) {
+      const srcPath = path.join(persistentMeetingsDir, file);
+      const destPath = path.join(publicMeetingsDir, file);
+      if (!fs.existsSync(destPath) && fs.statSync(srcPath).isFile()) {
+        fs.copyFileSync(srcPath, destPath);
+      }
+    }
   } catch (syncErr) {
     console.warn('[Storage] Uploads sync error on startup:', syncErr);
   }
+
+  // Dedicated /uploads/meetings/:filename serving handler with Range playback & backup restore
+  app.get('/uploads/meetings/:filename', (req, res) => {
+    const safeFilename = path.basename(req.params.filename);
+    const publicPath = path.join(publicMeetingsDir, safeFilename);
+    const backupPath = path.join(persistentMeetingsDir, safeFilename);
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'public, max-age=259200');
+
+    if (fs.existsSync(publicPath) && fs.statSync(publicPath).isFile()) {
+      return res.sendFile(publicPath);
+    }
+
+    if (fs.existsSync(backupPath) && fs.statSync(backupPath).isFile()) {
+      try {
+        fs.copyFileSync(backupPath, publicPath);
+        return res.sendFile(publicPath);
+      } catch {
+        return res.sendFile(backupPath);
+      }
+    }
+
+    return res.status(404).send('Meeting capture not found');
+  });
 
   // Resilient /uploads/:filename serving handler with auto-restoration from data/uploads and MongoDB
   app.get('/uploads/:filename', async (req, res, next) => {

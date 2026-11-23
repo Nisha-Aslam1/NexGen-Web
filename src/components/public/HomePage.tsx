@@ -600,7 +600,7 @@ export const HomePage: React.FC = () => {
                   {stat.value}
                 </strong>
                 <span className="font-semibold text-sm text-white block">{stat.label}</span>
-                <span className="text-[11px] text-slate-400 block">{stat.desc}</span>
+                <span className="text-[11px] text-slate-300 block">{stat.desc}</span>
               </div>
             ))}
           </div>
@@ -740,7 +740,7 @@ export const HomePage: React.FC = () => {
                     </span>
                   </div>
                   <div className="p-6 space-y-2">
-                    <span className="text-[11px] text-slate-400">
+                    <span className="text-[11px] text-slate-600">
                       {new Date(item.publishedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} • By {item.author}
                     </span>
                     <h3 className="font-serif font-bold text-base text-slate-900 leading-snug">
@@ -812,7 +812,7 @@ export const HomePage: React.FC = () => {
           <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 space-y-6 shadow-2xl relative animate-in fade-in zoom-in-95 my-8">
             <button
               onClick={() => setSelectedProgram(null)}
-              className="absolute top-5 right-5 text-slate-400 hover:text-slate-700 p-2 rounded-full cursor-pointer"
+              className="absolute top-5 right-5 text-slate-600 hover:text-slate-900 p-2 rounded-full cursor-pointer"
               aria-label="Close program details modal"
             >
               ✕
@@ -898,7 +898,8 @@ export const HomePage: React.FC = () => {
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 space-y-6 shadow-2xl relative animate-in fade-in zoom-in-95 my-8">
             <button
               onClick={() => setSelectedEvent(null)}
-              className="absolute top-5 right-5 text-slate-400 hover:text-slate-700 p-2 rounded-full cursor-pointer"
+              className="absolute top-5 right-5 text-slate-600 hover:text-slate-900 p-2 rounded-full cursor-pointer"
+              aria-label="Close event details modal"
             >
               ✕
             </button>
@@ -970,7 +971,7 @@ export const HomePage: React.FC = () => {
               </div>
               <button
                 onClick={() => setShowPosterModal(false)}
-                className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                className="p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
                 title="Close modal"
                 aria-label="Close modal"
               >

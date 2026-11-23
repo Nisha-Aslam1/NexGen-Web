@@ -1908,7 +1908,121 @@ meetingsRouter.post('/meetings/:id/whiteboard/live', (req: Request, res: Respons
   res.json({ ok: true });
 });
 
-// 21. POST /api/meetings/:id/captures - Save recording or screenshot (3-day auto-purge)
+function saveMeetingCaptureBuffer(params: {
+  meeting: Meeting;
+  buffer: Buffer;
+  kind: 'recording' | 'screenshot';
+  filename?: string;
+  mimeType: string;
+  durationSeconds?: number;
+  capturedBy: string;
+  hasAudio?: boolean;
+  hasVideo?: boolean;
+}) {
+  const { meeting, buffer, kind, filename, mimeType, durationSeconds, capturedBy, hasAudio, hasVideo } = params;
+  if (!buffer || buffer.length === 0) {
+    throw new Error('Empty capture file received.');
+  }
+  if (buffer.length > 200 * 1024 * 1024) {
+    const err = new Error('Capture size exceeds 200MB maximum limit.');
+    (err as any).statusCode = 413;
+    throw err;
+  }
+
+  const publicCapturesDir = path.join(process.cwd(), 'public', 'uploads', 'meetings');
+  const backupCapturesDir = path.join(process.cwd(), 'data', 'uploads', 'meetings');
+  if (!fs.existsSync(publicCapturesDir)) {
+    fs.mkdirSync(publicCapturesDir, { recursive: true });
+  }
+  if (!fs.existsSync(backupCapturesDir)) {
+    fs.mkdirSync(backupCapturesDir, { recursive: true });
+  }
+
+  const cleanMime = String(mimeType || '').split(';')[0].trim().toLowerCase();
+  let ext = 'webm';
+  if (cleanMime.includes('video/mp4')) ext = 'mp4';
+  else if (cleanMime.includes('video/x-matroska') || cleanMime.includes('mkv')) ext = 'mkv';
+  else if (cleanMime.includes('image/png')) ext = 'png';
+  else if (cleanMime.includes('image/jpeg') || cleanMime.includes('image/jpg')) ext = 'jpg';
+  else if (cleanMime.includes('image/webp')) ext = 'webp';
+  else if (cleanMime.includes('audio/webm') || cleanMime.includes('video/webm')) ext = 'webm';
+  else if (kind === 'screenshot') ext = 'png';
+
+  const rawBaseName = String(filename || (kind === 'recording' ? 'meeting_recording' : 'meeting_screenshot')).replace(/\.[a-z0-9]+$/i, '');
+  const safeName = rawBaseName.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const finalName = `${Date.now()}_${safeName.slice(0, 40)}.${ext}`;
+
+  fs.writeFileSync(path.join(publicCapturesDir, finalName), buffer);
+  try {
+    fs.writeFileSync(path.join(backupCapturesDir, finalName), buffer);
+  } catch (backupErr) {
+    console.warn('[Meetings] Could not write capture backup:', backupErr);
+  }
+
+  return db.addMeetingCapture({
+    meetingId: meeting.id,
+    meetingCode: meeting.meetingCode,
+    meetingTitle: meeting.title,
+    kind,
+    filename: `/uploads/meetings/${finalName}`,
+    originalName: filename || finalName,
+    mimeType: cleanMime || (kind === 'recording' ? 'video/webm' : 'image/png'),
+    sizeBytes: buffer.length,
+    durationSeconds: typeof durationSeconds === 'number' && Number.isFinite(durationSeconds) ? Math.max(1, Math.round(durationSeconds)) : undefined,
+    capturedBy,
+    hasAudio: Boolean(hasAudio),
+    hasVideo: Boolean(hasVideo)
+  });
+}
+
+// 21a. POST /api/meetings/:id/captures/upload - Direct raw binary upload for large recordings (up to 200MB)
+meetingsRouter.post(
+  '/meetings/:id/captures/upload',
+  express.raw({ type: '*/*', limit: '200mb' }),
+  (req: Request, res: Response) => {
+    const meeting = db.getMeetingById(req.params.id);
+    if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
+
+    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (!buffer || buffer.length === 0) {
+      return res.status(400).json({ error: 'Empty binary capture payload.' });
+    }
+
+    try {
+      const kind = req.query.kind === 'screenshot' ? 'screenshot' : 'recording';
+      const filename = typeof req.query.filename === 'string' ? req.query.filename : undefined;
+      const headerContentType = typeof req.headers['content-type'] === 'string' ? req.headers['content-type'] : '';
+      const mimeType = typeof req.query.mimeType === 'string' && req.query.mimeType
+        ? req.query.mimeType
+        : (headerContentType && !headerContentType.includes('octet-stream') ? headerContentType : (kind === 'recording' ? 'video/webm' : 'image/png'));
+      const durationRaw = Number(req.query.durationSeconds);
+      const durationSeconds = Number.isFinite(durationRaw) && durationRaw > 0 ? durationRaw : undefined;
+      const hasAudio = req.query.hasAudio === 'true' || req.query.hasAudio === '1';
+      const hasVideo = req.query.hasVideo !== 'false' && req.query.hasVideo !== '0';
+      const actorIdentity = getActorIdentity(req) || 'participant';
+
+      const captureRecord = saveMeetingCaptureBuffer({
+        meeting,
+        buffer,
+        kind,
+        filename,
+        mimeType,
+        durationSeconds,
+        capturedBy: actorIdentity,
+        hasAudio,
+        hasVideo
+      });
+
+      res.status(201).json({ ok: true, capture: captureRecord });
+    } catch (err: any) {
+      console.error('Error saving raw meeting capture:', err);
+      const status = err?.statusCode || 500;
+      res.status(status).json({ error: err?.message || 'Failed to save meeting capture.' });
+    }
+  }
+);
+
+// 21b. POST /api/meetings/:id/captures - Save recording or screenshot via JSON dataUrl (3-day auto-purge)
 meetingsRouter.post('/meetings/:id/captures', (req: Request, res: Response) => {
   const meeting = db.getMeetingById(req.params.id);
   if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
@@ -1919,11 +2033,6 @@ meetingsRouter.post('/meetings/:id/captures', (req: Request, res: Response) => {
   }
 
   try {
-    const capturesDir = path.join(process.cwd(), 'public', 'uploads', 'meetings');
-    if (!fs.existsSync(capturesDir)) {
-      fs.mkdirSync(capturesDir, { recursive: true });
-    }
-
     const matches = dataUrl.match(/^data:([a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+)(?:;[^;,=]+=[^;,]+)*;base64,([\s\S]+)$/i);
     if (!matches) {
       return res.status(400).json({ error: 'Invalid capture data format.' });
@@ -1932,34 +2041,14 @@ meetingsRouter.post('/meetings/:id/captures', (req: Request, res: Response) => {
     const resolvedMime = mimeType || matches[1];
     const base64Data = matches[2].replace(/\s+/g, '');
     const buffer = Buffer.from(base64Data, 'base64');
-
-    if (buffer.length > 200 * 1024 * 1024) {
-      return res.status(413).json({ error: 'Capture size exceeds 200MB maximum limit.' });
-    }
-
-    let ext = 'bin';
-    if (resolvedMime.includes('video/webm')) ext = 'webm';
-    else if (resolvedMime.includes('video/mp4')) ext = 'mp4';
-    else if (resolvedMime.includes('image/png')) ext = 'png';
-    else if (resolvedMime.includes('image/jpeg')) ext = 'jpg';
-    else if (resolvedMime.includes('audio/webm')) ext = 'webm';
-
-    const safeName = String(filename || (kind === 'recording' ? 'meeting_recording' : 'meeting_screenshot')).replace(/[^a-zA-Z0-9_-]/g, '_');
-    const finalName = `${Date.now()}_${safeName.slice(0, 30)}.${ext}`;
-    const filePath = path.join(capturesDir, finalName);
-
-    fs.writeFileSync(filePath, buffer);
-
     const actorIdentity = getActorIdentity(req) || 'participant';
-    const captureRecord = db.addMeetingCapture({
-      meetingId: meeting.id,
-      meetingCode: meeting.meetingCode,
-      meetingTitle: meeting.title,
+
+    const captureRecord = saveMeetingCaptureBuffer({
+      meeting,
+      buffer,
       kind: kind === 'recording' ? 'recording' : 'screenshot',
-      filename: `/uploads/meetings/${finalName}`,
-      originalName: filename || finalName,
+      filename,
       mimeType: resolvedMime,
-      sizeBytes: buffer.length,
       durationSeconds: typeof durationSeconds === 'number' ? durationSeconds : undefined,
       capturedBy: actorIdentity,
       hasAudio: Boolean(hasAudio),
@@ -1969,7 +2058,8 @@ meetingsRouter.post('/meetings/:id/captures', (req: Request, res: Response) => {
     res.status(201).json({ ok: true, capture: captureRecord });
   } catch (err: any) {
     console.error('Error saving meeting capture:', err);
-    res.status(500).json({ error: 'Failed to save meeting capture.' });
+    const status = err?.statusCode || 500;
+    res.status(status).json({ error: err?.message || 'Failed to save meeting capture.' });
   }
 });
 

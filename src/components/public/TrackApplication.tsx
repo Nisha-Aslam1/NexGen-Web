@@ -153,7 +153,7 @@ export const TrackApplication: React.FC = () => {
           <div className="border border-slate-200 rounded-2xl p-6 bg-slate-50/70 space-y-6 animate-in fade-in zoom-in-95">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
               <div>
-                <span className="text-xs text-slate-400 uppercase tracking-wider font-mono">
+                <span className="text-xs text-slate-600 uppercase tracking-wider font-mono">
                   {applicationData.referenceCode}
                 </span>
                 <h3 className="text-xl font-serif font-bold text-slate-900">
@@ -168,13 +168,13 @@ export const TrackApplication: React.FC = () => {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
               <div className="bg-white p-3.5 rounded-xl border border-slate-200">
-                <span className="text-slate-400 block mb-1">Target Volunteer Track</span>
+                <span className="text-slate-600 block mb-1">Target Volunteer Track</span>
                 <span className="font-semibold text-slate-800 text-sm">
                   {applicationData.preferredRole || 'General Council Volunteer'}
                 </span>
               </div>
               <div className="bg-white p-3.5 rounded-xl border border-slate-200">
-                <span className="text-slate-400 block mb-1">Submission Date</span>
+                <span className="text-slate-600 block mb-1">Submission Date</span>
                 <span className="font-semibold text-slate-800 text-sm">
                   {new Date(applicationData.submittedAt).toLocaleDateString(undefined, {
                     year: 'numeric',

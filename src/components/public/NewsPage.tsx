@@ -171,7 +171,7 @@ export const NewsPage: React.FC = () => {
                   <span className="px-3 py-1 rounded-full bg-amber-50 text-amber-800 text-[11px] font-bold uppercase tracking-wider border border-amber-200">
                     {featured.category}
                   </span>
-                  <span className="text-xs text-slate-400">Featured Dispatch</span>
+                  <span className="text-xs text-slate-600">Featured Dispatch</span>
                 </div>
 
                 <h2 className="text-2xl sm:text-3xl font-serif font-bold text-slate-900 leading-tight">
@@ -184,9 +184,9 @@ export const NewsPage: React.FC = () => {
               </div>
 
               <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
-                <div className="text-xs text-slate-500">
+                <div className="text-xs text-slate-600">
                   <span>By {featured.author}</span>
-                  <span className="block text-slate-400">
+                  <span className="block text-slate-600">
                     {new Date(featured.publishedAt).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}
                   </span>
                 </div>
@@ -250,8 +250,8 @@ export const NewsPage: React.FC = () => {
                   </span>
                 </div>
                 <div className="p-6 space-y-2">
-                  <div className="flex items-center gap-2 text-[11px] text-slate-400">
-                    <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                  <div className="flex items-center gap-2 text-[11px] text-slate-600">
+                    <Calendar className="w-3.5 h-3.5 text-slate-600" />
                     <span>{new Date(item.publishedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</span>
                     <span>•</span>
                     <span>By {item.author}</span>

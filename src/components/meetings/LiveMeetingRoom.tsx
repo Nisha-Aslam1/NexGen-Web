@@ -111,8 +111,14 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
   const [isScreenSharing, setIsScreenSharing] = useState<boolean>(false);
   const [isTileView, setIsTileView] = useState<boolean>(false);
   const [isRecording, setIsRecording] = useState<boolean>(false);
+  const isRecordingRef = useRef<boolean>(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
+  const recordingDisplayStreamRef = useRef<MediaStream | null>(null);
+  const recordingMicStreamRef = useRef<MediaStream | null>(null);
+  const recordingAudioCtxRef = useRef<AudioContext | null>(null);
+  const recordingStartTimeRef = useRef<number>(0);
+  const recordingUploadPromiseRef = useRef<Promise<void> | null>(null);
 
   // Dynamic Live Host / Co-Host & Room Security State
   const [currentRole, setCurrentRole] = useState<string>(role || 'participant');
@@ -306,12 +312,48 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
       if (!hasExitedRef.current) {
         notifyServerLeave(true);
       }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        try {
+          mediaRecorderRef.current.stop();
+        } catch {}
+      }
+      recordingDisplayStreamRef.current?.getTracks().forEach(t => {
+        try { t.stop(); } catch {}
+      });
+      recordingMicStreamRef.current?.getTracks().forEach(t => {
+        try { t.stop(); } catch {}
+      });
+      if (recordingAudioCtxRef.current) {
+        try { recordingAudioCtxRef.current.close(); } catch {}
+      }
     };
   }, [meeting?.id, identity]);
 
-  const triggerSafeExit = (reason?: string, notifyLeave = false) => {
+  const triggerSafeExit = async (reason?: string, notifyLeave = false) => {
     if (hasExitedRef.current) return;
     hasExitedRef.current = true;
+
+    if (isRecordingRef.current || (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') || recordingUploadPromiseRef.current) {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        try {
+          mediaRecorderRef.current.requestData();
+        } catch {}
+        try {
+          mediaRecorderRef.current.stop();
+        } catch {}
+      }
+      setIsRecording(false);
+      isRecordingRef.current = false;
+      await new Promise(resolve => setTimeout(resolve, 150));
+      if (recordingUploadPromiseRef.current) {
+        addToast('Finalizing & saving meeting recording...', 'info');
+        await Promise.race([
+          recordingUploadPromiseRef.current,
+          new Promise<void>(resolve => setTimeout(resolve, 20000))
+        ]);
+      }
+    }
+
     if (notifyLeave) notifyServerLeave();
     if (jitsiApiRef.current) {
       try {
@@ -1165,24 +1207,155 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
     }
   };
 
-  const handleStartStopRecording = async () => {
-    if (isRecording) {
-      if (mediaRecorderRef.current) {
+  const cleanupRecordingStreams = () => {
+    recordingDisplayStreamRef.current?.getTracks().forEach(t => {
+      try { t.stop(); } catch {}
+    });
+    recordingDisplayStreamRef.current = null;
+    recordingMicStreamRef.current?.getTracks().forEach(t => {
+      try { t.stop(); } catch {}
+    });
+    recordingMicStreamRef.current = null;
+    if (recordingAudioCtxRef.current) {
+      try {
+        recordingAudioCtxRef.current.close();
+      } catch {}
+      recordingAudioCtxRef.current = null;
+    }
+  };
+
+  const stopRecordingAndAwaitUpload = async () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.requestData();
+      } catch {}
+      try {
         mediaRecorderRef.current.stop();
+      } catch {}
+    }
+    setIsRecording(false);
+    isRecordingRef.current = false;
+
+    // Wait briefly so onstop fires and sets recordingUploadPromiseRef
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    if (recordingUploadPromiseRef.current) {
+      addToast('Finalizing & uploading meeting recording before exit...', 'info');
+      await Promise.race([
+        recordingUploadPromiseRef.current,
+        new Promise<void>(resolve => setTimeout(resolve, 20000))
+      ]);
+    }
+  };
+
+  const handleStartStopRecording = async () => {
+    if (isRecordingRef.current || isRecording) {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        try {
+          mediaRecorderRef.current.requestData();
+        } catch {}
+        try {
+          mediaRecorderRef.current.stop();
+        } catch {}
       }
       setIsRecording(false);
+      isRecordingRef.current = false;
       return;
     }
 
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { displaySurface: 'browser' },
-        audio: true
-      });
+      let displayStream: MediaStream;
+      try {
+        displayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: { displaySurface: 'browser' } as any,
+          audio: true
+        });
+      } catch {
+        displayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true
+        });
+      }
+      recordingDisplayStreamRef.current = displayStream;
+
+      // Also capture microphone audio when available so presenter voice is recorded along with room audio
+      let micStream: MediaStream | null = null;
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true }
+        });
+        recordingMicStreamRef.current = micStream;
+      } catch {
+        recordingMicStreamRef.current = null;
+      }
+
+      const videoTracks = displayStream.getVideoTracks();
+      const displayAudioTracks = displayStream.getAudioTracks();
+      const micAudioTracks = micStream ? micStream.getAudioTracks() : [];
+
+      const mixedTracks: MediaStreamTrack[] = [...videoTracks];
+      let hasCapturedAudio = false;
+
+      if (displayAudioTracks.length > 0 && micAudioTracks.length > 0 && typeof AudioContext !== 'undefined') {
+        try {
+          const audioCtx = new AudioContext();
+          recordingAudioCtxRef.current = audioCtx;
+          if (audioCtx.state === 'suspended') {
+            await audioCtx.resume().catch(() => {});
+          }
+          const destination = audioCtx.createMediaStreamDestination();
+          audioCtx.createMediaStreamSource(new MediaStream(displayAudioTracks)).connect(destination);
+          audioCtx.createMediaStreamSource(new MediaStream(micAudioTracks)).connect(destination);
+          mixedTracks.push(...destination.stream.getAudioTracks());
+          hasCapturedAudio = true;
+        } catch {
+          mixedTracks.push(...displayAudioTracks);
+          hasCapturedAudio = true;
+        }
+      } else if (displayAudioTracks.length > 0) {
+        mixedTracks.push(...displayAudioTracks);
+        hasCapturedAudio = true;
+      } else if (micAudioTracks.length > 0) {
+        mixedTracks.push(...micAudioTracks);
+        hasCapturedAudio = true;
+      }
+
+      const combinedStream = new MediaStream(mixedTracks);
+
+      const candidateMimeTypes = [
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm;codecs=h264,opus',
+        'video/webm',
+        'video/mp4'
+      ];
+      const supportedMimeType =
+        typeof MediaRecorder !== 'undefined' && typeof MediaRecorder.isTypeSupported === 'function'
+          ? candidateMimeTypes.find(type => {
+              try {
+                return MediaRecorder.isTypeSupported(type);
+              } catch {
+                return false;
+              }
+            }) || ''
+          : '';
 
       recordedChunksRef.current = [];
-      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9,opus' });
+      let recorder: MediaRecorder;
+      try {
+        recorder = new MediaRecorder(combinedStream, {
+          ...(supportedMimeType ? { mimeType: supportedMimeType } : {}),
+          videoBitsPerSecond: 1_500_000,
+          audioBitsPerSecond: 128_000
+        });
+      } catch {
+        recorder = supportedMimeType
+          ? new MediaRecorder(combinedStream, { mimeType: supportedMimeType })
+          : new MediaRecorder(combinedStream);
+      }
+
       mediaRecorderRef.current = recorder;
+      recordingStartTimeRef.current = Date.now();
 
       recorder.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) {
@@ -1190,56 +1363,113 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
         }
       };
 
-      recorder.onstop = async () => {
-        const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
-        stream.getTracks().forEach(t => t.stop());
-
-        const reader = new FileReader();
-        reader.onloadend = async () => {
-          const base64data = reader.result as string;
-          try {
-            addToast('Saving meeting recording to admin archive...', 'info');
-            const res = await fetch(`/api/meetings/${meeting.id}/captures`, {
-              method: 'POST',
-              headers: buildControlHeaders(true),
-              body: JSON.stringify({
-                kind: 'recording',
-                dataUrl: base64data,
-                filename: `recording_${meeting.meetingCode}_${Date.now()}.webm`,
-                mimeType: 'video/webm',
-                hasAudio: true,
-                hasVideo: true
-              })
-            });
-            if (res.ok) {
-              addToast('Meeting recording successfully saved to Admin Archive!', 'success');
-            } else {
-              addToast('Failed to save meeting recording on server.', 'error');
-            }
-          } catch {
-            addToast('Error uploading recording.', 'error');
+      // If user clicks browser "Stop sharing" pill, finalize & upload cleanly
+      if (videoTracks[0]) {
+        videoTracks[0].onended = () => {
+          setIsRecording(false);
+          isRecordingRef.current = false;
+          if (recorder.state !== 'inactive') {
+            try {
+              recorder.requestData();
+            } catch {}
+            try {
+              recorder.stop();
+            } catch {}
           }
         };
-        reader.readAsDataURL(blob);
+      }
+
+      recorder.onstop = () => {
+        setIsRecording(false);
+        isRecordingRef.current = false;
+        const durationSeconds = Math.max(1, Math.round((Date.now() - recordingStartTimeRef.current) / 1000));
+        const resolvedMime = (recorder.mimeType || supportedMimeType || 'video/webm').split(';')[0].trim();
+        const blob = new Blob(recordedChunksRef.current, { type: resolvedMime || 'video/webm' });
+        recordedChunksRef.current = [];
+        cleanupRecordingStreams();
+
+        if (!blob || blob.size === 0) {
+          addToast('Recording was empty. Keep screen share active while recording.', 'error');
+          return;
+        }
+
+        const ext = resolvedMime.includes('mp4') ? 'mp4' : 'webm';
+        const uploadFilename = `recording_${meeting.meetingCode}_${Date.now()}.${ext}`;
+
+        const uploadPromise = (async () => {
+          try {
+            addToast('Saving meeting recording to Admin Archive...', 'info');
+            const params = new URLSearchParams({
+              kind: 'recording',
+              filename: uploadFilename,
+              mimeType: resolvedMime || 'video/webm',
+              durationSeconds: String(durationSeconds),
+              hasAudio: hasCapturedAudio ? 'true' : 'false',
+              hasVideo: videoTracks.length > 0 ? 'true' : 'false'
+            });
+
+            const res = await fetch(`/api/meetings/${meeting.id}/captures/upload?${params.toString()}`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: {
+                ...buildControlHeaders(false),
+                'Content-Type': resolvedMime || 'application/octet-stream'
+              },
+              body: blob
+            });
+
+            if (res.ok) {
+              addToast('Meeting recording saved to Admin Archive (3-day retention).', 'success');
+            } else {
+              const errData = await res.json().catch(() => ({}));
+              addToast(errData.error || `Failed to save meeting recording (${res.status}).`, 'error');
+            }
+          } catch (uploadErr) {
+            console.error('Error uploading recording:', uploadErr);
+            addToast('Network error while uploading meeting recording.', 'error');
+          } finally {
+            recordingUploadPromiseRef.current = null;
+          }
+        })();
+
+        recordingUploadPromiseRef.current = uploadPromise;
       };
 
       recorder.start(1000);
       setIsRecording(true);
-      addToast('Meeting recording started (Audio + Video).', 'success');
+      isRecordingRef.current = true;
+      addToast(
+        hasCapturedAudio
+          ? 'Meeting recording started (Audio + Video).'
+          : 'Meeting video recording started (enable tab/mic audio if needed).',
+        'success'
+      );
     } catch (err: any) {
       console.error('Recording error:', err);
-      addToast('Could not start recording. Screen share permission required.', 'error');
+      cleanupRecordingStreams();
+      setIsRecording(false);
+      isRecordingRef.current = false;
+      addToast('Could not start recording. Screen share permission is required.', 'error');
     }
   };
 
   const handleTakeScreenshot = async () => {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { displaySurface: 'browser' },
+        video: { displaySurface: 'browser' } as any,
         audio: false
       });
       const video = document.createElement('video');
       video.srcObject = stream;
+      video.muted = true;
+      await new Promise<void>((resolve) => {
+        if (video.readyState >= 1) {
+          resolve();
+          return;
+        }
+        video.onloadedmetadata = () => resolve();
+        setTimeout(() => resolve(), 600);
+      });
       await video.play();
 
       const canvas = document.createElement('canvas');
@@ -1257,6 +1487,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
 
       const res = await fetch(`/api/meetings/${meeting.id}/captures`, {
         method: 'POST',
+        credentials: 'include',
         headers: buildControlHeaders(true),
         body: JSON.stringify({
           kind: 'screenshot',
@@ -1270,7 +1501,8 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
       if (res.ok) {
         addToast('Meeting screenshot captured & saved to Admin Archive!', 'success');
       } else {
-        addToast('Failed to save screenshot on server.', 'error');
+        const errData = await res.json().catch(() => ({}));
+        addToast(errData.error || 'Failed to save screenshot on server.', 'error');
       }
     } catch (err: any) {
       console.error('Screenshot error:', err);
@@ -1726,8 +1958,12 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
 
   const handleEndMeeting = async () => {
     try {
+      if (isRecordingRef.current || recordingUploadPromiseRef.current) {
+        await stopRecordingAndAwaitUpload();
+      }
       const res = await fetch(`/api/meetings/${meeting.id}/end`, {
         method: 'POST',
+        credentials: 'include',
         headers: buildControlHeaders(false)
       });
       if (!res.ok) throw new Error('Failed to end meeting');
@@ -1738,7 +1974,10 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
     }
   };
 
-  const handleLeaveCall = () => {
+  const handleLeaveCall = async () => {
+    if (isRecordingRef.current || recordingUploadPromiseRef.current) {
+      await stopRecordingAndAwaitUpload();
+    }
     triggerSafeExit(undefined, true);
   };
 
@@ -2744,14 +2983,14 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
       </main>
 
       {/* Thumb-Friendly Bottom Control Dock (Always Visible on Mobile & Desktop without Fullscreen) */}
-      <footer className="shrink-0 bg-slate-950/95 border-t border-slate-800 px-2 sm:px-6 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] z-20">
-        <div className="max-w-4xl mx-auto flex items-center justify-between sm:justify-center gap-1.5 sm:gap-3">
+      <footer className="shrink-0 bg-slate-950/95 border-t border-slate-800 px-2 sm:px-4 py-1.5 pb-[calc(0.5rem+env(safe-area-inset-bottom))] z-20">
+        <div className="w-full max-w-7xl mx-auto flex items-center justify-start lg:justify-center gap-1.5 sm:gap-2 overflow-x-auto py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {/* Mic Toggle */}
           <button
             type="button"
             onClick={handleToggleAudio}
             aria-label={isAudioMuted ? 'Unmute microphone' : 'Mute microphone'}
-            className={`min-h-[44px] min-w-[44px] sm:px-3.5 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
+            className={`shrink-0 whitespace-nowrap min-h-[44px] min-w-[54px] sm:min-w-0 px-2.5 sm:px-3 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
               isAudioMuted
                 ? 'bg-rose-600 hover:bg-rose-500 text-white'
                 : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
@@ -2766,7 +3005,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             type="button"
             onClick={handleToggleVideo}
             aria-label={isVideoMuted ? 'Turn on camera' : 'Turn off camera'}
-            className={`min-h-[44px] min-w-[44px] sm:px-3.5 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
+            className={`shrink-0 whitespace-nowrap min-h-[44px] min-w-[54px] sm:min-w-0 px-2.5 sm:px-3 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
               isVideoMuted
                 ? 'bg-rose-600 hover:bg-rose-500 text-white'
                 : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
@@ -2781,7 +3020,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             type="button"
             onClick={handleToggleRaiseHand}
             aria-label={isHandRaised ? 'Lower hand' : 'Raise hand'}
-            className={`min-h-[44px] min-w-[44px] sm:px-3.5 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
+            className={`shrink-0 whitespace-nowrap min-h-[44px] min-w-[52px] sm:min-w-0 px-2.5 sm:px-3 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
               isHandRaised
                 ? 'bg-amber-500 text-slate-950'
                 : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
@@ -2797,14 +3036,15 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
               type="button"
               onClick={handleToggleScreenShare}
               aria-label="Toggle screen share"
-              className={`hidden md:flex min-h-[44px] px-3.5 items-center justify-center gap-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+              className={`hidden md:flex shrink-0 whitespace-nowrap min-h-[44px] px-3 items-center justify-center gap-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
                 isScreenSharing
                   ? 'bg-emerald-600 text-white'
                   : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
               }`}
             >
               <MonitorUp className="w-4 h-4 shrink-0" />
-              <span>Share Screen</span>
+              <span className="hidden xl:inline">Share Screen</span>
+              <span className="xl:hidden">Share</span>
             </button>
           )}
 
@@ -2813,7 +3053,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             type="button"
             onClick={() => setWhiteboardOpen(!effectiveWhiteboardOpen)}
             aria-label="Toggle interactive whiteboard"
-            className={`relative min-h-[44px] min-w-[44px] sm:px-3.5 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
+            className={`relative shrink-0 whitespace-nowrap min-h-[44px] min-w-[52px] sm:min-w-0 px-2.5 sm:px-3 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
               effectiveWhiteboardOpen
                 ? 'bg-indigo-600 text-white'
                 : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
@@ -2823,7 +3063,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             <span className="leading-none">Board</span>
             {whiteboardHasContent && !effectiveWhiteboardOpen && (
               <span
-                className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-indigo-400"
+                className="absolute top-1 right-1 w-2 h-2 rounded-full bg-indigo-400"
                 title="Shared whiteboard has active content"
               />
             )}
@@ -2834,7 +3074,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             type="button"
             onClick={handleStartStopRecording}
             aria-label={isRecording ? 'Stop meeting recording' : 'Start meeting recording'}
-            className={`min-h-[44px] min-w-[44px] sm:px-3.5 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
+            className={`shrink-0 whitespace-nowrap min-h-[44px] min-w-[54px] sm:min-w-0 px-2.5 sm:px-3 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
               isRecording
                 ? 'bg-rose-600 text-white animate-pulse'
                 : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
@@ -2850,7 +3090,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             type="button"
             onClick={handleTakeScreenshot}
             aria-label="Take screenshot"
-            className="min-h-[44px] min-w-[44px] sm:px-3.5 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer"
+            className="shrink-0 whitespace-nowrap min-h-[44px] min-w-[52px] sm:min-w-0 px-2.5 sm:px-3 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer"
             title="Take Screenshot (Saved to Admin Archive)"
           >
             <Camera className="w-4 h-4 text-blue-400 shrink-0" />
@@ -2862,7 +3102,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             type="button"
             onClick={handleToggleTileView}
             aria-label="Toggle gallery grid view"
-            className={`hidden sm:flex min-h-[44px] px-3.5 items-center justify-center gap-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+            className={`hidden sm:flex shrink-0 whitespace-nowrap min-h-[44px] px-3 items-center justify-center gap-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
               isTileView
                 ? 'bg-blue-600 text-white'
                 : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
@@ -2877,7 +3117,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             type="button"
             onClick={() => setActiveDrawer(activeDrawer === 'chat' ? null : 'chat')}
             aria-label="Toggle chat and notes"
-            className={`relative min-h-[44px] min-w-[44px] sm:px-3.5 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
+            className={`relative shrink-0 whitespace-nowrap min-h-[44px] min-w-[52px] sm:min-w-0 px-2.5 sm:px-3 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
               activeDrawer === 'chat'
                 ? 'bg-blue-600 text-white'
                 : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
@@ -2897,7 +3137,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             type="button"
             onClick={() => setActiveDrawer(activeDrawer === 'participants' ? null : 'participants')}
             aria-label="Toggle participant list"
-            className={`relative min-h-[44px] min-w-[44px] sm:px-3.5 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
+            className={`relative shrink-0 whitespace-nowrap min-h-[44px] min-w-[56px] sm:min-w-0 px-2.5 sm:px-3 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
               activeDrawer === 'participants'
                 ? 'bg-blue-600 text-white'
                 : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
@@ -2905,14 +3145,14 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
           >
             <Users className="w-4 h-4 shrink-0" />
             <span className="leading-none">People</span>
+            {participantsList.length > 0 && (
+              <span className="hidden sm:inline font-mono text-[11px] opacity-80 tabular-nums">
+                ({participantsList.length}/{maxParticipants})
+              </span>
+            )}
             {raisedHands.length > 0 && (
               <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-slate-950 text-[10px] font-bold flex items-center justify-center tabular-nums">
                 {raisedHands.length}
-              </span>
-            )}
-            {participantsList.length > 0 && (
-              <span className="hidden sm:inline font-mono text-[10px] opacity-80 tabular-nums">
-                ({participantsList.length}/{maxParticipants})
               </span>
             )}
           </button>
@@ -2923,7 +3163,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
               type="button"
               onClick={() => setActiveDrawer(activeDrawer === 'host' ? null : 'host')}
               aria-label="Open host controls and waiting room"
-              className={`relative min-h-[44px] min-w-[44px] sm:px-3.5 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-2 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
+              className={`relative shrink-0 whitespace-nowrap min-h-[44px] min-w-[52px] sm:min-w-0 px-2.5 sm:px-3 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 rounded-xl text-[10px] sm:text-xs font-semibold transition-colors cursor-pointer ${
                 activeDrawer === 'host'
                   ? 'bg-amber-400 text-slate-950'
                   : 'bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-500/30'
@@ -2944,7 +3184,7 @@ export const LiveMeetingRoom: React.FC<LiveMeetingRoomProps> = ({
             type="button"
             onClick={() => (isPrimaryHost ? setConfirmEndPrompt(true) : handleLeaveCall())}
             aria-label={isPrimaryHost ? 'End or leave meeting' : 'Leave meeting'}
-            className="min-h-[44px] min-w-[44px] px-3 sm:px-4 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-[10px] sm:text-xs font-bold transition-colors cursor-pointer shrink-0"
+            className="shrink-0 whitespace-nowrap min-h-[44px] min-w-[54px] sm:min-w-0 px-3 sm:px-3.5 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-[10px] sm:text-xs font-bold transition-colors cursor-pointer"
           >
             <PhoneOff className="w-4 h-4 shrink-0" />
             <span className="leading-none">{isPrimaryHost ? 'End' : 'Leave'}</span>
