@@ -399,21 +399,6 @@ export const AdminContacts: React.FC = () => {
 
           <button
             type="button"
-            onClick={handleDownloadAndroidSource}
-            disabled={downloadingAndroidZip}
-            title="Download Native Kotlin Android Project (.zip) to compile real .apk"
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-950 hover:bg-indigo-900 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer disabled:opacity-60"
-          >
-            {downloadingAndroidZip ? (
-              <Loader2 className="w-3.5 h-3.5 text-amber-300 animate-spin" />
-            ) : (
-              <Smartphone className="w-3.5 h-3.5 text-amber-300" />
-            )}
-            <span>{downloadingAndroidZip ? 'Preparing ZIP...' : 'Android .APK Project (.zip)'}</span>
-          </button>
-
-          <button
-            type="button"
             onClick={handleRefreshAll}
             disabled={loading || aiLoading}
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-800 text-xs font-semibold hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-60"
