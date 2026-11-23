@@ -1863,7 +1863,7 @@ app.post('/api/support-live/handoff', (req, res) => {
   });
 });
 
-// Public Visitor: Send Live Message to Human Coordinator
+// Public Visitor: Send Live Message to Human Coordinator (server-side name enforced)
 app.post('/api/support-live/visitor-message', (req, res) => {
   const { sessionId, text, name, email, whatsapp } = req.body || {};
   const cleanSession = typeof sessionId === 'string' ? sessionId.trim() : '';
@@ -1876,32 +1876,34 @@ app.post('/api/support-live/visitor-message', (req, res) => {
     return res.status(400).json({ error: 'Message must be between 1 and 2,000 characters.' });
   }
 
+  const existing = db.getSupportConversationBySession(cleanSession);
+  const effectiveName =
+    (typeof name === 'string' && name.trim()) || existing?.visitorName?.trim() || '';
+  if (effectiveName.length < 2) {
+    return res.status(400).json({ error: 'Please enter your full name before chatting with a live coordinator.' });
+  }
+
   const { conversation, message } = db.addVisitorLiveMessage({
     sessionId: cleanSession,
     text: cleanText,
-    visitorName: typeof name === 'string' ? name.slice(0, 80) : undefined,
+    visitorName: effectiveName.slice(0, 80),
     visitorEmail: typeof email === 'string' ? email.slice(0, 120) : undefined,
     visitorWhatsapp: typeof whatsapp === 'string' ? whatsapp.slice(0, 40) : undefined
   });
 
-  const payload = {
+  broadcastToSupportAgents({
     type: 'support:new_message',
     conversationId: conversation.id,
     sessionId: conversation.sessionId,
     message,
     conversation
-  };
-  broadcastToSupportAgents(payload);
+  });
   broadcastToSupportVisitor(cleanSession, {
     type: 'support:conversation_updated',
     conversation
   });
 
-  res.status(201).json({
-    ok: true,
-    message,
-    conversation
-  });
+  res.status(201).json({ ok: true, message, conversation });
 });
 
 // Public Visitor & Agent: Broadcast visitor typing indicator
@@ -1952,7 +1954,7 @@ app.get('/api/support-live/conversations', requireAuth(SUPPORT_AGENT_ROLES), (re
   });
 });
 
-// Authenticated Agents: Send live reply to visitor (broadcast instantly to website widget & agent apps)
+// Authenticated Agents: Send live reply to visitor (first coordinator to reply auto-claims the chat)
 app.post('/api/support-live/conversations/:id/reply', requireAuth(SUPPORT_AGENT_ROLES), (req, res) => {
   const rawText = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
   if (!rawText || rawText.length > 4000) {
@@ -1960,31 +1962,59 @@ app.post('/api/support-live/conversations/:id/reply', requireAuth(SUPPORT_AGENT_
   }
 
   const actor = (req as any).user as AuthSession;
+  const agentName = actor?.name || 'Council Coordinator';
+
+  const before = db.getSupportConversationById(req.params.id);
+  if (!before) {
+    return res.status(404).json({ error: 'Conversation not found.' });
+  }
+  const wasUnassigned = !before.assignedAgentName;
+
   const result = db.addAgentLiveReply({
     conversationId: req.params.id,
     text: rawText,
-    agentName: actor?.name || 'Council Coordinator'
+    agentName
   });
 
   if (!result) {
     return res.status(404).json({ error: 'Conversation not found.' });
   }
 
+  // First coordinator to reply claims the chat (sync code = no race between two admins)
+  let conversation = result.conversation;
+  let claimed = false;
+  if (wasUnassigned) {
+    const assigned = db.assignSupportConversation(conversation.id, agentName);
+    if (assigned) {
+      conversation = assigned;
+      claimed = true;
+    }
+  }
+
   const eventPayload = {
     type: 'support:agent_reply',
-    conversationId: result.conversation.id,
-    sessionId: result.conversation.sessionId,
+    conversationId: conversation.id,
+    sessionId: conversation.sessionId,
     message: result.message,
-    conversation: result.conversation
+    conversation
   };
 
-  broadcastToSupportVisitor(result.conversation.sessionId, eventPayload);
+  broadcastToSupportVisitor(conversation.sessionId, eventPayload);
   broadcastToSupportAgents(eventPayload);
+
+  if (claimed) {
+    broadcastToSupportAgents({
+      type: 'support:conversation_updated',
+      conversation,
+      claimedBy: agentName
+    });
+  }
 
   res.status(201).json({
     ok: true,
     message: result.message,
-    conversation: result.conversation
+    conversation,
+    claimed
   });
 });
 
@@ -2041,8 +2071,6 @@ app.patch('/api/support-live/conversations/:id/status', requireAuth(SUPPORT_AGEN
   });
   res.json({ ok: true, conversation: updated });
 });
-
-
 
 app.get(
   '/api/support-ai/conversations',
