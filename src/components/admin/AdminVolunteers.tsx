@@ -16,6 +16,7 @@ import {
   Edit2
 } from 'lucide-react';
 import { Volunteer } from '../../types.ts';
+import { VolunteerIdCardModal } from './VolunteerIdCardModal.tsx';
 
 export const AdminVolunteers: React.FC = () => {
   const { addToast } = useApp();
@@ -25,6 +26,7 @@ export const AdminVolunteers: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('All');
   const [editingVolunteer, setEditingVolunteer] = useState<Volunteer | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<Volunteer | null>(null);
+  const [viewingIdCard, setViewingIdCard] = useState<Volunteer | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   const fetchVolunteers = async () => {
@@ -216,6 +218,14 @@ export const AdminVolunteers: React.FC = () => {
                     <td className="py-3.5 px-4 text-right">
                       <div className="flex items-center justify-end gap-1">
                         <button
+                          onClick={() => setViewingIdCard(vol)}
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"
+                          title="View Official Digital ID Card"
+                          aria-label={`View ID Card for ${vol.fullName}`}
+                        >
+                          <Award className="w-4 h-4 text-amber-500" />
+                        </button>
+                        <button
                           onClick={() => setEditingVolunteer(vol)}
                           className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-950 hover:bg-slate-100 transition-colors cursor-pointer"
                           title="Edit Volunteer Details"
@@ -238,6 +248,14 @@ export const AdminVolunteers: React.FC = () => {
           </table>
         </div>
       </div>
+
+      {/* Official Digital ID Card Modal */}
+      {viewingIdCard && (
+        <VolunteerIdCardModal
+          volunteer={viewingIdCard}
+          onClose={() => setViewingIdCard(null)}
+        />
+      )}
 
       {/* Edit Volunteer Modal */}
       {editingVolunteer && (

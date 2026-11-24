@@ -2101,6 +2101,24 @@ class Database {
     return updated;
   }
 
+  rateSupportConversation(sessionId: string, rating: number, feedback?: string): SupportConversation | null {
+    this.ensureMeetingArrays();
+    const list = this.data.supportConversations!;
+    const idx = list.findIndex(c => c.sessionId === sessionId || c.id === sessionId);
+    if (idx === -1) return null;
+    const existing = list[idx];
+    const updated: SupportConversation = {
+      ...existing,
+      satisfactionRating: Math.max(1, Math.min(5, rating)),
+      satisfactionFeedback: feedback?.trim() || undefined,
+      updatedAt: new Date().toISOString()
+    };
+    list[idx] = updated;
+    this.save();
+    mongoUpsert('supportConversations', updated.id, updated).catch(() => {});
+    return updated;
+  }
+
   switchSupportConversationMode(sessionId: string, mode: 'ai' | 'human'): SupportConversation | null {
     this.ensureMeetingArrays();
     const list = this.data.supportConversations!;

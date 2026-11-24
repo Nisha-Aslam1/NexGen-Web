@@ -53,6 +53,7 @@ export interface VolunteerApplication {
   emergencyContactName?: string;
   emergencyContactPhone?: string;
   additionalMessage?: string;
+  avatar?: string;
   agreedToTerms: boolean;
   confirmedAccurate: boolean;
   
@@ -81,6 +82,8 @@ export interface Volunteer {
   joinedDate: string;
   status: 'Active' | 'On Leave' | 'Alumni';
   emergencyContact?: string;
+  avatar?: string;
+  membershipTier?: 'Executive Member' | 'Distinguished Fellow' | 'Active Volunteer Scholar' | 'Senior Coordinator';
 }
 
 export interface Program {
@@ -198,6 +201,8 @@ export interface SupportConversation {
   escalatedToHuman?: boolean;
   linkedContactId?: string;
   messages: SupportChatMessage[];
+  satisfactionRating?: number;
+  satisfactionFeedback?: string;
   createdAt: string;
   updatedAt: string;
   expiresAt: string;

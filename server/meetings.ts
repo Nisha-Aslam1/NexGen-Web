@@ -30,15 +30,16 @@ function toPublicMeeting(m: Meeting) {
   const { passwordHash, ...rest } = m;
   const participants = db.getMeetingParticipants(m.id);
   const isEnded = m.status === 'Ended' || m.status === 'Cancelled';
-  const activeParticipantCount = isEnded
-    ? 0
+  const admittedParticipants = isEnded
+    ? []
     : participants.filter(
         p => p.admissionStatus === 'admitted' && p.connectionStatus !== 'disconnected'
-      ).length;
+      );
+  const activeParticipantCount = admittedParticipants.length;
   return {
     ...rest,
     activeParticipantCount,
-    totalParticipantCount: participants.length
+    totalParticipantCount: admittedParticipants.length
   };
 }
 
@@ -546,6 +547,21 @@ meetingsRouter.post('/meetings/:code/join', (req: Request, res: Response) => {
   const user = (req as any).user;
   const dbUser = user?.userId ? db.getUserById(user.userId) : null;
   const isHost = !!user && isMeetingModerator(user, meeting);
+
+  // Scheduled time check: if meeting is Scheduled and scheduledStart is in the future, non-hosts must wait
+  if (!isHost && meeting.status === 'Scheduled' && meeting.scheduledStart) {
+    const startTimeMs = new Date(meeting.scheduledStart).getTime();
+    const nowMs = Date.now();
+    // Allow joining up to 15 minutes before scheduled start time
+    if (!Number.isNaN(startTimeMs) && startTimeMs > nowMs + 15 * 60 * 1000) {
+      return res.status(425).json({
+        error: `This meeting is scheduled to start on ${new Date(meeting.scheduledStart).toLocaleString()}. You can join when the room opens shortly before the scheduled time.`,
+        scheduledStart: meeting.scheduledStart,
+        isFutureMeeting: true,
+        meeting: toPublicMeeting(meeting)
+      });
+    }
+  }
 
   const { password, displayName, email, participantId } = req.body || {};
 

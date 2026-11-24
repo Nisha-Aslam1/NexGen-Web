@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp, AdminTab, canAccessAdminTab } from '../../context/AppContext.tsx';
 import { authFetch } from '../../lib/api.ts';
 import { TwoFactorSettingsCard } from './TwoFactorSettingsCard.tsx';
+import { VolunteerIdCardModal } from './VolunteerIdCardModal.tsx';
 import {
   LayoutDashboard,
   FileCheck2,
@@ -51,6 +52,7 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
   } = useApp();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const [showMyIdCard, setShowMyIdCard] = useState(false);
   const [pwdForm, setPwdForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [showPwdFields, setShowPwdFields] = useState(false);
   const [savingPwd, setSavingPwd] = useState(false);
@@ -250,6 +252,14 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
               </p>
             </div>
             <div className="flex items-center gap-1">
+              <button
+                onClick={() => setShowMyIdCard(true)}
+                className="text-slate-400 hover:text-amber-400 p-1.5 rounded-lg transition-colors cursor-pointer"
+                title="My Official Digital Council ID Card"
+                aria-label="My Official Digital Council ID Card"
+              >
+                <Award className="w-4 h-4 text-amber-400" />
+              </button>
               <button
                 onClick={() => setIsPasswordModalOpen(true)}
                 className="text-slate-400 hover:text-amber-400 p-1.5 rounded-lg transition-colors cursor-pointer"
@@ -486,6 +496,25 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
             </form>
           </div>
         </div>
+      )}
+
+      {/* Official Council ID Card Modal for Staff / Admin */}
+      {showMyIdCard && currentUser && (
+        <VolunteerIdCardModal
+          volunteer={{
+            id: currentUser.id || 'staff_exec',
+            fullName: currentUser.name || currentUser.username || 'Council Executive Officer',
+            email: currentUser.email,
+            assignedRole: (currentUser.role || 'Executive Member').replace(/_/g, ' '),
+            city: 'National Secretariat',
+            joinedDate: currentUser.createdAt || '2026-01-01',
+            status: 'Active',
+            membershipTier: 'Executive Council Member',
+            avatar: currentUser.avatar,
+            hoursContributed: 120
+          }}
+          onClose={() => setShowMyIdCard(false)}
+        />
       )}
     </div>
   );

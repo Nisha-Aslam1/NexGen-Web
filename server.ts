@@ -1921,6 +1921,23 @@ app.post('/api/support-live/typing', (req, res) => {
   res.json({ ok: true });
 });
 
+// Public Visitor: Submit CSAT Rating & Feedback
+app.post('/api/support-live/rate', (req, res) => {
+  const { sessionId, rating, feedback } = req.body || {};
+  const cleanSession = typeof sessionId === 'string' ? sessionId.trim() : '';
+  const numRating = Number(rating);
+  if (!cleanSession || isNaN(numRating) || numRating < 1 || numRating > 5) {
+    return res.status(400).json({ error: 'Valid session ID and rating (1-5) are required.' });
+  }
+
+  const updated = db.rateSupportConversation(cleanSession, numRating, typeof feedback === 'string' ? feedback : undefined);
+  if (updated) {
+    broadcastToSupportAgents({ type: 'support:conversation_updated', conversation: updated });
+    broadcastToSupportVisitor(cleanSession, { type: 'support:conversation_updated', conversation: updated });
+  }
+  res.json({ ok: true, conversation: updated });
+});
+
 // Public Visitor: Switch chat mode between AI and Live Human
 app.post('/api/support-live/switch-mode', (req, res) => {
   const { sessionId, mode } = req.body || {};

@@ -9,8 +9,11 @@ import {
   FileText,
   AlertCircle,
   ArrowRight,
-  ShieldCheck
+  ShieldCheck,
+  Award,
+  Sparkles
 } from 'lucide-react';
+import { VolunteerIdCardModal } from '../admin/VolunteerIdCardModal.tsx';
 
 export const TrackApplication: React.FC = () => {
   const { setActivePage } = useApp();
@@ -18,6 +21,7 @@ export const TrackApplication: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [applicationData, setApplicationData] = useState<any | null>(null);
+  const [showIdCard, setShowIdCard] = useState<boolean>(false);
 
   useDocumentSEO({
     title: 'Track Application Status | NexGen Council',
@@ -189,7 +193,30 @@ export const TrackApplication: React.FC = () => {
             <div className="p-4 rounded-xl bg-indigo-900/5 border border-indigo-900/10 text-xs text-slate-700 space-y-1.5">
               <p className="font-semibold text-indigo-950">Status Clarification</p>
               {applicationData.status === 'Approved' && (
-                <p>Congratulations! Your volunteer profile has been endorsed. Check your email for orientation links and badge details.</p>
+                <div className="space-y-3 pt-1">
+                  <p className="text-emerald-800 font-medium">
+                    Congratulations! Your volunteer enrollment has been officially approved and endorsed by the Council Secretariat.
+                  </p>
+                  <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-yellow-400/10 to-amber-500/15 border border-amber-300 flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-10 h-10 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center shrink-0 shadow-sm">
+                        <Award className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="font-serif font-bold text-sm text-slate-900">Official Digital Member ID Card</h4>
+                        <p className="text-[11px] text-slate-600">Issued with verified credentials, hologram seal &amp; QR verification</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowIdCard(true)}
+                      className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-indigo-950 hover:bg-indigo-900 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md cursor-pointer transition-all shrink-0"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                      <span>View &amp; Download ID Card</span>
+                    </button>
+                  </div>
+                </div>
               )}
               {applicationData.status === 'Under Review' && (
                 <p>Your application is currently being evaluated by our regional committee. Expect an update within 48 hours.</p>
@@ -204,6 +231,25 @@ export const TrackApplication: React.FC = () => {
           </div>
         )}
       </div>
+
+      {showIdCard && applicationData && (
+        <VolunteerIdCardModal
+          volunteer={{
+            id: applicationData.id || `app_${applicationData.referenceCode}`,
+            fullName: applicationData.fullName,
+            email: applicationData.email,
+            phone: applicationData.phone,
+            city: applicationData.city,
+            assignedRole: applicationData.preferredRole || 'Council Volunteer Scholar',
+            referenceCode: applicationData.referenceCode,
+            joinedDate: applicationData.submittedAt || new Date().toISOString(),
+            status: 'Active',
+            membershipTier: 'Active Volunteer Scholar',
+            hoursContributed: 0
+          }}
+          onClose={() => setShowIdCard(false)}
+        />
+      )}
 
       <div className="text-center mt-8">
         <button
