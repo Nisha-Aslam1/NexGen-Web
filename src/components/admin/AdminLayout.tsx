@@ -32,7 +32,8 @@ import {
   KeyRound,
   Eye,
   EyeOff,
-  CheckCircle2
+  CheckCircle2,
+  HelpCircle
 } from 'lucide-react';
 
 export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -110,6 +111,7 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
   const allOrganizationNav: NavItem[] = [
     { tab: 'team', label: 'Team', icon: UserCheck },
     { tab: 'gallery', label: 'Gallery', icon: ImageIcon },
+    { tab: 'faqs', label: 'FAQs & Help', icon: HelpCircle },
     { tab: 'contacts', label: 'Inquiries', icon: Mail, badge: unreadContactsCount },
     { tab: 'email', label: 'Send Email', icon: Send },
     { tab: 'settings', label: 'Settings', icon: Settings },

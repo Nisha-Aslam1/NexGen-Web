@@ -8,6 +8,7 @@ import {
   NewsItem,
   TeamMember,
   GalleryItem,
+  FaqItem,
   ContactMessage,
   WebsiteSettings,
   DashboardStats,
@@ -46,6 +47,7 @@ export type AdminTab =
   | 'news'
   | 'team'
   | 'gallery'
+  | 'faqs'
   | 'contacts'
   | 'email'
   | 'settings'
@@ -90,10 +92,10 @@ export function canAccessAdminTab(tab: AdminTab, role?: string): boolean {
     return ['dashboard', 'meetings', 'analytics', 'applications', 'volunteers', 'contacts', 'email', 'activity'].includes(tab);
   }
   if (norm === 'CONTENT_MANAGER') {
-    return ['dashboard', 'meetings', 'analytics', 'programs', 'events', 'news', 'team', 'gallery', 'contacts', 'email', 'settings', 'activity'].includes(tab);
+    return ['dashboard', 'meetings', 'analytics', 'programs', 'events', 'news', 'team', 'gallery', 'faqs', 'contacts', 'email', 'settings', 'activity'].includes(tab);
   }
   if (norm === 'COMMUNICATIONS_OFFICER') {
-    return ['dashboard', 'contacts', 'email', 'news', 'gallery', 'analytics', 'activity'].includes(tab);
+    return ['dashboard', 'contacts', 'email', 'news', 'gallery', 'faqs', 'analytics', 'activity'].includes(tab);
   }
   if (norm === 'EVENT_COORDINATOR') {
     return ['dashboard', 'programs', 'events', 'gallery', 'meetings', 'analytics', 'activity'].includes(tab);
@@ -226,6 +228,7 @@ interface AppContextType {
   news: NewsItem[];
   team: TeamMember[];
   gallery: GalleryItem[];
+  faqs: FaqItem[];
   isLoadingPublicData: boolean;
   refreshData: () => Promise<void>;
 
@@ -333,6 +336,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [news, setNews] = useState<NewsItem[]>([]);
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [gallery, setGallery] = useState<GalleryItem[]>([]);
+  const [faqs, setFaqs] = useState<FaqItem[]>([]);
   const [isLoadingPublicData, setIsLoadingPublicData] = useState<boolean>(true);
 
   // Real-time Sync State
@@ -405,13 +409,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Fetch Public Data
   const refreshData = async () => {
     try {
-      const [settingsRes, programsRes, eventsRes, newsRes, teamRes, galleryRes] = await Promise.all([
+      const token = getInMemoryAuthToken();
+      const authHeaders: Record<string, string> = {};
+      if (token) authHeaders['Authorization'] = `Bearer ${token}`;
+
+      const [settingsRes, programsRes, eventsRes, newsRes, teamRes, galleryRes, faqsRes] = await Promise.all([
         fetch('/api/settings').then(r => r.json()).catch(() => null),
         fetch('/api/programs').then(r => r.json()).catch(() => []),
         fetch('/api/events').then(r => r.json()).catch(() => []),
         fetch('/api/news').then(r => r.json()).catch(() => []),
         fetch('/api/team').then(r => r.json()).catch(() => []),
-        fetch('/api/gallery').then(r => r.json()).catch(() => [])
+        fetch('/api/gallery').then(r => r.json()).catch(() => []),
+        fetch('/api/faqs', { headers: authHeaders, credentials: 'include' }).then(r => r.json()).catch(() => [])
       ]);
 
       if (settingsRes) setSettings(settingsRes);
@@ -420,6 +429,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (Array.isArray(newsRes)) setNews(newsRes);
       if (Array.isArray(teamRes)) setTeam(teamRes);
       if (Array.isArray(galleryRes)) setGallery(galleryRes);
+      if (Array.isArray(faqsRes)) setFaqs(faqsRes);
     } catch (err) {
       console.error('Error loading initial data:', err);
     } finally {
@@ -653,6 +663,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         news,
         team,
         gallery,
+        faqs,
         isLoadingPublicData,
         refreshData,
         isSyncing,

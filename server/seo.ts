@@ -685,7 +685,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
   // Handle Donate
   if (cleanPath === '/donate' || cleanPath === '/donation' || cleanPath === '/support-us') {
     const donatePoster = `${siteUrl}/assets/aistudio/2535e6a6-f29c-44fd-8f0c-05946ee38cac_8942ae05.jpg`;
-    const donateQr = `${siteUrl}/assets/donation-qr.png`;
+    const donateQr = `${siteUrl}/assets/donation-qr-easypaisa.png`;
     const donateTitle = `Donate to NexGen Council | Support Youth & Communities`;
     const donateDesc =
       'Donate to NexGen Council for education, healthcare & community relief. Contribute easily via QR Till 992191268, Easypaisa, NayaPay, or JazzCash today.';
@@ -756,77 +756,6 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       ]
     };
 
-    const donateFaqSchema = {
-      '@context': 'https://schema.org',
-      '@type': 'FAQPage',
-      mainEntity: [
-        {
-          '@type': 'Question',
-          name: 'How are donated funds utilized across NexGen Council programs?',
-          acceptedAnswer: {
-            '@type': 'Answer',
-            text: 'All contributions directly fuel grassroots program delivery across four pillars: Education (student scholarships, exam fee aid, and school kits), Healthcare (free community medical camps and essential medicines), Community Support (emergency food rations and family welfare), and Women & Youth Empowerment (vocational skill workshops and leadership fellowships).'
-          }
-        },
-        {
-          '@type': 'Question',
-          name: 'How can I donate to NexGen Council online in Pakistan?',
-          acceptedAnswer: {
-            '@type': 'Answer',
-            text: 'You can donate within seconds by scanning the official RAAST / Easypaisa Merchant QR code (Merchant Till Number: 992191268) from any Pakistani wallet or banking app, or by transferring directly to Easypaisa (Account Name: Momna Kokab · 03497100560) or NayaPay / JazzCash (Account Name: Minahil Imran · 03418408350).'
-          }
-        },
-        {
-          '@type': 'Question',
-          name: 'Are the Easypaisa, NayaPay, JazzCash, and QR accounts officially verified?',
-          acceptedAnswer: {
-            '@type': 'Answer',
-            text: 'Yes. Only the three official channels displayed on this page—Merchant Till 992191268, Easypaisa 03497100560 (Momna Kokab), and NayaPay / JazzCash 03418408350 (Minahil Imran)—are authorized for this campaign. Always verify the exact account title before confirming a transfer.'
-          }
-        },
-        {
-          '@type': 'Question',
-          name: 'Can I choose which specific cause my contribution supports?',
-          acceptedAnswer: {
-            '@type': 'Answer',
-            text: 'Yes. Use the cause selector on this page to dedicate your gift to Education, Healthcare, Community Support, or Women & Youth Empowerment, then mention your chosen cause when submitting your transfer confirmation in the Donor Acknowledgment Desk.'
-          }
-        },
-        {
-          '@type': 'Question',
-          name: 'Is there a minimum donation amount required?',
-          acceptedAnswer: {
-            '@type': 'Answer',
-            text: 'No contribution is too small. Whether PKR 500, PKR 1,000, PKR 2,500, or a larger institutional sponsorship, every single rupee combines to fund real school supplies, medicines, and household relief.'
-          }
-        },
-        {
-          '@type': 'Question',
-          name: 'Are funds routed through third-party intermediaries or high platform fees?',
-          acceptedAnswer: {
-            '@type': 'Answer',
-            text: 'No. Transfers sent via RAAST QR, Easypaisa, NayaPay, or JazzCash go directly to council-stewarded donation accounts without third-party crowdfunding commissions, maximizing the impact of every contribution on the ground.'
-          }
-        },
-        {
-          '@type': 'Question',
-          name: 'How do I receive confirmation or acknowledgment for my donation?',
-          acceptedAnswer: {
-            '@type': 'Answer',
-            text: 'Right after sending your transfer, enter your full name, email address, payment channel, amount, and Transaction ID (TID) into the Confirm Your Donation Transfer form on /donate. Our Secretariat records it immediately and issues a confirmation reference.'
-          }
-        },
-        {
-          '@type': 'Question',
-          name: 'How else can I support NexGen Council beyond financial donations?',
-          acceptedAnswer: {
-            '@type': 'Answer',
-            text: 'You can share this donation campaign link on WhatsApp or social media, sponsor in-kind educational kits or medical camp supplies through our Secretariat Desk, or apply to volunteer your skills with our regional cohorts.'
-          }
-        }
-      ]
-    };
-
     return {
       title: donateTitle,
       description: donateDesc,
@@ -853,7 +782,6 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
         orgSchema,
         donatePageSchema,
         donateHowToSchema,
-        donateFaqSchema,
         createBreadcrumbs([
           { name: 'Home', url: `${siteUrl}/` },
           { name: 'Donate & Support', url: `${siteUrl}/donate` }
@@ -862,11 +790,39 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
     };
   }
 
-  // Handle Site-Wide FAQ (/faq, /faqs)
+  // Handle Site-Wide Standalone FAQ (/faq, /faqs)
   if (cleanPath === '/faq' || cleanPath === '/faqs' || cleanPath === '/help') {
-    const siteFaqTitle = `Frequently Asked Questions | ${shortBrand}`;
+    const siteFaqTitle = 'NexGen Council FAQ | Membership, Programs & Donations';
     const siteFaqDesc =
-      'Answers on NexGen Council membership, volunteer applications, Member ID cards, leadership programs, events, partnerships, and verified donation accounts.';
+      'Get official answers on NexGen Council volunteer registration, Member ID cards, 30-Day Leadership Series, events, partnerships & verified donations.';
+    const faqWebPageSchema = {
+      '@context': 'https://schema.org',
+      '@type': 'WebPage',
+      '@id': `${siteUrl}/faq#webpage`,
+      url: `${siteUrl}/faq`,
+      name: siteFaqTitle,
+      description: siteFaqDesc,
+      inLanguage: 'en',
+      isPartOf: { '@id': `${siteUrl}/#website` },
+      about: { '@id': `${siteUrl}/#organization` }
+    };
+
+    const liveFaqs = db.getFaqs(true);
+    const fullFaqSchema = liveFaqs.length > 0
+      ? {
+          '@context': 'https://schema.org',
+          '@type': 'FAQPage',
+          mainEntity: liveFaqs.map(item => ({
+            '@type': 'Question',
+            name: item.question,
+            acceptedAnswer: {
+              '@type': 'Answer',
+              text: item.answer
+            }
+          }))
+        }
+      : null;
+
     return {
       title: siteFaqTitle,
       description: siteFaqDesc,
@@ -876,50 +832,20 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       keywords: [
         ...CORE_NEXGEN_KEYWORDS,
         'NexGen Council FAQ',
-        'NexGen volunteer FAQ',
-        'NexGen Member ID card',
-        'NexGen donations FAQ'
+        'NexGen Women Empowerment FAQ',
+        'how to join NexGen Council',
+        'NexGen volunteer registration',
+        'NexGen Member ID card download',
+        'track NexGen application',
+        '30-Day Leadership Series FAQ',
+        'NexGen Council donation accounts',
+        'NexGen Pakistan Sialkot NGO',
+        'youth leadership mentorship FAQ'
       ],
       jsonLd: [
         orgSchema,
-        {
-          '@context': 'https://schema.org',
-          '@type': 'FAQPage',
-          mainEntity: [
-            {
-              '@type': 'Question',
-              name: 'What is NexGen Council (NexGen Women Empowerment & Youth Leadership Council)?',
-              acceptedAnswer: {
-                '@type': 'Answer',
-                text: 'NexGen Council is a civil society leadership organization empowering women and youth across Pakistan and international chapters through structured mentorship, leadership fellowships, civic policy forums, and grassroots humanitarian outreach.'
-              }
-            },
-            {
-              '@type': 'Question',
-              name: 'How can women and youth apply to join or volunteer with NexGen Council?',
-              acceptedAnswer: {
-                '@type': 'Answer',
-                text: `Anyone passionate about community service or leadership can submit an online application via the Join as Volunteer portal (${siteUrl}/volunteer).`
-              }
-            },
-            {
-              '@type': 'Question',
-              name: 'How do I track my volunteer application and get my Member ID Card?',
-              acceptedAnswer: {
-                '@type': 'Answer',
-                text: `Visit the Track Application portal (${siteUrl}/track) and enter your application reference ID or registered email address to check your status and download your official NexGen Council Member ID card.`
-              }
-            },
-            {
-              '@type': 'Question',
-              name: 'How can I donate to NexGen Council and how are funds utilized?',
-              acceptedAnswer: {
-                '@type': 'Answer',
-                text: 'You can donate safely via the official RAAST / Easypaisa Merchant QR (Till Number: 992191268), Easypaisa (Momna Kokab · 03497100560), or NayaPay / JazzCash (Minahil Imran · 03418408350). All funds directly support Education, Healthcare, Community Support, and Women & Youth Empowerment.'
-              }
-            }
-          ]
-        },
+        faqWebPageSchema,
+        ...(fullFaqSchema ? [fullFaqSchema] : []),
         createBreadcrumbs([
           { name: 'Home', url: `${siteUrl}/` },
           { name: 'Frequently Asked Questions', url: `${siteUrl}/faq` }
@@ -1062,13 +988,13 @@ export function generateSitemapXml(siteUrl: string): string {
           caption: 'Official NexGen Council donation appeal across Education, Healthcare, Community Support, and Women & Youth Empowerment'
         },
         {
-          url: '/assets/donation-qr.png',
-          title: 'Scan to Donate QR Code — NexGen Council Merchant Till 992191268',
-          caption: 'Official Raast & Easypaisa Merchant QR code for NexGen Council donations'
+          url: '/assets/donation-qr-easypaisa.png',
+          title: 'Scan to Donate Easypaisa Raast QR Code — NexGen Council Merchant Till 992191268',
+          caption: 'Official Easypaisa Digital Bank & Raast Merchant QR code for NexGen Council donations'
         }
       ]
     },
-    { url: `${siteUrl}/faq`, priority: '0.8', changefreq: 'monthly', lastmod: currentDate }
+    { url: `${siteUrl}/faq`, priority: '0.9', changefreq: 'weekly', lastmod: currentDate }
   ];
 
   // Dynamic Programs
@@ -1151,6 +1077,7 @@ Allow: /team
 Allow: /contact
 Allow: /donate
 Allow: /faq
+Allow: /faqs
 Allow: /track
 Allow: /assets/
 Allow: /uploads/

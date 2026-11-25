@@ -23,7 +23,6 @@ import {
 import { Program, EventItem, TeamMember } from '../../types.ts';
 import { useDocumentSEO } from '../../lib/seo.ts';
 import { LeaderProfileModal } from './LeaderProfileModal.tsx';
-import { SiteFAQ } from './SiteFAQ.tsx';
 
 export const HomePage: React.FC = () => {
   const { setActivePage, settings, programs, events, news, team } = useApp();
@@ -769,11 +768,6 @@ export const HomePage: React.FC = () => {
         </div>
       </section>
 
-      {/* Site-Wide Frequently Asked Questions */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <SiteFAQ defaultCategory="All" />
-      </section>
-
       {/* 10 & 11. VOLUNTEER CTA & CONTACT INQUIRY BANNER */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-3xl p-8 sm:p-14 shadow-2xl relative overflow-hidden">
@@ -806,6 +800,15 @@ export const HomePage: React.FC = () => {
                 className="w-full sm:w-auto px-6 py-4 bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-xl text-sm font-semibold transition-colors cursor-pointer"
               >
                 Contact Council Secretariat
+              </button>
+              <button
+                onClick={() => {
+                  setActivePage('faq');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="w-full sm:w-auto px-6 py-4 text-amber-300 hover:text-amber-200 text-sm font-semibold transition-colors cursor-pointer"
+              >
+                Read FAQs →
               </button>
             </div>
           </div>

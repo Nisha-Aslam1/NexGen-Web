@@ -158,7 +158,9 @@ export function useDocumentSEO({
 
     // 6. JSON-LD Structured Data (replace both SSR & previous client scripts to keep clean single graph)
     document.querySelectorAll('script[type="application/ld+json"]').forEach(el => {
-      if (el.id === 'jsonld-seo-client') el.remove();
+      if (el.id === 'jsonld-seo-client' || el.getAttribute('data-ssr-jsonld') === 'true') {
+        el.remove();
+      }
     });
 
     if (jsonLd) {

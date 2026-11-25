@@ -273,6 +273,8 @@ export async function loadOrSeedMongo(fallbackData: DatabaseSchema): Promise<Dat
     const news = await dbInstance.collection('news').find({}).toArray();
     const team = await dbInstance.collection('team').find({}).toArray();
     const gallery = await dbInstance.collection('gallery').find({}).toArray();
+    const faqsDocs = await dbInstance.collection('faqs').find({}).toArray();
+    const faqsSeededMarker = await metaCol.findOne({ _id: 'faqs_seeded' as any });
     const contacts = await dbInstance.collection('contacts').find({}).sort({ createdAt: -1 }).toArray();
     const activityLogs = await dbInstance.collection('activityLogs').find({}).sort({ timestamp: -1 }).limit(200).toArray();
     const emailLogs = await dbInstance.collection('emailLogs').find({}).sort({ sentAt: -1 }).limit(500).toArray();
@@ -296,6 +298,28 @@ export async function loadOrSeedMongo(fallbackData: DatabaseSchema): Promise<Dat
       );
     }
 
+    // If MongoDB existed before FAQs were added, seed default FAQs once and mark as seeded
+    let resolvedFaqs = stripMongoId(faqsDocs) as any;
+    if (faqsDocs.length === 0 && !faqsSeededMarker && Array.isArray(fallbackData.faqs) && fallbackData.faqs.length > 0) {
+      resolvedFaqs = fallbackData.faqs;
+      const faqCol = dbInstance.collection('faqs');
+      const ops = fallbackData.faqs.map(item => ({
+        updateOne: { filter: { id: item.id }, update: { $set: item }, upsert: true }
+      }));
+      if (ops.length > 0) await faqCol.bulkWrite(ops);
+      await metaCol.updateOne(
+        { _id: 'faqs_seeded' as any },
+        { $set: { seeded: true, seededAt: new Date().toISOString() } },
+        { upsert: true }
+      );
+    } else if (faqsDocs.length > 0 && !faqsSeededMarker) {
+      await metaCol.updateOne(
+        { _id: 'faqs_seeded' as any },
+        { $set: { seeded: true, seededAt: new Date().toISOString() } },
+        { upsert: true }
+      );
+    }
+
     // EXACT collections are returned. If an array is empty (e.g. user deleted all demo items),
     // it stays empty! It NEVER reverts back to seed/mock data!
     return {
@@ -307,6 +331,7 @@ export async function loadOrSeedMongo(fallbackData: DatabaseSchema): Promise<Dat
       news: stripMongoId(news) as any,
       team: stripMongoId(team) as any,
       gallery: stripMongoId(gallery) as any,
+      faqs: resolvedFaqs,
       contacts: stripMongoId(contacts) as any,
       settings: settingsDoc ? (({ _id, ...s }) => s)(settingsDoc as any) : fallbackData.settings,
       activityLogs: stripMongoId(activityLogs) as any,
@@ -476,6 +501,7 @@ export async function syncSchemaToMongo(schema: DatabaseSchema) {
       news: schema.news,
       team: schema.team,
       gallery: schema.gallery,
+      faqs: schema.faqs || [],
       contacts: schema.contacts,
       activityLogs: schema.activityLogs,
       emailLogs: schema.emailLogs || [],

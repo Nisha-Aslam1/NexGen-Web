@@ -298,6 +298,7 @@ const PRIVILEGED_CSRF_PREFIXES = [
   '/news',
   '/team',
   '/gallery',
+  '/faqs',
   '/upload',
   '/send-email',
   '/email',
@@ -1961,6 +1962,128 @@ app.put('/api/gallery/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICAT
 
 app.delete('/api/gallery/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR']), (req, res) => {
   db.deleteGalleryItem(req.params.id);
+  res.json({ ok: true });
+});
+
+// 9b. FAQs
+app.get('/api/faqs', (req, res) => {
+  const session = getSession(req);
+  const isManager =
+    session &&
+    ['SUPER_ADMIN', 'ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER'].includes(session.role);
+  res.json(db.getFaqs(!isManager));
+});
+
+app.post('/api/faqs', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
+  const body = req.body || {};
+  const question = typeof body.question === 'string' ? body.question.trim() : '';
+  const answer = typeof body.answer === 'string' ? body.answer.trim() : '';
+  const category = typeof body.category === 'string' && body.category.trim()
+    ? body.category.trim().slice(0, 80)
+    : 'About NexGen Council';
+
+  if (question.length < 3 || answer.length < 5) {
+    return res.status(400).json({ error: 'Please provide both a valid FAQ question and answer.' });
+  }
+
+  const user = (req as any).user;
+  const created = db.createFaq({
+    category,
+    question: question.slice(0, 400),
+    answer: answer.slice(0, 4000),
+    displayOrder: typeof body.displayOrder === 'number' ? body.displayOrder : Number(body.displayOrder) || 0,
+    active: body.active !== undefined ? Boolean(body.active) : true
+  });
+
+  db.logActivity({
+    userId: user.userId,
+    userName: user.name,
+    userRole: user.role,
+    action: 'FAQ_CREATED',
+    entityType: 'FAQ',
+    entityId: created.id,
+    details: `Created FAQ in "${created.category}": "${created.question.slice(0, 80)}"`,
+    ipAddress: getClientIp(req)
+  });
+
+  res.status(201).json(created);
+});
+
+app.put('/api/faqs/reorder', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
+  const { orderedIds } = req.body || {};
+  if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+    return res.status(400).json({ error: 'orderedIds array is required.' });
+  }
+  const cleanIds = orderedIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
+  const reordered = db.reorderFaqs(cleanIds);
+  const user = (req as any).user;
+  db.logActivity({
+    userId: user.userId,
+    userName: user.name,
+    userRole: user.role,
+    action: 'FAQ_REORDERED',
+    entityType: 'FAQ',
+    details: `Updated FAQ display order (${cleanIds.length} entries).`,
+    ipAddress: getClientIp(req)
+  });
+  res.json(reordered);
+});
+
+app.put('/api/faqs/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
+  const body = req.body || {};
+  if (body.question !== undefined && (typeof body.question !== 'string' || body.question.trim().length < 3)) {
+    return res.status(400).json({ error: 'FAQ question must be at least 3 characters.' });
+  }
+  if (body.answer !== undefined && (typeof body.answer !== 'string' || body.answer.trim().length < 5)) {
+    return res.status(400).json({ error: 'FAQ answer must be at least 5 characters.' });
+  }
+
+  const updates: Record<string, any> = {};
+  if (typeof body.category === 'string' && body.category.trim()) updates.category = body.category.trim().slice(0, 80);
+  if (typeof body.question === 'string') updates.question = body.question.trim().slice(0, 400);
+  if (typeof body.answer === 'string') updates.answer = body.answer.trim().slice(0, 4000);
+  if (body.displayOrder !== undefined && Number.isFinite(Number(body.displayOrder))) {
+    updates.displayOrder = Number(body.displayOrder);
+  }
+  if (typeof body.active === 'boolean') updates.active = body.active;
+
+  const updated = db.updateFaq(req.params.id, updates);
+  if (!updated) {
+    return res.status(404).json({ error: 'FAQ not found' });
+  }
+
+  const user = (req as any).user;
+  db.logActivity({
+    userId: user.userId,
+    userName: user.name,
+    userRole: user.role,
+    action: 'FAQ_UPDATED',
+    entityType: 'FAQ',
+    entityId: updated.id,
+    details: `Updated FAQ "${updated.question.slice(0, 80)}" (${updated.active ? 'Published' : 'Hidden'}).`,
+    ipAddress: getClientIp(req)
+  });
+
+  res.json(updated);
+});
+
+app.delete('/api/faqs/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
+  const existing = db.getFaqs(false).find(f => f.id === req.params.id);
+  const removed = db.deleteFaq(req.params.id);
+  if (!removed) {
+    return res.status(404).json({ error: 'FAQ not found' });
+  }
+  const user = (req as any).user;
+  db.logActivity({
+    userId: user.userId,
+    userName: user.name,
+    userRole: user.role,
+    action: 'FAQ_DELETED',
+    entityType: 'FAQ',
+    entityId: req.params.id,
+    details: `Deleted FAQ "${existing?.question?.slice(0, 80) || req.params.id}".`,
+    ipAddress: getClientIp(req)
+  });
   res.json({ ok: true });
 });
 

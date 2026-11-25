@@ -24,7 +24,6 @@ import {
   HandHeart,
   ArrowRight
 } from 'lucide-react';
-import { SiteFAQ, SITE_FAQ_ITEMS } from './SiteFAQ.tsx';
 
 type CauseId =
   | 'Education'
@@ -122,7 +121,8 @@ const PAYMENT_ACCOUNTS = {
 };
 
 const POSTER_IMAGE_PATH = '/assets/aistudio/2535e6a6-f29c-44fd-8f0c-05946ee38cac_8942ae05.jpg';
-const QR_IMAGE_PATH = '/assets/donation-qr.png';
+const EASYPAISA_QR_CARD_PATH = '/assets/aistudio/WhatsApp_Image_2026-11-25_at_9.04.33_PM_ae4e7388.jpeg';
+const QR_IMAGE_PATH = '/assets/donation-qr-easypaisa.png';
 
 export const DonatePage: React.FC = () => {
   const { settings, addToast, setActivePage } = useApp();
@@ -131,6 +131,7 @@ export const DonatePage: React.FC = () => {
   const [selectedAmount, setSelectedAmount] = useState<string>('2500');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [showPosterModal, setShowPosterModal] = useState(false);
+  const [qrViewMode, setQrViewMode] = useState<'qr' | 'card'>('qr');
 
   // Donation confirmation receipt form state
   const [donorName, setDonorName] = useState('');
@@ -237,18 +238,6 @@ export const DonatePage: React.FC = () => {
             text: 'Submit your Transaction ID (TID) and cause choice through the Donor Acknowledgment Desk on the donation page.'
           }
         ]
-      },
-      {
-        '@context': 'https://schema.org',
-        '@type': 'FAQPage',
-        mainEntity: SITE_FAQ_ITEMS.map(item => ({
-          '@type': 'Question',
-          name: item.question,
-          acceptedAnswer: {
-            '@type': 'Answer',
-            text: item.answer
-          }
-        }))
       },
       {
         '@context': 'https://schema.org',
@@ -676,24 +665,64 @@ export const DonatePage: React.FC = () => {
             </div>
 
             <div className="p-6 space-y-5">
+              {/* View Switch: Crisp QR Only vs Full Easypaisa Raast Merchant Card */}
+              <div className="flex items-center justify-between gap-2 bg-slate-100 p-1 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setQrViewMode('qr')}
+                  className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                    qrViewMode === 'qr'
+                      ? 'bg-white text-slate-950 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Scan QR Code
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQrViewMode('card')}
+                  className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                    qrViewMode === 'card'
+                      ? 'bg-white text-slate-950 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Easypaisa Raast Card
+                </button>
+              </div>
+
               {/* Crisp QR Frame */}
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 flex flex-col items-center">
-                <div className="w-64 h-64 sm:w-72 sm:h-72 bg-white rounded-xl border border-slate-200 p-2.5 shadow-2xs flex items-center justify-center">
-                  <img
-                    src={QR_IMAGE_PATH}
-                    alt="Scan to Donate QR Code — NexGen Council Merchant Till 992191268"
-                    width={326}
-                    height={326}
-                    loading="eager"
-                    decoding="async"
-                    className="w-full h-full object-contain"
-                    onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).src = POSTER_IMAGE_PATH;
-                    }}
-                  />
-                </div>
+                {qrViewMode === 'qr' ? (
+                  <div className="w-64 h-64 sm:w-72 sm:h-72 bg-white rounded-xl border border-slate-200 p-2.5 shadow-2xs flex items-center justify-center">
+                    <img
+                      src={QR_IMAGE_PATH}
+                      alt="Scan to Donate Easypaisa Raast QR Code — NexGen Council Merchant Till 992191268"
+                      width={512}
+                      height={512}
+                      loading="eager"
+                      decoding="async"
+                      className="w-full h-full object-contain"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLImageElement).src = EASYPAISA_QR_CARD_PATH;
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <div className="w-full rounded-xl overflow-hidden border border-slate-200 bg-white shadow-2xs">
+                    <img
+                      src={EASYPAISA_QR_CARD_PATH}
+                      alt="Official Easypaisa Digital Bank & Raast QR Card for NexGen Council — Merchant Till 992191268"
+                      width={720}
+                      height={455}
+                      loading="eager"
+                      decoding="async"
+                      className="w-full h-auto object-contain"
+                    />
+                  </div>
+                )}
                 <p className="text-xs text-slate-600 mt-3 text-center max-w-xs leading-relaxed">
-                  Open Easypaisa, JazzCash, NayaPay, or your banking app and scan this QR code to send your gift securely.
+                  Open Easypaisa Digital Bank, Raast, JazzCash, NayaPay, or any Pakistani banking app and scan to donate to NexGen Council.
                 </p>
               </div>
 
@@ -735,12 +764,16 @@ export const DonatePage: React.FC = () => {
               {/* QR Utility Actions */}
               <div className="grid grid-cols-2 gap-3">
                 <a
-                  href={QR_IMAGE_PATH}
-                  download="NexGen-Council-Donation-QR.png"
+                  href={qrViewMode === 'card' ? EASYPAISA_QR_CARD_PATH : QR_IMAGE_PATH}
+                  download={
+                    qrViewMode === 'card'
+                      ? 'NexGen-Council-Easypaisa-Raast-QR-Card.jpeg'
+                      : 'NexGen-Council-Easypaisa-Donation-QR.png'
+                  }
                   className="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
                 >
                   <Download className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-                  <span>Download QR</span>
+                  <span>{qrViewMode === 'card' ? 'Download QR Card' : 'Download QR'}</span>
                 </a>
                 <button
                   type="button"
@@ -1086,16 +1119,29 @@ export const DonatePage: React.FC = () => {
                 </button>
               </div>
 
-              <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-3">
-                <span className="text-xs text-slate-600">Want to give your time too?</span>
-                <button
-                  type="button"
-                  onClick={() => setActivePage('volunteer')}
-                  className="text-xs font-bold text-indigo-950 hover:text-emerald-800 inline-flex items-center gap-1 cursor-pointer transition-colors"
-                >
-                  <span>Join as Volunteer</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
+              <div className="pt-3 border-t border-slate-100 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs text-slate-600">Want to give your time too?</span>
+                  <button
+                    type="button"
+                    onClick={() => setActivePage('volunteer')}
+                    className="text-xs font-bold text-indigo-950 hover:text-emerald-800 inline-flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <span>Join as Volunteer</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs text-slate-600">Have questions about our work?</span>
+                  <button
+                    type="button"
+                    onClick={() => setActivePage('faq')}
+                    className="text-xs font-bold text-emerald-800 hover:text-emerald-950 inline-flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <span>Visit FAQ Page</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1281,9 +1327,6 @@ export const DonatePage: React.FC = () => {
             )}
           </div>
         </div>
-
-        {/* Site-Wide Frequently Asked Questions Component */}
-        <SiteFAQ defaultCategory="All" />
 
         {/* 5. Closing Inspirational Charter Banner */}
         <div className="relative bg-[#080C18] text-white rounded-2xl border border-white/10 px-6 py-10 sm:px-12 sm:py-14 text-center space-y-4 overflow-hidden">

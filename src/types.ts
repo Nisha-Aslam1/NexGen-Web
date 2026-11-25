@@ -170,6 +170,17 @@ export interface GalleryItem {
   caption?: string;
 }
 
+export interface FaqItem {
+  id: string;
+  category: string;
+  question: string;
+  answer: string;
+  displayOrder: number;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface ContactMessage {
   id: string;
   name: string;

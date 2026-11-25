@@ -10,6 +10,7 @@ import {
   NewsItem,
   TeamMember,
   GalleryItem,
+  FaqItem,
   ContactMessage,
   WebsiteSettings,
   ActivityLog,
@@ -152,6 +153,7 @@ export interface DatabaseSchema {
   news: NewsItem[];
   team: TeamMember[];
   gallery: GalleryItem[];
+  faqs?: FaqItem[];
   contacts: ContactMessage[];
   settings: WebsiteSettings;
   activityLogs: ActivityLog[];
@@ -270,6 +272,144 @@ const defaultSettings: WebsiteSettings = {
   volunteerWhatsappGroupLinkMale: '',
   volunteerWhatsappGroupLinkFemale: ''
 };
+
+export function getDefaultSeedFaqs(): FaqItem[] {
+  const now = '2026-01-15T10:00:00.000Z';
+  return [
+    {
+      id: 'faq-what-is-nexgen',
+      category: 'About NexGen Council',
+      question: 'What is NexGen Council (NexGen Women Empowerment & Youth Leadership Council)?',
+      answer:
+        'NexGen Council is an independent civil society leadership council dedicated to women empowerment, youth leadership development, civic advocacy, and grassroots community service across Pakistan and international chapters.',
+      displayOrder: 1,
+      active: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'faq-leadership-headquarters',
+      category: 'About NexGen Council',
+      question: 'Where is NexGen Council headquartered and how is it governed?',
+      answer:
+        'Headquartered in Sialkot, Punjab, Pakistan, NexGen Council operates through an executive leadership board, department heads, program coordinators, and regional volunteer chapters governed by transparent institutional standards.',
+      displayOrder: 2,
+      active: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'faq-founded-vision',
+      category: 'About NexGen Council',
+      question: 'What core impact areas guide NexGen Council initiatives?',
+      answer:
+        'Every initiative advances four foundational pillars: Education access & literacy, Community Healthcare outreach, Emergency Community Support, and Women & Youth Economic & Leadership Empowerment.',
+      displayOrder: 3,
+      active: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'faq-volunteer-apply',
+      category: 'Volunteers & Member ID',
+      question: 'How can women and youth apply to join or volunteer with NexGen Council?',
+      answer:
+        'Complete the online application form on the Join as Volunteer page (/volunteer) with your background, skills, and preferred focus area. Every application is reviewed by the Council Secretariat.',
+      displayOrder: 4,
+      active: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'faq-track-application',
+      category: 'Volunteers & Member ID',
+      question: 'How do I check the review status of my volunteer application?',
+      answer:
+        'Visit the Track Application page (/track) and enter your Application Reference ID or registered email address to view real-time status updates from Pending Review to Approved.',
+      displayOrder: 5,
+      active: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'faq-member-id-card',
+      category: 'Volunteers & Member ID',
+      question: 'How do approved members download their official NexGen Member ID Card?',
+      answer:
+        'Once approved, open the Track Application portal (/track), look up your application, upload a clear portrait photo if requested, and download your official NexGen Council Member ID Card directly in PDF format.',
+      displayOrder: 6,
+      active: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'faq-programs-offered',
+      category: 'Programs & Events',
+      question: 'What is the 30-Day Leadership Series and what other programs are offered?',
+      answer:
+        'Our flagship 30-Day Leadership Development Series covers public policy, ethical leadership, communication strategy, and community project execution, alongside Women in Tech workshops and entrepreneurship cohorts listed at /programs.',
+      displayOrder: 7,
+      active: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'faq-events-rsvp',
+      category: 'Programs & Events',
+      question: 'How do I register or RSVP for upcoming conferences and workshops?',
+      answer:
+        'Explore upcoming workshops and leadership summits at /events, open any event card to view venue details and available seat capacity, and submit your Delegate RSVP online to confirm attendance or join the waitlist.',
+      displayOrder: 8,
+      active: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'faq-certificates',
+      category: 'Programs & Events',
+      question: 'Do cohort fellows and active volunteers receive official certificates?',
+      answer:
+        'Yes. Participants who complete leadership cohorts, training workshops, or verified volunteer terms receive official NexGen Council completion or service recognition certificates recorded by the Secretariat.',
+      displayOrder: 9,
+      active: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'faq-donate-how-utilization',
+      category: 'Donations & Partnerships',
+      question: 'How can I donate to NexGen Council and how are funds utilized?',
+      answer:
+        'You can donate securely via the official Easypaisa Digital Bank / RAAST Merchant QR (Merchant Till Number: 992191268), Easypaisa (Momna Kokab · 03497100560), or NayaPay / JazzCash (Minahil Imran · 03418408350) on /donate. Every rupee directly funds Education, Healthcare, Community Support, and Women & Youth Empowerment.',
+      displayOrder: 10,
+      active: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'faq-donate-receipt-minimum',
+      category: 'Donations & Partnerships',
+      question: 'Is there a minimum donation amount, and how do I get a confirmation receipt?',
+      answer:
+        'No contribution is too small — every rupee helps create positive change. After sending your gift, submit your email, amount, and Transaction ID (TID) on /donate to receive an official Secretariat confirmation reference.',
+      displayOrder: 11,
+      active: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'faq-partnerships-contact',
+      category: 'Donations & Partnerships',
+      question: 'How can schools, universities, NGOs, or sponsors partner with NexGen Council?',
+      answer:
+        'Educational institutions, NGOs, and corporate sponsors can submit co-hosting proposals, mentorship partnerships, or in-kind support requests via the Contact Secretariat portal at /contact.',
+      displayOrder: 12,
+      active: true,
+      createdAt: now,
+      updatedAt: now
+    }
+  ];
+}
 
 function getSeedData(): DatabaseSchema {
   const adminCreds = resolveAdminCredentials();
@@ -591,6 +731,7 @@ function getSeedData(): DatabaseSchema {
         displayOrder: 6
       }
     ],
+    faqs: getDefaultSeedFaqs(),
     contacts: [],
     settings: defaultSettings,
     activityLogs: [],
@@ -613,6 +754,9 @@ class Database {
     if (!this.data.emailLogs) this.data.emailLogs = [];
     if (!this.data.supportConversations) this.data.supportConversations = [];
     if (!this.data.meetingCaptures) this.data.meetingCaptures = [];
+    if (!Array.isArray(this.data.faqs)) {
+      this.data.faqs = getDefaultSeedFaqs();
+    }
   }
 
   constructor() {
@@ -1754,6 +1898,116 @@ class Database {
     this.data.gallery = this.data.gallery.filter(g => g.id !== id);
     this.save();
     mongoDelete('gallery', id).catch(() => {});
+  }
+
+  // --- FAQs ---
+  getFaqs(activeOnly = false): FaqItem[] {
+    const list = Array.isArray(this.data.faqs) ? this.data.faqs : getDefaultSeedFaqs();
+    const mapped = list.map((f, idx) => ({
+      ...f,
+      category: (f.category || 'About NexGen Council').trim(),
+      question: (f.question || '').trim(),
+      answer: (f.answer || '').trim(),
+      displayOrder: Number.isFinite(Number(f.displayOrder)) ? Number(f.displayOrder) : idx + 1,
+      active: f.active !== false
+    }));
+    const filtered = activeOnly ? mapped.filter(f => f.active) : mapped;
+    return filtered.sort((a, b) => a.displayOrder - b.displayOrder);
+  }
+
+  createFaq(item: Omit<FaqItem, 'id' | 'createdAt' | 'updatedAt'>): FaqItem {
+    if (!Array.isArray(this.data.faqs)) {
+      this.data.faqs = getDefaultSeedFaqs();
+    }
+    const now = new Date().toISOString();
+    const maxOrder = this.data.faqs.reduce((m, f) => Math.max(m, Number(f.displayOrder || 0)), 0);
+    const newFaq: FaqItem = {
+      id: `faq_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      category: (item.category || 'About NexGen Council').trim(),
+      question: (item.question || '').trim(),
+      answer: (item.answer || '').trim(),
+      displayOrder:
+        typeof item.displayOrder === 'number' && Number.isFinite(item.displayOrder) && item.displayOrder > 0
+          ? Math.floor(item.displayOrder)
+          : maxOrder + 1,
+      active: item.active !== false,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.data.faqs.push(newFaq);
+    this.save();
+    mongoUpsert('faqs', newFaq.id, newFaq).catch(() => {});
+    return newFaq;
+  }
+
+  updateFaq(id: string, updates: Partial<FaqItem>): FaqItem | null {
+    if (!Array.isArray(this.data.faqs)) {
+      this.data.faqs = getDefaultSeedFaqs();
+    }
+    const idx = this.data.faqs.findIndex(f => f.id === id);
+    if (idx === -1) return null;
+    const current = this.data.faqs[idx];
+    const updated: FaqItem = {
+      ...current,
+      ...(typeof updates.category === 'string' && updates.category.trim()
+        ? { category: updates.category.trim() }
+        : {}),
+      ...(typeof updates.question === 'string' && updates.question.trim()
+        ? { question: updates.question.trim() }
+        : {}),
+      ...(typeof updates.answer === 'string' && updates.answer.trim()
+        ? { answer: updates.answer.trim() }
+        : {}),
+      ...(typeof updates.displayOrder === 'number' && Number.isFinite(updates.displayOrder) && updates.displayOrder > 0
+        ? { displayOrder: Math.floor(updates.displayOrder) }
+        : {}),
+      ...(typeof updates.active === 'boolean' ? { active: updates.active } : {}),
+      updatedAt: new Date().toISOString()
+    };
+    this.data.faqs[idx] = updated;
+    this.save();
+    mongoUpsert('faqs', updated.id, updated).catch(() => {});
+    return updated;
+  }
+
+  reorderFaqs(orderedIds: string[]): FaqItem[] {
+    if (!Array.isArray(this.data.faqs)) {
+      this.data.faqs = getDefaultSeedFaqs();
+    }
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+      return this.getFaqs(false);
+    }
+    const orderMap = new Map<string, number>();
+    orderedIds.forEach((id, index) => {
+      if (!orderMap.has(id)) {
+        orderMap.set(id, index + 1);
+      }
+    });
+    let nextOrder = orderMap.size + 1;
+    const sorted = this.getFaqs(false);
+    this.data.faqs = sorted.map(f => ({
+      ...f,
+      displayOrder: orderMap.has(f.id) ? orderMap.get(f.id)! : nextOrder++,
+      updatedAt: new Date().toISOString()
+    }));
+    this.data.faqs.sort((a, b) => a.displayOrder - b.displayOrder);
+    this.save();
+    for (const faq of this.data.faqs) {
+      mongoUpsert('faqs', faq.id, faq).catch(() => {});
+    }
+    return this.getFaqs(false);
+  }
+
+  deleteFaq(id: string): boolean {
+    if (!Array.isArray(this.data.faqs)) {
+      this.data.faqs = getDefaultSeedFaqs();
+    }
+    const before = this.data.faqs.length;
+    this.data.faqs = this.data.faqs.filter(f => f.id !== id);
+    if (this.data.faqs.length === before) return false;
+    this.save();
+    mongoDelete('faqs', id).catch(() => {});
+    return true;
   }
 
   // --- Contacts ---

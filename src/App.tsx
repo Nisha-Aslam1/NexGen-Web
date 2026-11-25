@@ -33,6 +33,7 @@ const AdminEvents = lazy(() => import('./components/admin/AdminEvents.tsx').then
 const AdminNews = lazy(() => import('./components/admin/AdminNews.tsx').then(m => ({ default: m.AdminNews })));
 const AdminTeam = lazy(() => import('./components/admin/AdminTeam.tsx').then(m => ({ default: m.AdminTeam })));
 const AdminGallery = lazy(() => import('./components/admin/AdminGallery.tsx').then(m => ({ default: m.AdminGallery })));
+const AdminFaqs = lazy(() => import('./components/admin/AdminFaqs.tsx').then(m => ({ default: m.AdminFaqs })));
 const AdminContacts = lazy(() => import('./components/admin/AdminContacts.tsx').then(m => ({ default: m.AdminContacts })));
 const AdminSettings = lazy(() => import('./components/admin/AdminSettings.tsx').then(m => ({ default: m.AdminSettings })));
 const AdminUsers = lazy(() => import('./components/admin/AdminUsers.tsx').then(m => ({ default: m.AdminUsers })));
@@ -132,6 +133,7 @@ const AppContent: React.FC = () => {
               {adminTab === 'news' && <AdminNews />}
               {adminTab === 'team' && <AdminTeam />}
               {adminTab === 'gallery' && <AdminGallery />}
+              {adminTab === 'faqs' && <AdminFaqs />}
               {adminTab === 'contacts' && <AdminContacts />}
               {adminTab === 'email' && <AdminEmailComposer />}
               {adminTab === 'settings' && <AdminSettings />}

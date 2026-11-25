@@ -187,6 +187,17 @@ export const Navbar: React.FC = () => {
                 <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
               </button>
             ))}
+            <button
+              onClick={() => navigateTo('faq')}
+              className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-medium w-full text-left transition-colors cursor-pointer ${
+                activePage === 'faq'
+                  ? 'bg-slate-100 text-indigo-950 font-bold shadow-2xs'
+                  : 'text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <span>FAQ &amp; Help</span>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+            </button>
           </div>
 
           <div className="pt-3 border-t border-slate-100 flex flex-col gap-2">

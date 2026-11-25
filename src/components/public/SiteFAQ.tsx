@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../../context/AppContext.tsx';
+import { FaqItem } from '../../types.ts';
 import {
   ChevronDown,
   ShieldCheck,
@@ -8,16 +9,11 @@ import {
   Search
 } from 'lucide-react';
 
-export type FaqCategory =
-  | 'All'
-  | 'About NexGen Council'
-  | 'Volunteers & Member ID'
-  | 'Programs & Events'
-  | 'Donations & Partnerships';
+export type FaqCategory = string;
 
 export interface SiteFaqItem {
   id: string;
-  category: Exclude<FaqCategory, 'All'>;
+  category: string;
   question: string;
   answer: string;
 }
@@ -28,87 +24,120 @@ export const SITE_FAQ_ITEMS: SiteFaqItem[] = [
     category: 'About NexGen Council',
     question: 'What is NexGen Council (NexGen Women Empowerment & Youth Leadership Council)?',
     answer:
-      'NexGen Council is a civil society leadership organization empowering women and youth across Pakistan and international chapters through structured mentorship, leadership fellowships, civic policy forums, and grassroots humanitarian outreach.'
+      'NexGen Council is an independent civil society leadership council dedicated to women empowerment, youth leadership development, civic advocacy, and grassroots community service across Pakistan and international chapters.'
   },
   {
     id: 'faq-leadership-headquarters',
     category: 'About NexGen Council',
-    question: 'Where is NexGen Council based and how is it governed?',
+    question: 'Where is NexGen Council headquartered and how is it governed?',
     answer:
-      'Headquartered in Sialkot, Punjab, Pakistan, NexGen Council operates through an executive leadership board, program coordinators, and regional volunteer teams committed to transparent, merit-driven community service and youth empowerment.'
+      'Headquartered in Sialkot, Punjab, Pakistan, NexGen Council operates through an executive leadership board, department heads, program coordinators, and regional volunteer chapters governed by transparent institutional standards.'
+  },
+  {
+    id: 'faq-founded-vision',
+    category: 'About NexGen Council',
+    question: 'What core impact areas guide NexGen Council initiatives?',
+    answer:
+      'Every initiative advances four foundational pillars: Education access & literacy, Community Healthcare outreach, Emergency Community Support, and Women & Youth Economic & Leadership Empowerment.'
   },
   {
     id: 'faq-volunteer-apply',
     category: 'Volunteers & Member ID',
     question: 'How can women and youth apply to join or volunteer with NexGen Council?',
     answer:
-      'Anyone passionate about community service or leadership can submit an online application via the Join as Volunteer portal (/volunteer). After review by our Secretariat, accepted applicants receive official membership onboarding.'
+      'Complete the online application form on the Join as Volunteer page (/volunteer) with your background, skills, and preferred focus area. Every application is reviewed by the Council Secretariat.'
   },
   {
-    id: 'faq-track-member-card',
+    id: 'faq-track-application',
     category: 'Volunteers & Member ID',
-    question: 'How do I track my volunteer application and get my Member ID Card?',
+    question: 'How do I check the review status of my volunteer application?',
     answer:
-      'Visit the Track Application portal (/track) and enter your application reference ID or registered email address to check your real-time approval status and download your official NexGen Council Member ID card.'
+      'Visit the Track Application page (/track) and enter your Application Reference ID or registered email address to view real-time status updates from Pending Review to Approved.'
+  },
+  {
+    id: 'faq-member-id-card',
+    category: 'Volunteers & Member ID',
+    question: 'How do approved members download their official NexGen Member ID Card?',
+    answer:
+      'Once approved, open the Track Application portal (/track), look up your application, upload a clear portrait photo if requested, and download your official NexGen Council Member ID Card directly in PDF format.'
   },
   {
     id: 'faq-programs-offered',
     category: 'Programs & Events',
-    question: 'What leadership programs and workshops does NexGen Council run?',
+    question: 'What is the 30-Day Leadership Series and what other programs are offered?',
     answer:
-      'Flagship initiatives include the 30-Day Leadership Development Series, Women in Tech and entrepreneurship workshops, youth civic advocacy forums, and district-level educational and health outreach drives listed on the Programs page (/programs).'
+      'Our flagship 30-Day Leadership Development Series covers public policy, ethical leadership, communication strategy, and community project execution, alongside Women in Tech workshops and entrepreneurship cohorts listed at /programs.'
   },
   {
     id: 'faq-events-rsvp',
     category: 'Programs & Events',
-    question: 'How can I attend upcoming conferences, summits, or community events?',
+    question: 'How do I register or RSVP for upcoming conferences and workshops?',
     answer:
-      'Browse upcoming seminars and outreach summits on the Events page (/events), review venue timings and seat capacity, and submit your Delegate RSVP directly online to reserve your seat or join a waitlist.'
+      'Explore upcoming workshops and leadership summits at /events, open any event card to view venue details and available seat capacity, and submit your Delegate RSVP online to confirm attendance or join the waitlist.'
+  },
+  {
+    id: 'faq-certificates',
+    category: 'Programs & Events',
+    question: 'Do cohort fellows and active volunteers receive official certificates?',
+    answer:
+      'Yes. Participants who complete leadership cohorts, training workshops, or verified volunteer terms receive official NexGen Council completion or service recognition certificates recorded by the Secretariat.'
   },
   {
     id: 'faq-donate-how-utilization',
     category: 'Donations & Partnerships',
     question: 'How can I donate to NexGen Council and how are funds utilized?',
     answer:
-      'You can donate safely via the official RAAST / Easypaisa Merchant QR (Till Number: 992191268), Easypaisa (Momna Kokab · 03497100560), or NayaPay / JazzCash (Minahil Imran · 03418408350). All funds directly support Education, Healthcare, Community Support, and Women & Youth Empowerment without third-party intermediaries.'
+      'You can donate securely via the official Easypaisa Digital Bank / RAAST Merchant QR (Merchant Till Number: 992191268), Easypaisa (Momna Kokab · 03497100560), or NayaPay / JazzCash (Minahil Imran · 03418408350) on /donate. Every rupee directly funds Education, Healthcare, Community Support, and Women & Youth Empowerment.'
   },
   {
     id: 'faq-donate-receipt-minimum',
     category: 'Donations & Partnerships',
     question: 'Is there a minimum donation amount, and how do I get a confirmation receipt?',
     answer:
-      'No contribution is too small — every rupee makes a meaningful difference. After transferring via QR or mobile wallet, submit your name, email, amount, and Transaction ID (TID) on the Donate page (/donate) to receive an official Secretariat confirmation reference.'
+      'No contribution is too small — every rupee helps create positive change. After sending your gift, submit your email, amount, and Transaction ID (TID) on /donate to receive an official Secretariat confirmation reference.'
   },
   {
     id: 'faq-partnerships-contact',
     category: 'Donations & Partnerships',
     question: 'How can schools, universities, NGOs, or sponsors partner with NexGen Council?',
     answer:
-      'Institutions, community organizations, and corporate sponsors can submit partnership proposals, speaking invitations, or in-kind support requests anytime via our Contact Secretariat page (/contact).'
+      'Educational institutions, NGOs, and corporate sponsors can submit co-hosting proposals, mentorship partnerships, or in-kind support requests via the Contact Secretariat portal at /contact.'
   }
 ];
 
-const CATEGORIES: FaqCategory[] = [
-  'All',
+export const CORE_FAQ_CATEGORIES = [
   'About NexGen Council',
   'Volunteers & Member ID',
   'Programs & Events',
   'Donations & Partnerships'
 ];
 
+export function resolveActiveFaqs(faqs: FaqItem[], isLoadingPublicData: boolean): SiteFaqItem[] {
+  if (Array.isArray(faqs) && faqs.length > 0) {
+    return [...faqs]
+      .filter(f => f.active !== false)
+      .sort((a, b) => (a.displayOrder ?? 999) - (b.displayOrder ?? 999));
+  }
+  return isLoadingPublicData ? SITE_FAQ_ITEMS : [];
+}
+
 interface SiteFAQProps {
-  defaultCategory?: FaqCategory;
+  selectedCategory?: FaqCategory;
+  onSelectCategory?: (category: FaqCategory) => void;
   headingTitle?: string;
   eyebrowLabel?: string;
+  itemsOverride?: SiteFaqItem[];
 }
 
 export const SiteFAQ: React.FC<SiteFAQProps> = ({
-  defaultCategory = 'All',
-  headingTitle = 'Frequently Asked Questions',
-  eyebrowLabel = 'Complete Website Guide · NexGen Council'
+  selectedCategory,
+  onSelectCategory,
+  headingTitle = 'Complete Website Knowledge Base',
+  eyebrowLabel = 'Official Help & Answers',
+  itemsOverride
 }) => {
-  const { setActivePage } = useApp();
-  const [activeCategory, setActiveCategory] = useState<FaqCategory>(defaultCategory);
+  const { faqs, isLoadingPublicData, setActivePage } = useApp();
+  const [internalCategory, setInternalCategory] = useState<FaqCategory>('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [openIds, setOpenIds] = useState<string[]>([
     'faq-what-is-nexgen',
@@ -116,8 +145,43 @@ export const SiteFAQ: React.FC<SiteFAQProps> = ({
     'faq-donate-how-utilization'
   ]);
 
+  const activeItems = useMemo(() => {
+    if (itemsOverride) return itemsOverride;
+    return resolveActiveFaqs(faqs, isLoadingPublicData);
+  }, [itemsOverride, faqs, isLoadingPublicData]);
+
+  const availableCategories = useMemo(() => {
+    const present = new Set(activeItems.map(i => i.category).filter(Boolean));
+    const ordered: string[] = [];
+    CORE_FAQ_CATEGORIES.forEach(c => {
+      if (present.has(c)) ordered.push(c);
+    });
+    activeItems.forEach(item => {
+      if (item.category && !ordered.includes(item.category)) {
+        ordered.push(item.category);
+      }
+    });
+    return ['All', ...ordered];
+  }, [activeItems]);
+
+  const activeCategory = selectedCategory ?? internalCategory;
+
+  useEffect(() => {
+    if (selectedCategory && selectedCategory !== 'All') {
+      const firstMatch = activeItems.find(i => i.category === selectedCategory);
+      if (firstMatch) {
+        setOpenIds(prev => (prev.includes(firstMatch.id) ? prev : [...prev, firstMatch.id]));
+      }
+    }
+  }, [selectedCategory, activeItems]);
+
+  const handleCategoryChange = (cat: FaqCategory) => {
+    setInternalCategory(cat);
+    if (onSelectCategory) onSelectCategory(cat);
+  };
+
   const cleanSearch = searchQuery.trim().toLowerCase();
-  const filteredItems = SITE_FAQ_ITEMS.filter(item => {
+  const filteredItems = activeItems.filter(item => {
     const matchesCategory = activeCategory === 'All' || item.category === activeCategory;
     if (!matchesCategory) return false;
     if (!cleanSearch) return true;
@@ -152,7 +216,7 @@ export const SiteFAQ: React.FC<SiteFAQProps> = ({
       className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-8 lg:p-10"
     >
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start">
-        {/* Left Column: Website Overview & Quick Navigation */}
+        {/* Left Column: Search & Portal Quick Links */}
         <div className="lg:col-span-4 space-y-6">
           <div className="space-y-2.5">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-indigo-900 flex items-center gap-1.5">
@@ -166,7 +230,7 @@ export const SiteFAQ: React.FC<SiteFAQProps> = ({
               {headingTitle}
             </h2>
             <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
-              Everything you need to know about joining NexGen Council, tracking membership IDs, attending events, partnering with us, and supporting community drives.
+              Browse verified answers covering council governance, volunteering, Member ID cards, events, partnerships, and direct donations.
             </p>
           </div>
 
@@ -177,13 +241,13 @@ export const SiteFAQ: React.FC<SiteFAQProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search questions across the website..."
+              placeholder="Search any topic or keyword..."
               aria-label="Search frequently asked questions"
               className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-900/15 focus:border-indigo-900"
             />
           </div>
 
-          {/* Institutional Pillars & Trust Summary */}
+          {/* Portal Quick Links */}
           <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-5 space-y-3.5">
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-900">
               <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
@@ -196,7 +260,7 @@ export const SiteFAQ: React.FC<SiteFAQProps> = ({
                 onClick={() => setActivePage('volunteer')}
                 className="w-full py-1.5 text-left text-slate-700 hover:text-indigo-950 font-medium flex items-center justify-between border-b border-slate-200/70 cursor-pointer transition-colors"
               >
-                <span>Volunteer &amp; Fellowship Application</span>
+                <span>Volunteer Application</span>
                 <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               </button>
               <button
@@ -217,10 +281,18 @@ export const SiteFAQ: React.FC<SiteFAQProps> = ({
               </button>
               <button
                 type="button"
+                onClick={() => setActivePage('events')}
+                className="w-full py-1.5 text-left text-slate-700 hover:text-indigo-950 font-medium flex items-center justify-between border-b border-slate-200/70 cursor-pointer transition-colors"
+              >
+                <span>Upcoming Events &amp; Summits</span>
+                <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              </button>
+              <button
+                type="button"
                 onClick={() => setActivePage('donate')}
                 className="w-full py-1.5 text-left text-emerald-800 hover:text-emerald-950 font-semibold flex items-center justify-between border-b border-slate-200/70 cursor-pointer transition-colors"
               >
-                <span>Donation Accounts &amp; QR Till</span>
+                <span>Donate &amp; Support Mission</span>
                 <ArrowRight className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
               </button>
               <button
@@ -239,7 +311,7 @@ export const SiteFAQ: React.FC<SiteFAQProps> = ({
         <div className="lg:col-span-8 space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2" role="tablist" aria-label="Website FAQ categories">
-              {CATEGORIES.map((category) => {
+              {availableCategories.map((category) => {
                 const isSelected = activeCategory === category;
                 return (
                   <button
@@ -247,7 +319,7 @@ export const SiteFAQ: React.FC<SiteFAQProps> = ({
                     type="button"
                     role="tab"
                     aria-selected={isSelected}
-                    onClick={() => setActiveCategory(category)}
+                    onClick={() => handleCategoryChange(category)}
                     className={`pb-1.5 text-xs font-semibold border-b-2 transition-colors cursor-pointer whitespace-nowrap ${
                       isSelected
                         ? 'border-indigo-950 text-indigo-950'
@@ -322,7 +394,7 @@ export const SiteFAQ: React.FC<SiteFAQProps> = ({
                         id={panelId}
                         role="region"
                         aria-labelledby={buttonId}
-                        className="px-5 pb-4 pl-12 text-xs sm:text-sm text-slate-600 leading-relaxed bg-slate-50/90"
+                        className="px-5 pb-4 pl-12 text-xs sm:text-sm text-slate-600 leading-relaxed bg-slate-50/90 whitespace-pre-line"
                       >
                         {item.answer}
                       </div>
