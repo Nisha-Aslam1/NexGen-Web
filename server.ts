@@ -1104,21 +1104,57 @@ app.post('/api/applications', (req, res) => {
   });
 });
 
-// Applicant public status lookup
+// Applicant & Credential public status lookup
 app.get('/api/applications/verify/:refCode', (req, res) => {
   const refCode = req.params.refCode.trim();
+  const normalizedCode = refCode.toUpperCase();
   const appItem = db.getApplicationById(refCode);
-  if (!appItem) {
-    return res.status(404).json({ error: 'Application reference code not found.' });
+
+  if (appItem) {
+    const matchedVol = db.getVolunteers().find(
+      v => v.applicationId === appItem.id || (v.email && appItem.email && v.email.toLowerCase() === appItem.email.toLowerCase())
+    );
+    return res.json({
+      referenceCode: appItem.referenceCode,
+      fullName: matchedVol?.fullName || appItem.fullName,
+      city: matchedVol?.city || appItem.city,
+      phone: matchedVol?.phone || appItem.phone,
+      status: appItem.status,
+      submittedAt: appItem.createdAt,
+      preferredRole: appItem.preferredRole,
+      assignedRole: matchedVol?.assignedRole || appItem.preferredRole,
+      assignedProgram: matchedVol?.assignedProgram,
+      membershipTier: matchedVol?.membershipTier,
+      hoursContributed: matchedVol?.hoursContributed ?? matchedVol?.hoursLogged ?? 0,
+      avatar: matchedVol?.avatar || appItem.avatar
+    });
   }
-  res.json({
-    referenceCode: appItem.referenceCode,
-    fullName: appItem.fullName,
-    city: appItem.city,
-    status: appItem.status,
-    submittedAt: appItem.createdAt,
-    preferredRole: appItem.preferredRole
+
+  // Also check active volunteer credential codes (e.g. NG-VOL-XXXXXX)
+  const volMatch = db.getVolunteers().find(v => {
+    const volCode = `NG-VOL-${v.id.slice(-6).toUpperCase()}`;
+    return v.id.toUpperCase() === normalizedCode || volCode === normalizedCode;
   });
+
+  if (volMatch) {
+    return res.json({
+      referenceCode: `NG-VOL-${volMatch.id.slice(-6).toUpperCase()}`,
+      fullName: volMatch.fullName,
+      city: volMatch.city,
+      phone: volMatch.phone,
+      status: 'Approved',
+      volunteerStatus: volMatch.status,
+      submittedAt: volMatch.joinedDate,
+      preferredRole: volMatch.assignedRole,
+      assignedRole: volMatch.assignedRole,
+      assignedProgram: volMatch.assignedProgram,
+      membershipTier: volMatch.membershipTier,
+      hoursContributed: volMatch.hoursContributed ?? volMatch.hoursLogged ?? 0,
+      avatar: volMatch.avatar
+    });
+  }
+
+  return res.status(404).json({ error: 'Application or credential reference code not found.' });
 });
 
 // Admin Applications endpoints

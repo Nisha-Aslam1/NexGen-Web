@@ -1257,6 +1257,7 @@ class Database {
           hoursLogged: 0,
           joinedDate: new Date().toISOString().split('T')[0],
           status: 'Active',
+          avatar: app.avatar,
           emergencyContact: app.emergencyContactName ? `${app.emergencyContactName} (${app.emergencyContactPhone || ''})` : undefined
         };
         this.data.volunteers.unshift(newVolunteer);
@@ -1305,9 +1306,12 @@ class Database {
       phone: data.phone || '',
       city: data.city || 'National Secretariat',
       assignedRole: data.assignedRole || 'Youth Leadership Volunteer',
+      assignedProgram: data.assignedProgram,
       joinedDate: data.joinedDate || new Date().toISOString(),
       hoursContributed: data.hoursContributed || 0,
       status: data.status || 'Active',
+      avatar: data.avatar,
+      membershipTier: data.membershipTier,
       skills: data.skills || ['Community Outreach']
     };
     this.data.volunteers.unshift(newVol);

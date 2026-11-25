@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../../context/AppContext.tsx';
 import { useDocumentSEO } from '../../lib/seo.ts';
 import {
@@ -6,10 +6,8 @@ import {
   CheckCircle2,
   Clock,
   XCircle,
-  FileText,
   AlertCircle,
   ArrowRight,
-  ShieldCheck,
   Award,
   Sparkles
 } from 'lucide-react';
@@ -32,9 +30,8 @@ export const TrackApplication: React.FC = () => {
     noindex: true
   });
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const clean = refCode.trim();
+  const lookupCode = useCallback(async (codeToLookup: string) => {
+    const clean = codeToLookup.trim();
     if (!clean) return;
 
     setLoading(true);
@@ -53,6 +50,21 @@ export const TrackApplication: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const codeParam = params.get('code');
+    if (codeParam && codeParam.trim()) {
+      const upper = codeParam.trim().toUpperCase();
+      setRefCode(upper);
+      lookupCode(upper);
+    }
+  }, [lookupCode]);
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await lookupCode(refCode);
   };
 
   const getStatusBadge = (status: string) => {
@@ -240,12 +252,14 @@ export const TrackApplication: React.FC = () => {
             email: applicationData.email,
             phone: applicationData.phone,
             city: applicationData.city,
-            assignedRole: applicationData.preferredRole || 'Council Volunteer Scholar',
+            assignedRole: applicationData.assignedRole || applicationData.preferredRole || 'Council Volunteer Scholar',
+            assignedProgram: applicationData.assignedProgram,
             referenceCode: applicationData.referenceCode,
             joinedDate: applicationData.submittedAt || new Date().toISOString(),
-            status: 'Active',
-            membershipTier: 'Active Volunteer Scholar',
-            hoursContributed: 0
+            status: applicationData.volunteerStatus || 'Active',
+            membershipTier: applicationData.membershipTier || 'Active Volunteer Scholar',
+            avatar: applicationData.avatar,
+            hoursContributed: applicationData.hoursContributed || 0
           }}
           onClose={() => setShowIdCard(false)}
         />

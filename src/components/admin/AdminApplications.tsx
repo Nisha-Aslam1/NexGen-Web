@@ -10,10 +10,12 @@ import {
   Eye,
   Trash2,
   Mail,
-  AlertCircle
+  AlertCircle,
+  Award
 } from 'lucide-react';
 import { VolunteerApplication, ApplicationStatus } from '../../types.ts';
 import { VolunteerApprovalModal } from './VolunteerApprovalModal.tsx';
+import { VolunteerIdCardModal } from './VolunteerIdCardModal.tsx';
 
 export const AdminApplications: React.FC = () => {
   const { addToast } = useApp();
@@ -32,6 +34,7 @@ export const AdminApplications: React.FC = () => {
   const [approvalModalApp, setApprovalModalApp] = useState<VolunteerApplication | null>(null);
   const [approvalNotes, setApprovalNotes] = useState<string>('');
   const [isResendOnly, setIsResendOnly] = useState<boolean>(false);
+  const [idCardApp, setIdCardApp] = useState<VolunteerApplication | null>(null);
 
   const fetchApplications = async () => {
     setLoading(true);
@@ -313,15 +316,26 @@ export const AdminApplications: React.FC = () => {
                             <span>Approve</span>
                           </button>
                         ) : (
-                          <button
-                            type="button"
-                            onClick={() => openApprovalDecisionModal(app, app.internalNotes || app.reviewNotes || '', true)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap"
-                            title="Send Congratulations / WhatsApp Group Email"
-                          >
-                            <Mail className="w-3.5 h-3.5 text-amber-700" />
-                            <span>Welcome Email</span>
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setIdCardApp(app)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-950 hover:bg-indigo-900 text-amber-300 border border-indigo-900 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap"
+                              title="Generate & Download Official NexGen ID Card"
+                            >
+                              <Award className="w-3.5 h-3.5 text-amber-300" />
+                              <span>ID Card</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openApprovalDecisionModal(app, app.internalNotes || app.reviewNotes || '', true)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap"
+                              title="Send Congratulations / WhatsApp Group Email"
+                            >
+                              <Mail className="w-3.5 h-3.5 text-amber-700" />
+                              <span>Welcome Email</span>
+                            </button>
+                          </>
                         )}
                         <button
                           type="button"
@@ -610,6 +624,24 @@ export const AdminApplications: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+      {/* Official ID Card Modal */}
+      {idCardApp && (
+        <VolunteerIdCardModal
+          volunteer={{
+            id: idCardApp.id,
+            fullName: idCardApp.fullName,
+            email: idCardApp.email,
+            phone: idCardApp.phone,
+            city: idCardApp.city,
+            assignedRole: idCardApp.preferredRole || 'Member NexGen Council',
+            referenceCode: idCardApp.referenceCode,
+            joinedDate: idCardApp.createdAt,
+            status: 'Active',
+            avatar: idCardApp.avatar
+          }}
+          onClose={() => setIdCardApp(null)}
+        />
       )}
     </div>
   );
