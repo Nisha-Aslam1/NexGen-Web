@@ -72,7 +72,7 @@ function formatRetentionRemaining(expiresAt?: string, updatedAt?: string): strin
 }
 
 export const AdminContacts: React.FC = () => {
-  const { addToast, setActivePage } = useApp();
+  const { addToast } = useApp();
   const [mainView, setMainView] = useState<MainView>('inquiries');
 
   // Inquiries Inbox State
@@ -387,15 +387,6 @@ export const AdminContacts: React.FC = () => {
               <span>Live &amp; AI Chats · 7d ({conversations.length})</span>
             </button>
           </div>
-
-          <button
-            type="button"
-            onClick={() => setActivePage('support-desk')}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
-          >
-            <Headphones className="w-3.5 h-3.5 text-amber-300" />
-            <span>Open Live Support App</span>
-          </button>
 
           <button
             type="button"
@@ -1153,17 +1144,6 @@ export const AdminContacts: React.FC = () => {
                 Started: {new Date(selectedConv.createdAt).toLocaleString()}
               </span>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedConv(null);
-                    setActivePage('support-desk');
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-950 text-xs font-semibold cursor-pointer"
-                >
-                  <Headphones className="w-3.5 h-3.5" />
-                  <span>Mobile Support App</span>
-                </button>
                 <button
                   type="button"
                   onClick={() => deleteConversation(selectedConv.id)}

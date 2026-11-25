@@ -12,7 +12,6 @@ import {
   Camera,
   Check,
   Globe,
-  Mail,
   MapPin,
   Phone,
   Upload,
@@ -20,7 +19,8 @@ import {
   ArrowRight,
   CreditCard,
   Layers,
-  Image as ImageIcon
+  Image as ImageIcon,
+  RotateCw
 } from 'lucide-react';
 import { Volunteer } from '../../types.ts';
 
@@ -46,6 +46,7 @@ interface VolunteerIdCardModalProps {
   volunteer: Volunteer | MemberIdCardData;
   onClose: () => void;
   onAvatarChange?: (newAvatarUrl: string) => void;
+  isAdmin?: boolean;
 }
 
 type ModalStep = 'photo' | 'preview';
@@ -54,6 +55,20 @@ type CardViewMode = 'dual' | 'front' | 'back';
 const NAVY = '#162A4D';
 const NAVY_DEEP = '#0F1F3D';
 const GOLD = '#C89B2B';
+const DEFAULT_CARD_ROLE = 'MEMBER NEXGEN COUNCIL';
+
+/**
+ * Formats names cleanly in Title Case so first letter of every name part is capitalized
+ * e.g. "eman aqeel tamemi" or "EMAN AQEEL TAMEMI" -> "Eman Aqeel Tamemi"
+ */
+function toTitleCaseName(name?: string): string {
+  if (!name || !name.trim()) return 'Council Member';
+  return name
+    .trim()
+    .split(/\s+/)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+}
 
 function loadImage(src?: string): Promise<HTMLImageElement | null> {
   return new Promise(resolve => {
@@ -71,72 +86,66 @@ function loadImage(src?: string): Promise<HTMLImageElement | null> {
   });
 }
 
-/**
- * Crops only the upper circular emblem from /logo.png (excluding the lower text lines)
- * so Page 1 and Page 2 match the exact PDF emblem lockup.
- */
-async function createCircularEmblemDataUrl(logoSrc: string): Promise<string | null> {
-  const img = await loadImage(logoSrc);
-  if (!img) return null;
-
-  const w = img.naturalWidth || 512;
-  const h = img.naturalHeight || 512;
-  // Upper circular crest occupies roughly y: 3%..74% and x: 13%..87%
-  const sx = w * 0.132;
-  const sy = h * 0.028;
-  const sw = w * 0.736;
-  const sh = h * 0.715;
-
-  const size = 512;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return null;
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(size / 2, size / 2, size / 2 - 4, 0, Math.PI * 2);
-  ctx.clip();
-  ctx.fillStyle = '#FFFFFF';
-  ctx.fillRect(0, 0, size, size);
-  ctx.drawImage(img, sx, sy, sw, sh, 6, 6, size - 12, size - 12);
-  ctx.restore();
-
-  return canvas.toDataURL('image/png');
-}
-
-function drawCoverImageRounded(
+function drawCoverImageCircle(
   ctx: CanvasRenderingContext2D,
   img: HTMLImageElement,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
+  cx: number,
+  cy: number,
   radius: number
 ) {
+  const x = cx - radius;
+  const y = cy - radius;
+  const d = radius * 2;
+
   ctx.save();
   ctx.beginPath();
-  ctx.roundRect(x, y, w, h, radius);
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.clip();
 
   const imgRatio = img.naturalWidth / (img.naturalHeight || 1);
-  const boxRatio = w / h;
   let sx = 0;
   let sy = 0;
   let sw = img.naturalWidth;
   let sh = img.naturalHeight;
 
-  if (imgRatio > boxRatio) {
-    sw = img.naturalHeight * boxRatio;
+  if (imgRatio > 1) {
+    sw = img.naturalHeight;
     sx = (img.naturalWidth - sw) / 2;
-  } else {
-    sh = img.naturalWidth / boxRatio;
+  } else if (imgRatio < 1) {
+    sh = img.naturalWidth;
     sy = (img.naturalHeight - sh) / 2;
   }
 
-  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, d, d);
   ctx.restore();
+}
+
+function drawSquareCenterCropDataUrl(
+  img: HTMLImageElement,
+  rotationDeg = 0,
+  size = 640
+): string {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return img.src;
+
+  const isRotatedQuarter = Math.abs(rotationDeg % 180) === 90;
+  const effW = isRotatedQuarter ? img.naturalHeight : img.naturalWidth;
+  const effH = isRotatedQuarter ? img.naturalWidth : img.naturalHeight;
+
+  const scale = Math.max(size / (effW || size), size / (effH || size));
+  const drawW = img.naturalWidth * scale;
+  const drawH = img.naturalHeight * scale;
+
+  ctx.save();
+  ctx.translate(size / 2, size / 2);
+  ctx.rotate((rotationDeg * Math.PI) / 180);
+  ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+  ctx.restore();
+
+  return canvas.toDataURL('image/jpeg', 0.94);
 }
 
 function drawContainImage(
@@ -218,72 +227,182 @@ function drawSocialIconOnCanvas(
   const r = size / 2;
 
   if (type === 'tiktok') {
-    ctx.fillStyle = '#0F172A';
+    // Black circular badge with official layered cyan + magenta + white TikTok glyph
+    ctx.fillStyle = '#010101';
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.strokeStyle = '#FFFFFF';
-    ctx.lineWidth = size * 0.12;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.arc(cx - size * 0.08, cy + size * 0.12, size * 0.15, 0.2 * Math.PI, 1.85 * Math.PI);
-    ctx.moveTo(cx + size * 0.07, cy + size * 0.12);
-    ctx.lineTo(cx + size * 0.07, cy - size * 0.24);
-    ctx.quadraticCurveTo(cx + size * 0.14, cy - size * 0.1, cx + size * 0.26, cy - size * 0.1);
-    ctx.stroke();
+    const drawTikTokGlyph = (ox: number, oy: number, color: string) => {
+      ctx.save();
+      ctx.translate(cx + ox, cy + oy);
+      const u = size / 24;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(2.4 * u, -6.4 * u);
+      ctx.lineTo(5.0 * u, -6.4 * u);
+      ctx.bezierCurveTo(5.3 * u, -4.3 * u, 6.7 * u, -2.9 * u, 8.6 * u, -2.7 * u);
+      ctx.lineTo(8.6 * u, -0.1 * u);
+      ctx.bezierCurveTo(6.9 * u, -0.1 * u, 5.4 * u, -0.7 * u, 4.3 * u, -1.6 * u);
+      ctx.lineTo(4.3 * u, 3.6 * u);
+      ctx.bezierCurveTo(4.3 * u, 6.5 * u, 2.0 * u, 8.6 * u, -0.8 * u, 8.6 * u);
+      ctx.bezierCurveTo(-3.6 * u, 8.6 * u, -5.8 * u, 6.4 * u, -5.8 * u, 3.6 * u);
+      ctx.bezierCurveTo(-5.8 * u, 0.7 * u, -3.5 * u, -1.5 * u, -0.4 * u, -1.4 * u);
+      ctx.lineTo(-0.4 * u, 1.3 * u);
+      ctx.bezierCurveTo(-1.8 * u, 1.2 * u, -3.0 * u, 2.2 * u, -3.0 * u, 3.6 * u);
+      ctx.bezierCurveTo(-3.0 * u, 5.0 * u, -1.9 * u, 6.0 * u, -0.6 * u, 6.0 * u);
+      ctx.bezierCurveTo(0.8 * u, 6.0 * u, 1.7 * u, 5.0 * u, 1.7 * u, 3.6 * u);
+      ctx.lineTo(1.7 * u, -6.4 * u);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    };
+
+    drawTikTokGlyph(-size * 0.032, -size * 0.025, '#25F4EE');
+    drawTikTokGlyph(size * 0.032, size * 0.025, '#FE2C55');
+    drawTikTokGlyph(0, 0, '#FFFFFF');
   } else if (type === 'facebook') {
+    // Official Facebook #1877F2 circle + crisp bottom-aligned white 'f' path
     ctx.fillStyle = '#1877F2';
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.fill();
 
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.clip();
+
+    ctx.translate(cx, cy);
+    const u = size / 24;
     ctx.fillStyle = '#FFFFFF';
-    ctx.textAlign = 'center';
-    ctx.font = `800 ${Math.round(size * 0.72)}px sans-serif`;
-    ctx.fillText('f', cx + size * 0.03, cy + size * 0.26);
+    ctx.beginPath();
+    ctx.moveTo(4.6 * u, 3.2 * u);
+    ctx.lineTo(5.2 * u, -0.5 * u);
+    ctx.lineTo(1.6 * u, -0.5 * u);
+    ctx.lineTo(1.6 * u, -2.9 * u);
+    ctx.bezierCurveTo(1.6 * u, -3.9 * u, 2.1 * u, -4.9 * u, 3.7 * u, -4.9 * u);
+    ctx.lineTo(5.4 * u, -4.9 * u);
+    ctx.lineTo(5.4 * u, -8.1 * u);
+    ctx.bezierCurveTo(4.5 * u, -8.3 * u, 3.4 * u, -8.4 * u, 2.4 * u, -8.4 * u);
+    ctx.bezierCurveTo(-0.8 * u, -8.4 * u, -2.7 * u, -6.5 * u, -2.7 * u, -3.1 * u);
+    ctx.lineTo(-2.7 * u, -0.5 * u);
+    ctx.lineTo(-5.8 * u, -0.5 * u);
+    ctx.lineTo(-5.8 * u, 3.2 * u);
+    ctx.lineTo(-2.7 * u, 3.2 * u);
+    ctx.lineTo(-2.7 * u, 12.2 * u);
+    ctx.lineTo(1.6 * u, 12.2 * u);
+    ctx.lineTo(1.6 * u, 3.2 * u);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
   } else if (type === 'instagram') {
-    const grad = ctx.createLinearGradient(cx - r, cy + r, cx + r, cy - r);
-    grad.addColorStop(0, '#F58529');
-    grad.addColorStop(0.45, '#DD2A7B');
-    grad.addColorStop(0.8, '#8134AF');
-    grad.addColorStop(1, '#515BD4');
+    // Official Instagram multi-stop radial gradient + crisp white camera glyph
+    const grad = ctx.createRadialGradient(
+      cx - size * 0.25,
+      cy + size * 0.35,
+      size * 0.08,
+      cx,
+      cy,
+      size * 0.85
+    );
+    grad.addColorStop(0, '#FDF497');
+    grad.addColorStop(0.15, '#FDF497');
+    grad.addColorStop(0.42, '#FD5949');
+    grad.addColorStop(0.7, '#D6249F');
+    grad.addColorStop(1, '#285AEB');
     ctx.fillStyle = grad;
     ctx.beginPath();
-    ctx.roundRect(cx - r, cy - r, size, size, size * 0.28);
+    ctx.roundRect(cx - r, cy - r, size, size, size * 0.27);
     ctx.fill();
 
     ctx.strokeStyle = '#FFFFFF';
-    ctx.lineWidth = size * 0.09;
+    ctx.lineWidth = size * 0.085;
     ctx.beginPath();
-    ctx.roundRect(cx - size * 0.28, cy - size * 0.28, size * 0.56, size * 0.56, size * 0.16);
+    ctx.roundRect(cx - size * 0.31, cy - size * 0.31, size * 0.62, size * 0.62, size * 0.18);
     ctx.stroke();
 
     ctx.beginPath();
-    ctx.arc(cx, cy, size * 0.14, 0, Math.PI * 2);
+    ctx.arc(cx, cy, size * 0.145, 0, Math.PI * 2);
     ctx.stroke();
 
     ctx.fillStyle = '#FFFFFF';
     ctx.beginPath();
-    ctx.arc(cx + size * 0.16, cy - size * 0.16, size * 0.04, 0, Math.PI * 2);
+    ctx.arc(cx + size * 0.175, cy - size * 0.175, size * 0.045, 0, Math.PI * 2);
     ctx.fill();
   } else if (type === 'email') {
-    const w = size * 1.05;
-    const h = size * 0.76;
+    // Official Gmail multi-color 'M' envelope badge
+    const w = size * 1.06;
+    const h = size * 0.78;
+    const x0 = cx - w / 2;
+    const y0 = cy - h / 2;
+    const u = w / 24;
+    const v = h / 18;
+
+    ctx.save();
     ctx.fillStyle = '#FFFFFF';
     ctx.beginPath();
-    ctx.roundRect(cx - w / 2, cy - h / 2, w, h, size * 0.1);
+    ctx.roundRect(x0 - 1, y0 - 1, w + 2, h + 2, size * 0.12);
     ctx.fill();
-    ctx.strokeStyle = '#EA4335';
-    ctx.lineWidth = size * 0.08;
-    ctx.stroke();
 
+    // Left blue bar
+    ctx.fillStyle = '#4285F4';
     ctx.beginPath();
-    ctx.moveTo(cx - w / 2 + size * 0.06, cy - h / 2 + size * 0.08);
-    ctx.lineTo(cx, cy + size * 0.04);
-    ctx.lineTo(cx + w / 2 - size * 0.06, cy - h / 2 + size * 0.08);
-    ctx.stroke();
+    ctx.moveTo(x0, y0 + 5.5 * v);
+    ctx.lineTo(x0, y0 + 16.5 * v);
+    ctx.quadraticCurveTo(x0, y0 + h, x0 + 2 * u, y0 + h);
+    ctx.lineTo(x0 + 5.5 * u, y0 + h);
+    ctx.lineTo(x0 + 5.5 * u, y0 + 9.2 * v);
+    ctx.closePath();
+    ctx.fill();
+
+    // Right green bar
+    ctx.fillStyle = '#34A853';
+    ctx.beginPath();
+    ctx.moveTo(x0 + w, y0 + 5.5 * v);
+    ctx.lineTo(x0 + w, y0 + 16.5 * v);
+    ctx.quadraticCurveTo(x0 + w, y0 + h, x0 + w - 2 * u, y0 + h);
+    ctx.lineTo(x0 + w - 5.5 * u, y0 + h);
+    ctx.lineTo(x0 + w - 5.5 * u, y0 + 9.2 * v);
+    ctx.closePath();
+    ctx.fill();
+
+    // Top-left dark red shoulder
+    ctx.fillStyle = '#C5221F';
+    ctx.beginPath();
+    ctx.moveTo(x0, y0 + 3 * v);
+    ctx.lineTo(x0, y0 + 6.2 * v);
+    ctx.lineTo(x0 + 5.5 * u, y0 + 10 * v);
+    ctx.lineTo(x0 + 5.5 * u, y0 + 4.4 * v);
+    ctx.lineTo(x0 + 3.2 * u, y0 + 2.5 * v);
+    ctx.quadraticCurveTo(x0, y0, x0, y0 + 3 * v);
+    ctx.closePath();
+    ctx.fill();
+
+    // Top-right amber shoulder
+    ctx.fillStyle = '#FBBC04';
+    ctx.beginPath();
+    ctx.moveTo(x0 + w, y0 + 3 * v);
+    ctx.lineTo(x0 + w, y0 + 6.2 * v);
+    ctx.lineTo(x0 + w - 5.5 * u, y0 + 10 * v);
+    ctx.lineTo(x0 + w - 5.5 * u, y0 + 4.4 * v);
+    ctx.lineTo(x0 + w - 3.2 * u, y0 + 2.5 * v);
+    ctx.quadraticCurveTo(x0 + w, y0, x0 + w, y0 + 3 * v);
+    ctx.closePath();
+    ctx.fill();
+
+    // Center red 'M' V-fold
+    ctx.fillStyle = '#EA4335';
+    ctx.beginPath();
+    ctx.moveTo(x0 + 5.5 * u, y0 + 4.4 * v);
+    ctx.lineTo(cx, y0 + 8.9 * v);
+    ctx.lineTo(x0 + w - 5.5 * u, y0 + 4.4 * v);
+    ctx.lineTo(x0 + w - 5.5 * u, y0 + 10 * v);
+    ctx.lineTo(cx, y0 + 14.3 * v);
+    ctx.lineTo(x0 + 5.5 * u, y0 + 10 * v);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
   }
   ctx.restore();
 }
@@ -357,18 +476,19 @@ const CalligraphicSignatureSvg: React.FC<{ className?: string }> = ({ className 
 export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
   volunteer,
   onClose,
-  onAvatarChange
+  onAvatarChange,
+  isAdmin = false
 }) => {
   const [step, setStep] = useState<ModalStep>('photo');
   const [viewMode, setViewMode] = useState<CardViewMode>('dual');
   const [downloadingType, setDownloadingType] = useState<'pdf' | 'dual' | 'front' | 'back' | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
-  const [emblemUrl, setEmblemUrl] = useState<string>('/logo.png');
   const [customAvatar, setCustomAvatar] = useState<string>(volunteer.avatar || '');
   const [customPhone, setCustomPhone] = useState<string>(volunteer.phone || '');
   const [customCity, setCustomCity] = useState<string>(volunteer.city || 'Sialkot, Punjab Pakistan');
-  const [customRole, setCustomRole] = useState<string>(volunteer.assignedRole || 'MEMBER NEXGEN COUNCIL');
+  // Default EVERY card's Designation / Role to "MEMBER NEXGEN COUNCIL"; only Admin side can edit it
+  const [customRole, setCustomRole] = useState<string>(DEFAULT_CARD_ROLE);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -376,18 +496,8 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     setCustomAvatar(volunteer.avatar || '');
     setCustomPhone(volunteer.phone || '');
     setCustomCity(volunteer.city || 'Sialkot, Punjab Pakistan');
-    setCustomRole(volunteer.assignedRole || 'MEMBER NEXGEN COUNCIL');
+    setCustomRole(DEFAULT_CARD_ROLE);
   }, [volunteer]);
-
-  useEffect(() => {
-    let active = true;
-    createCircularEmblemDataUrl('/logo.png').then(cropped => {
-      if (active && cropped) setEmblemUrl(cropped);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   const idCode =
     ('referenceCode' in volunteer && volunteer.referenceCode) ||
@@ -395,10 +505,11 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       ? `NXG-${new Date().getFullYear()}-${volunteer.id.slice(-4).toUpperCase()}`
       : `NXG-${new Date().getFullYear()}-${(volunteer.id || '3104').slice(-4).toUpperCase()}`);
 
-  const roleLabel = (customRole || 'MEMBER NEXGEN COUNCIL').toUpperCase();
+  const formattedName = toTitleCaseName(volunteer.fullName);
+  const roleLabel = (isAdmin ? customRole || DEFAULT_CARD_ROLE : DEFAULT_CARD_ROLE).toUpperCase();
   const verificationUrl = `https://nexgencouncil.bond/track?code=${encodeURIComponent(idCode)}`;
   const displayAvatar = customAvatar || '';
-  const initials = (volunteer.fullName || 'NC')
+  const initials = formattedName
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)
@@ -438,19 +549,9 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
         reader.readAsDataURL(file);
       });
 
-      // Center-crop cleanly to match the exact portrait box ratio (552 x 610)
+      // Center-crop to crisp 1:1 square so circular frame fits cleanly regardless of uploaded aspect ratio
       const loaded = await loadImage(dataUrl);
-      let finalImage = dataUrl;
-      if (loaded) {
-        const cropCanvas = document.createElement('canvas');
-        cropCanvas.width = 640;
-        cropCanvas.height = 708;
-        const cctx = cropCanvas.getContext('2d');
-        if (cctx) {
-          drawCoverImageRounded(cctx, loaded, 0, 0, 640, 708, 0);
-          finalImage = cropCanvas.toDataURL('image/jpeg', 0.94);
-        }
-      }
+      const finalImage = loaded ? drawSquareCenterCropDataUrl(loaded, 0, 680) : dataUrl;
 
       setCustomAvatar(finalImage);
       if (onAvatarChange) {
@@ -462,8 +563,25 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     }
   };
 
+  const handleRotatePhoto = async () => {
+    if (!displayAvatar) return;
+    setUploadingPhoto(true);
+    try {
+      const loaded = await loadImage(displayAvatar);
+      if (loaded) {
+        const rotated = drawSquareCenterCropDataUrl(loaded, 90, 680);
+        setCustomAvatar(rotated);
+        if (onAvatarChange) {
+          onAvatarChange(rotated);
+        }
+      }
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
   /**
-   * Page 1 (Front) — Exact layout & geometry matching Eman_Aqeel_Member_NexGen_Card PDF (1000 x 1620)
+   * Page 1 (Front) — Exact matching PDF geometry with Circular Portrait, Full Uncropped Logo, and Title Case Name
    */
   const paintFrontCard = (
     ctx: CanvasRenderingContext2D,
@@ -471,18 +589,18 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     oy: number,
     cw: number,
     ch: number,
-    emblemImg: HTMLImageElement | null,
+    logoImg: HTMLImageElement | null,
     avatarImg: HTMLImageElement | null
   ) => {
     const s = cw / 1000;
     ctx.save();
     ctx.translate(ox, oy);
 
-    // Pure White Canvas
+    // Crisp White Background
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, cw, ch);
 
-    // Left Deep Navy Architectural Band (0 .. 154*s) with clean diagonal cut at bottom
+    // Left Deep Navy Architectural Band (0 .. 154*s) with diagonal cut
     const leftW = 154 * s;
     ctx.fillStyle = NAVY;
     ctx.beginPath();
@@ -493,11 +611,11 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     ctx.closePath();
     ctx.fill();
 
-    // Centered White Vertical Line inside Left Navy Band
+    // Thin White Vertical Line inside Left Navy Band
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(79 * s, 495 * s, 10 * s, 118 * s);
 
-    // Parallel Diagonal Navy Stripe underneath white diagonal gap
+    // Parallel Diagonal Navy Stripe underneath white cut
     ctx.fillStyle = NAVY;
     ctx.beginPath();
     ctx.moveTo(0, 1340 * s);
@@ -507,7 +625,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     ctx.closePath();
     ctx.fill();
 
-    // Bottom-Left 4x4 Navy Dot Matrix
+    // Bottom-Left 4x4 Navy Dot Grid
     ctx.fillStyle = NAVY;
     for (let row = 0; row < 4; row++) {
       for (let col = 0; col < 4; col++) {
@@ -536,68 +654,91 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     ctx.closePath();
     ctx.fill();
 
-    // Top Header Lockup: Circular Emblem + Vertical Gold Rule + NexGen Title
-    const headerX = 296 * s;
-    const headerY = 74 * s;
-    if (emblemImg) {
-      drawContainImage(ctx, emblemImg, headerX, headerY, 178 * s, 178 * s);
+    // Top Brand Header: FULL Uncropped Logo + Vertical Gold Rule + NexGen Title
+    const headerX = 278 * s;
+    const headerY = 66 * s;
+    if (logoImg) {
+      drawContainImage(ctx, logoImg, headerX, headerY, 186 * s, 186 * s);
     }
 
     ctx.strokeStyle = GOLD;
     ctx.lineWidth = 2.5 * s;
     ctx.beginPath();
-    ctx.moveTo(headerX + 190 * s, headerY + 34 * s);
-    ctx.lineTo(headerX + 190 * s, headerY + 148 * s);
+    ctx.moveTo(headerX + 196 * s, headerY + 34 * s);
+    ctx.lineTo(headerX + 196 * s, headerY + 150 * s);
     ctx.stroke();
 
     ctx.textAlign = 'left';
     ctx.fillStyle = NAVY;
     ctx.font = `800 ${60 * s}px "Plus Jakarta Sans", sans-serif`;
-    ctx.fillText('NexGen', headerX + 202 * s, headerY + 86 * s);
+    ctx.fillText('NexGen', headerX + 208 * s, headerY + 86 * s);
 
     ctx.font = `700 ${24 * s}px "Plus Jakarta Sans", sans-serif`;
-    ctx.fillText('Women Empowerment', headerX + 204 * s, headerY + 120 * s);
-    ctx.fillText('And Youth Leadership Council', headerX + 204 * s, headerY + 148 * s);
+    ctx.fillText('Women Empowerment', headerX + 210 * s, headerY + 120 * s);
+    ctx.fillText('And Youth Leadership Council', headerX + 210 * s, headerY + 148 * s);
 
-    // Large Rounded-Square Portrait Photo
-    const photoX = 274 * s;
-    const photoY = 328 * s;
-    const photoW = 552 * s;
-    const photoH = 610 * s;
-    const photoR = 54 * s;
+    // Centered Circular Portrait Photo (550px diameter)
+    const circleRadius = 272 * s;
+    const circleCx = 562 * s;
+    const circleCy = 626 * s;
+
+    // Subtle soft drop shadow + crisp circular frame
+    ctx.save();
+    ctx.shadowColor = 'rgba(22, 42, 77, 0.14)';
+    ctx.shadowBlur = 24 * s;
+    ctx.shadowOffsetY = 8 * s;
+    ctx.fillStyle = '#F1F5F9';
+    ctx.beginPath();
+    ctx.arc(circleCx, circleCy, circleRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
 
     if (avatarImg) {
-      drawCoverImageRounded(ctx, avatarImg, photoX, photoY, photoW, photoH, photoR);
+      drawCoverImageCircle(ctx, avatarImg, circleCx, circleCy, circleRadius);
     } else {
       ctx.fillStyle = '#F1F5F9';
       ctx.beginPath();
-      ctx.roundRect(photoX, photoY, photoW, photoH, photoR);
+      ctx.arc(circleCx, circleCy, circleRadius, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = NAVY;
       ctx.textAlign = 'center';
       ctx.font = `800 ${150 * s}px "Playfair Display", Georgia, serif`;
-      ctx.fillText(initials, photoX + photoW / 2, photoY + photoH * 0.56);
+      ctx.fillText(initials, circleCx, circleCy + 52 * s);
     }
 
-    // Member Full Name (Bold Uppercase Navy)
+    // Crisp outer ring around circle photo
+    ctx.strokeStyle = NAVY;
+    ctx.lineWidth = 4 * s;
+    ctx.beginPath();
+    ctx.arc(circleCx, circleCy, circleRadius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = GOLD;
+    ctx.lineWidth = 2 * s;
+    ctx.beginPath();
+    ctx.arc(circleCx, circleCy, circleRadius + 8 * s, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Member Full Name (Title Case: First letter of every word capitalized)
+    const contentLeftX = 274 * s;
     ctx.textAlign = 'left';
     ctx.fillStyle = NAVY;
-    ctx.font = `800 ${52 * s}px "Plus Jakarta Sans", sans-serif`;
-    ctx.fillText((volunteer.fullName || 'COUNCIL MEMBER').toUpperCase(), photoX, 1020 * s, cw - photoX - 42 * s);
+    ctx.font = `800 ${54 * s}px "Plus Jakarta Sans", sans-serif`;
+    ctx.fillText(formattedName, contentLeftX, 1018 * s, cw - contentLeftX - 42 * s);
 
     // Short Thick Navy Accent Bar
     ctx.fillStyle = NAVY;
-    ctx.fillRect(photoX, 1054 * s, 154 * s, 10 * s);
+    ctx.fillRect(contentLeftX, 1052 * s, 154 * s, 10 * s);
 
-    // Letter-Spaced Uppercase Role
+    // Role / Designation (Default: MEMBER NEXGEN COUNCIL)
     ctx.fillStyle = '#1E293B';
-    ctx.font = `500 ${30 * s}px "Plus Jakarta Sans", sans-serif`;
-    ctx.fillText(roleLabel, photoX, 1126 * s, cw - photoX - 42 * s);
+    ctx.font = `500 ${29 * s}px "Plus Jakarta Sans", sans-serif`;
+    ctx.fillText(roleLabel, contentLeftX, 1124 * s, cw - contentLeftX - 42 * s);
 
-    // Clean Aligned Metadata Block (ID, City, Phone)
-    const labelX = 352 * s;
-    const colonX = 456 * s;
-    const valX = 478 * s;
+    // Aligned Metadata Details (ID, City, Phone)
+    const labelX = 342 * s;
+    const colonX = 446 * s;
+    const valX = 468 * s;
     const rows: [string, string][] = [
       ['ID', idCode],
       ['City', customCity || 'National Chapter'],
@@ -605,7 +746,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     ];
 
     rows.forEach(([label, val], idx) => {
-      const y = (1238 + idx * 62) * s;
+      const y = (1236 + idx * 64) * s;
       ctx.fillStyle = '#1E293B';
       ctx.font = `500 ${28 * s}px "Plus Jakarta Sans", sans-serif`;
       ctx.fillText(label, labelX, y);
@@ -617,7 +758,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
   };
 
   /**
-   * Page 2 (Back) — Exact layout matching Eman_Aqeel_Member_NexGen_Card PDF + Clean Director Signature
+   * Page 2 (Back) — Exact matching PDF geometry with FULL Uncropped Logo & Clean Signature
    */
   const paintBackCard = (
     ctx: CanvasRenderingContext2D,
@@ -625,7 +766,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     oy: number,
     cw: number,
     ch: number,
-    emblemImg: HTMLImageElement | null,
+    logoImg: HTMLImageElement | null,
     qrImg: HTMLImageElement | null
   ) => {
     const s = cw / 1000;
@@ -636,29 +777,21 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, cw, ch);
 
-    // Centered Circular Emblem at Top
-    if (emblemImg) {
-      drawContainImage(ctx, emblemImg, cw / 2 - 175 * s, 68 * s, 350 * s, 350 * s);
+    // Centered FULL Uncropped Logo at Top
+    if (logoImg) {
+      drawContainImage(ctx, logoImg, cw / 2 - 195 * s, 52 * s, 390 * s, 360 * s);
     }
 
-    // Organization Name Centered Under Emblem
+    // Organization Full Name Centered Under Logo
     ctx.textAlign = 'center';
     ctx.fillStyle = NAVY;
-    ctx.font = `700 ${32 * s}px "Plus Jakarta Sans", sans-serif`;
+    ctx.font = `700 ${31 * s}px "Plus Jakarta Sans", sans-serif`;
     ctx.fillText('NexGen Women Empowerment', cw / 2, 444 * s);
     ctx.fillText('And Youth Leadership Council', cw / 2, 482 * s);
 
-    // Subtle Gold Hairline Rule right under title (visible in PDF)
-    ctx.strokeStyle = 'rgba(200, 155, 43, 0.55)';
-    ctx.lineWidth = 2 * s;
-    ctx.beginPath();
-    ctx.moveTo(cw / 2 - 110 * s, 496 * s);
-    ctx.lineTo(cw / 2 + 110 * s, 496 * s);
-    ctx.stroke();
-
     // Short Centered Navy Divider Bar
     ctx.fillStyle = NAVY;
-    ctx.fillRect(cw / 2 - 64 * s, 616 * s, 128 * s, 10 * s);
+    ctx.fillRect(cw / 2 - 64 * s, 608 * s, 128 * s, 10 * s);
 
     // Social Media Channels List
     const socialItems: Array<{ type: 'tiktok' | 'facebook' | 'instagram' | 'email'; text: string[] }> = [
@@ -671,7 +804,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     const socialIconX = 204 * s;
     const socialTextX = 264 * s;
     socialItems.forEach((item, idx) => {
-      const y = 688 * s + idx * 70 * s;
+      const y = 682 * s + idx * 70 * s;
       drawSocialIconOnCanvas(ctx, item.type, socialIconX, y, 42 * s);
       ctx.textAlign = 'left';
       ctx.fillStyle = '#1E293B';
@@ -686,9 +819,9 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
 
     // Horizontal Grey Divider with Centered Navy Accent Bar
     ctx.fillStyle = '#B8B2A6';
-    ctx.fillRect(102 * s, 976 * s, cw - 204 * s, 5 * s);
+    ctx.fillRect(102 * s, 974 * s, cw - 204 * s, 5 * s);
     ctx.fillStyle = NAVY;
-    ctx.fillRect(cw / 2 - 78 * s, 972 * s, 156 * s, 13 * s);
+    ctx.fillRect(cw / 2 - 78 * s, 970 * s, 156 * s, 13 * s);
 
     // Contact Details with Navy Rounded-Square Icon Tiles
     const contacts: Array<{ type: 'pin' | 'globe' | 'phone'; label: string; value: string; bold?: boolean }> = [
@@ -698,7 +831,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     ];
 
     contacts.forEach((c, idx) => {
-      const y = 1042 * s + idx * 92 * s;
+      const y = 1040 * s + idx * 92 * s;
       drawNavyContactTile(ctx, c.type, 158 * s, y, 62 * s);
 
       ctx.textAlign = 'left';
@@ -713,7 +846,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       ctx.fillText(c.value, 444 * s, y + 40 * s);
     });
 
-    // Clean, Unboxed Director Signature & Verification QR right above the footer wave
+    // Clean Unboxed Signature & Verification QR
     if (qrImg) {
       drawContainImage(ctx, qrImg, 158 * s, 1316 * s, 68 * s, 68 * s);
       ctx.textAlign = 'left';
@@ -743,7 +876,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     ctx.closePath();
     ctx.fill();
 
-    // Accent deep-navy step on far bottom-right (matching PDF Page 2)
+    // Accent deep-navy step on far bottom-right
     ctx.fillStyle = NAVY_DEEP;
     ctx.beginPath();
     ctx.moveTo(cw * 0.77, 1510 * s);
@@ -772,10 +905,8 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
         color: { dark: NAVY, light: '#FFFFFF' }
       }));
 
-    const freshEmblem = emblemUrl || (await createCircularEmblemDataUrl('/logo.png')) || '/logo.png';
-
     return Promise.all([
-      loadImage(freshEmblem),
+      loadImage('/logo.png'),
       loadImage(displayAvatar),
       loadImage(freshQrDataUrl)
     ]);
@@ -784,7 +915,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
   const handleDownloadPdf = async () => {
     setDownloadingType('pdf');
     try {
-      const [emblemImg, avatarImg, qrImg] = await renderCardCanvasImages();
+      const [logoImg, avatarImg, qrImg] = await renderCardCanvasImages();
       const cardW = 1000;
       const cardH = 1620;
 
@@ -793,7 +924,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       frontCanvas.height = cardH;
       const fctx = frontCanvas.getContext('2d');
       if (fctx) {
-        paintFrontCard(fctx, 0, 0, cardW, cardH, emblemImg, avatarImg);
+        paintFrontCard(fctx, 0, 0, cardW, cardH, logoImg, avatarImg);
       }
 
       const backCanvas = document.createElement('canvas');
@@ -801,7 +932,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       backCanvas.height = cardH;
       const bctx = backCanvas.getContext('2d');
       if (bctx) {
-        paintBackCard(bctx, 0, 0, cardW, cardH, emblemImg, qrImg);
+        paintBackCard(bctx, 0, 0, cardW, cardH, logoImg, qrImg);
       }
 
       const pdf = new jsPDF({
@@ -814,7 +945,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       pdf.addPage([100, 162], 'portrait');
       pdf.addImage(backCanvas.toDataURL('image/png', 1.0), 'PNG', 0, 0, 100, 162, undefined, 'FAST');
 
-      const safeName = (volunteer.fullName || 'Member').replace(/[^a-z0-9]+/gi, '_');
+      const safeName = formattedName.replace(/[^a-z0-9]+/gi, '_');
       pdf.save(`${safeName}_Member_NexGen_Card.pdf`);
     } catch {
       window.print();
@@ -826,7 +957,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
   const handleDownloadPng = async (mode: 'dual' | 'front' | 'back') => {
     setDownloadingType(mode);
     try {
-      const [emblemImg, avatarImg, qrImg] = await renderCardCanvasImages();
+      const [logoImg, avatarImg, qrImg] = await renderCardCanvasImages();
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
@@ -851,10 +982,10 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
         ctx.fillText('NEXGEN WOMEN EMPOWERMENT & YOUTH LEADERSHIP COUNCIL', canvas.width / 2, 56);
         ctx.fillStyle = '#FFFFFF';
         ctx.font = '700 32px "Plus Jakarta Sans", sans-serif';
-        ctx.fillText(`Official Member Credential · ${volunteer.fullName}`, canvas.width / 2, 98);
+        ctx.fillText(`Official Member Credential · ${formattedName}`, canvas.width / 2, 98);
 
-        paintFrontCard(ctx, marginX, headerH, cardW, cardH, emblemImg, avatarImg);
-        paintBackCard(ctx, marginX + cardW + gap, headerH, cardW, cardH, emblemImg, qrImg);
+        paintFrontCard(ctx, marginX, headerH, cardW, cardH, logoImg, avatarImg);
+        paintBackCard(ctx, marginX + cardW + gap, headerH, cardW, cardH, logoImg, qrImg);
 
         ctx.fillStyle = '#94A3B8';
         ctx.font = '500 20px "Plus Jakarta Sans", sans-serif';
@@ -867,13 +998,13 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
         canvas.width = cardW;
         canvas.height = cardH;
         if (mode === 'front') {
-          paintFrontCard(ctx, 0, 0, cardW, cardH, emblemImg, avatarImg);
+          paintFrontCard(ctx, 0, 0, cardW, cardH, logoImg, avatarImg);
         } else {
-          paintBackCard(ctx, 0, 0, cardW, cardH, emblemImg, qrImg);
+          paintBackCard(ctx, 0, 0, cardW, cardH, logoImg, qrImg);
         }
       }
 
-      const safeName = (volunteer.fullName || 'Member').replace(/[^a-z0-9]+/gi, '_');
+      const safeName = formattedName.replace(/[^a-z0-9]+/gi, '_');
       const suffix = mode === 'dual' ? 'Full_Card' : mode === 'front' ? 'Front_Card' : 'Back_Card';
       const link = document.createElement('a');
       link.download = `${safeName}_NexGen_${suffix}.png`;
@@ -935,17 +1066,17 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       />
 
       {/* Main Content Area */}
-      <div className="pl-[26%] pr-4 pt-5 pb-6 flex-1 flex flex-col justify-between relative z-10">
-        {/* Top Brand Header */}
+      <div className="pl-[25%] pr-4 pt-5 pb-6 flex-1 flex flex-col justify-between relative z-10">
+        {/* Top Brand Header with FULL Uncropped Logo */}
         <div className="flex items-center gap-2">
           <img
-            src={emblemUrl}
+            src="/logo.png"
             alt="NexGen Council"
             className="w-16 h-16 object-contain shrink-0"
             referrerPolicy="no-referrer"
           />
           <div className="border-l border-amber-500/80 pl-2 min-w-0">
-            <h4 className="font-extrabold text-[22px] leading-none tracking-tight text-[#162A4D]">NexGen</h4>
+            <h4 className="font-extrabold text-[21px] leading-none tracking-tight text-[#162A4D]">NexGen</h4>
             <p className="text-[8.5px] font-bold text-[#162A4D] leading-tight mt-0.5">
               Women Empowerment
               <br />
@@ -954,26 +1085,28 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
           </div>
         </div>
 
-        {/* Large Rounded-Square Portrait Photo */}
+        {/* Circular Cropped Member Portrait Photo */}
         <div className="my-2 flex justify-center">
-          <div className="w-full max-w-[196px] aspect-[552/610] rounded-[20px] overflow-hidden bg-slate-100 flex items-center justify-center">
-            {displayAvatar ? (
-              <img
-                src={displayAvatar}
-                alt={volunteer.fullName}
-                className="w-full h-full object-cover"
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <span className="font-serif font-bold text-5xl text-[#162A4D]">{initials}</span>
-            )}
+          <div className="w-[192px] h-[192px] rounded-full p-1 bg-gradient-to-br from-[#C89B2B] via-amber-200 to-[#162A4D] shadow-lg shrink-0">
+            <div className="w-full h-full rounded-full overflow-hidden bg-slate-100 border-2 border-[#162A4D] flex items-center justify-center">
+              {displayAvatar ? (
+                <img
+                  src={displayAvatar}
+                  alt={formattedName}
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <span className="font-serif font-bold text-5xl text-[#162A4D]">{initials}</span>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Member Name, Navy Bar & Role */}
+        {/* Member Name (Title Case), Navy Bar & Role */}
         <div className="space-y-2 text-left">
-          <h3 className="font-extrabold text-[18px] leading-tight tracking-tight text-[#162A4D] uppercase break-words">
-            {volunteer.fullName}
+          <h3 className="font-extrabold text-[19px] leading-tight tracking-tight text-[#162A4D] break-words">
+            {formattedName}
           </h3>
           <div className="w-14 h-1 bg-[#162A4D]" />
           <p className="text-[11px] font-medium tracking-[0.08em] text-slate-800 uppercase pt-0.5">{roleLabel}</p>
@@ -1006,10 +1139,10 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       className="w-full max-w-[355px] bg-white text-slate-900 rounded-xl overflow-hidden shadow-2xl border border-slate-200 relative select-none flex flex-col justify-between"
       style={{ aspectRatio: '1000 / 1620' }}
     >
-      {/* Top Center Emblem & Title */}
-      <div className="pt-5 px-5 flex flex-col items-center text-center">
+      {/* Top Center FULL Uncropped Logo & Title */}
+      <div className="pt-4 px-5 flex flex-col items-center text-center">
         <img
-          src={emblemUrl}
+          src="/logo.png"
           alt="NexGen Council"
           className="w-28 h-28 object-contain"
           referrerPolicy="no-referrer"
@@ -1019,34 +1152,74 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
           <br />
           And Youth Leadership Council
         </h4>
-        <div className="w-24 h-[1px] bg-amber-600/50 mt-1" />
-        <div className="w-12 h-1 bg-[#162A4D] mt-6" />
+        <div className="w-12 h-1 bg-[#162A4D] mt-5" />
       </div>
 
       {/* Social Media Channels */}
       <div className="px-9 space-y-2.5 text-[10px] text-slate-800">
         <div className="flex items-center gap-3">
-          <span className="w-5 h-5 rounded-full bg-slate-950 text-white flex items-center justify-center text-[9px] font-bold shrink-0">
-            ♪
-          </span>
+          {/* Official TikTok Badge */}
+          <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-label="TikTok">
+            <circle cx="12" cy="12" r="12" fill="#010101" />
+            <path
+              d="M14.1 6.2h2.2c.25 1.8 1.4 3 3.1 3.2v2.2c-1.4 0-2.7-.5-3.6-1.3v4.4c0 2.5-1.9 4.3-4.3 4.3-2.4 0-4.3-1.9-4.3-4.3 0-2.5 2-4.4 4.6-4.3v2.3c-1.2-.1-2.2.8-2.2 2s1 2 2.1 2c1.2 0 2-.8 2-2.1V6.2z"
+              fill="#25F4EE"
+              transform="translate(-0.7,-0.5)"
+            />
+            <path
+              d="M14.1 6.2h2.2c.25 1.8 1.4 3 3.1 3.2v2.2c-1.4 0-2.7-.5-3.6-1.3v4.4c0 2.5-1.9 4.3-4.3 4.3-2.4 0-4.3-1.9-4.3-4.3 0-2.5 2-4.4 4.6-4.3v2.3c-1.2-.1-2.2.8-2.2 2s1 2 2.1 2c1.2 0 2-.8 2-2.1V6.2z"
+              fill="#FE2C55"
+              transform="translate(0.7,0.5)"
+            />
+            <path
+              d="M14.1 6.2h2.2c.25 1.8 1.4 3 3.1 3.2v2.2c-1.4 0-2.7-.5-3.6-1.3v4.4c0 2.5-1.9 4.3-4.3 4.3-2.4 0-4.3-1.9-4.3-4.3 0-2.5 2-4.4 4.6-4.3v2.3c-1.2-.1-2.2.8-2.2 2s1 2 2.1 2c1.2 0 2-.8 2-2.1V6.2z"
+              fill="#FFFFFF"
+            />
+          </svg>
           <span className="truncate">@nextgen.womenempowerment</span>
         </div>
+
         <div className="flex items-center gap-3">
-          <span className="w-5 h-5 rounded-full bg-[#1877F2] text-white flex items-center justify-center text-[11px] font-extrabold shrink-0">
-            f
-          </span>
+          {/* Official Facebook Badge */}
+          <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-label="Facebook">
+            <circle cx="12" cy="12" r="12" fill="#1877F2" />
+            <path
+              d="M15.8 15.1l.55-3.5h-3.35V9.3c0-.96.47-1.9 1.98-1.9h1.53V4.42S15.12 4.18 13.8 4.18c-2.77 0-4.58 1.68-4.58 4.72v2.7H6.15v3.5h3.07V24h3.78v-8.9h2.8z"
+              fill="#FFFFFF"
+            />
+          </svg>
           <span className="truncate">Nex Gen Council</span>
         </div>
+
         <div className="flex items-center gap-3">
-          <span className="w-5 h-5 rounded-md bg-gradient-to-tr from-amber-500 via-pink-600 to-indigo-600 text-white flex items-center justify-center text-[9px] font-bold shrink-0">
-            ◎
-          </span>
+          {/* Official Instagram Badge */}
+          <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-label="Instagram">
+            <defs>
+              <radialGradient id="igGradCard" cx="30%" cy="107%" r="150%">
+                <stop offset="0%" stopColor="#FDF497" />
+                <stop offset="15%" stopColor="#FDF497" />
+                <stop offset="45%" stopColor="#FD5949" />
+                <stop offset="70%" stopColor="#D6249F" />
+                <stop offset="100%" stopColor="#285AEB" />
+              </radialGradient>
+            </defs>
+            <rect width="24" height="24" rx="6.5" fill="url(#igGradCard)" />
+            <rect x="4.5" y="4.5" width="15" height="15" rx="4.2" stroke="#FFFFFF" strokeWidth="1.9" fill="none" />
+            <circle cx="12" cy="12" r="3.4" stroke="#FFFFFF" strokeWidth="1.9" fill="none" />
+            <circle cx="16.3" cy="7.7" r="1.05" fill="#FFFFFF" />
+          </svg>
           <span className="truncate">nexgen.womenleadership.council</span>
         </div>
+
         <div className="flex items-center gap-3">
-          <span className="w-5 h-5 rounded border border-rose-500 text-rose-600 flex items-center justify-center shrink-0">
-            <Mail className="w-3 h-3" />
-          </span>
+          {/* Official Gmail Badge */}
+          <svg viewBox="0 0 24 18" className="w-5 h-4 shrink-0" aria-label="Gmail">
+            <path d="M0 5.5V16.5C0 17.33.67 18 1.5 18H5.5V9.2L0 5.5z" fill="#4285F4" />
+            <path d="M24 5.5V16.5C24 17.33 23.33 18 22.5 18H18.5V9.2L24 5.5z" fill="#34A853" />
+            <path d="M0 3V6.2L5.5 10V4.4L3.2 2.5C1.8 1.3 0 2.1 0 3z" fill="#C5221F" />
+            <path d="M24 3V6.2L18.5 10V4.4L20.8 2.5C22.2 1.3 24 2.1 24 3z" fill="#FBBC04" />
+            <path d="M5.5 4.4L12 8.9L18.5 4.4V10L12 14.3L5.5 10V4.4z" fill="#EA4335" />
+          </svg>
           <span className="leading-tight break-all text-[9.5px]">nexgenwomenempowermentandyouth@gmail.com</span>
         </div>
       </div>
@@ -1130,7 +1303,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
                 Official NexGen Member ID Card
               </h3>
               <p className="text-xs text-slate-400 truncate">
-                {volunteer.fullName} · {idCode}
+                {formattedName} · {idCode}
               </p>
             </div>
           </div>
@@ -1145,17 +1318,17 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
         </div>
 
         {step === 'photo' ? (
-          /* STEP 1: Mandatory Portrait Photo Request & Quick Card Info Check */
+          /* STEP 1: Mandatory Circular Portrait Photo Upload & Details Verification */
           <div className="py-2 space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
-              {/* Portrait Upload Preview Box */}
+              {/* Circular Portrait Upload Preview Box */}
               <div className="md:col-span-5 flex flex-col items-center space-y-3">
-                <div className="w-52 h-56 rounded-3xl bg-slate-950 border-2 border-dashed border-amber-400/50 overflow-hidden flex flex-col items-center justify-center relative shadow-xl group">
+                <div className="w-52 h-52 rounded-full bg-slate-950 border-2 border-dashed border-amber-400/60 overflow-hidden flex flex-col items-center justify-center relative shadow-xl group">
                   {displayAvatar ? (
                     <>
                       <img
                         src={displayAvatar}
-                        alt={volunteer.fullName}
+                        alt={formattedName}
                         className="w-full h-full object-cover"
                         referrerPolicy="no-referrer"
                       />
@@ -1173,14 +1346,14 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
                       </label>
                     </>
                   ) : (
-                    <label className="w-full h-full flex flex-col items-center justify-center p-5 text-center cursor-pointer hover:bg-slate-900/80 transition-colors space-y-2.5">
-                      <div className="w-14 h-14 rounded-2xl bg-amber-400/15 border border-amber-400/30 text-amber-300 flex items-center justify-center">
-                        <Upload className="w-6 h-6" />
+                    <label className="w-full h-full flex flex-col items-center justify-center p-6 text-center cursor-pointer hover:bg-slate-900/80 transition-colors space-y-2">
+                      <div className="w-12 h-12 rounded-full bg-amber-400/15 border border-amber-400/30 text-amber-300 flex items-center justify-center">
+                        <Upload className="w-5 h-5" />
                       </div>
                       <div className="space-y-1">
-                        <p className="text-xs font-bold text-white">Upload Member Portrait</p>
-                        <p className="text-[11px] text-slate-400 leading-snug">
-                          PNG, JPG or WebP portrait photo for the front ID card
+                        <p className="text-xs font-bold text-white">Upload Portrait</p>
+                        <p className="text-[10.5px] text-slate-400 leading-snug">
+                          Auto-crops cleanly into a circular ID portrait
                         </p>
                       </div>
                       <input
@@ -1195,23 +1368,38 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
                   )}
                 </div>
 
-                <label className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-semibold inline-flex items-center gap-2 cursor-pointer transition-colors">
-                  <Camera className="w-4 h-4 text-amber-400" />
-                  <span>
-                    {uploadingPhoto
-                      ? 'Optimizing Photo...'
-                      : displayAvatar
-                      ? 'Choose Another Portrait Photo'
-                      : 'Select Portrait Photo'}
-                  </span>
-                  <input
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    onChange={handlePhotoUpload}
-                    disabled={uploadingPhoto}
-                    className="hidden"
-                  />
-                </label>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <label className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors">
+                    <Camera className="w-3.5 h-3.5 text-amber-400" />
+                    <span>
+                      {uploadingPhoto
+                        ? 'Cropping...'
+                        : displayAvatar
+                        ? 'Change Photo'
+                        : 'Select Photo'}
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={handlePhotoUpload}
+                      disabled={uploadingPhoto}
+                      className="hidden"
+                    />
+                  </label>
+
+                  {displayAvatar && (
+                    <button
+                      type="button"
+                      onClick={handleRotatePhoto}
+                      disabled={uploadingPhoto}
+                      className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50"
+                      title="Rotate portrait 90 degrees"
+                    >
+                      <RotateCw className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Rotate</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Card Details Confirmation */}
@@ -1219,30 +1407,41 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
                 <div className="space-y-1.5">
                   <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-300">
                     <ImageIcon className="w-4 h-4" />
-                    <span>Step 1 of 2 · Portrait Photo &amp; Details</span>
+                    <span>Step 1 of 2 · Circular Portrait &amp; Details</span>
                   </div>
                   <h4 className="text-xl font-serif font-bold text-white">
                     {displayAvatar
-                      ? 'Portrait Ready for Official NexGen ID Card'
+                      ? 'Circular Portrait Ready for NexGen ID Card'
                       : 'Add Member Portrait Photo to Continue'}
                   </h4>
                   <p className="text-xs text-slate-400 leading-relaxed">
-                    Attach a clear portrait photo for <strong className="text-slate-200">{volunteer.fullName}</strong>.
-                    It will be placed cleanly into the official 2-page PDF member credential.
+                    Any image you upload for <strong className="text-slate-200">{formattedName}</strong> is automatically
+                    centered and cropped into a clean circle for the official 2-page PDF card.
                   </p>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                  <div className="sm:col-span-2">
-                    <label className="block text-slate-400 font-medium mb-1">Designation / Role on Card</label>
-                    <input
-                      type="text"
-                      value={customRole}
-                      onChange={e => setCustomRole(e.target.value)}
-                      placeholder="MEMBER NEXGEN COUNCIL"
-                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white focus:outline-none focus:border-amber-400"
-                    />
-                  </div>
+                  {/* Designation / Role editable ONLY on Admin side */}
+                  {isAdmin ? (
+                    <div className="sm:col-span-2">
+                      <label className="block text-slate-400 font-medium mb-1">
+                        Designation / Role on Card (Admin Override)
+                      </label>
+                      <input
+                        type="text"
+                        value={customRole}
+                        onChange={e => setCustomRole(e.target.value)}
+                        placeholder={DEFAULT_CARD_ROLE}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white focus:outline-none focus:border-amber-400"
+                      />
+                    </div>
+                  ) : (
+                    <div className="sm:col-span-2 px-3 py-2 rounded-xl bg-slate-950/70 border border-slate-800 flex items-center justify-between">
+                      <span className="text-slate-400">Card Designation</span>
+                      <span className="font-semibold text-amber-300 tracking-wide">{DEFAULT_CARD_ROLE}</span>
+                    </div>
+                  )}
+
                   <div>
                     <label className="block text-slate-400 font-medium mb-1">City / Chapter</label>
                     <input

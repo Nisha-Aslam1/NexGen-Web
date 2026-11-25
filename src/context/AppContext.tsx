@@ -31,7 +31,6 @@ export type ActivePage =
   | 'admin'
   | 'room'
   | 'meetings'
-  | 'support-desk'
   | '404';
 
 export type AdminTab =
@@ -118,9 +117,7 @@ export function parsePathname(pathname: string, hash?: string): {
   // Support hash routing fallback for admin and meeting direct links
   if ((clean === '/' || clean === '') && hash) {
     const cleanHash = hash.replace(/^#\/?/, '/').split('?')[0].replace(/\/$/, '').toLowerCase();
-    if (cleanHash === '/support-desk' || cleanHash.startsWith('/support-desk/')) {
-      clean = cleanHash;
-    } else if (cleanHash === '/admin' || cleanHash.startsWith('/admin/') || cleanHash === '/admin-login' || cleanHash === '/login') {
+    if (cleanHash === '/admin' || cleanHash.startsWith('/admin/') || cleanHash === '/admin-login' || cleanHash === '/login') {
       clean = cleanHash;
     } else if (cleanHash.startsWith('/meeting/') || cleanHash.startsWith('/room/') || cleanHash.startsWith('/meet/')) {
       clean = cleanHash;
@@ -149,7 +146,6 @@ export function parsePathname(pathname: string, hash?: string): {
   if (clean === '/admin-login' || clean === '/login') return { page: 'admin-login' };
   if (clean === '/admin/meetings') return { page: 'admin', adminTab: 'meetings' };
   if (clean === '/admin' || clean.startsWith('/admin/')) return { page: 'admin' };
-  if (clean === '/support-desk' || clean.startsWith('/support-desk/')) return { page: 'support-desk' };
   if (clean === '/meetings' || clean === '/meeting' || clean === '/meet') return { page: 'meetings' };
   if (clean.startsWith('/meeting/')) {
     return { page: 'room', meetingCode: clean.replace('/meeting/', '') };
@@ -182,7 +178,6 @@ export function getPathForPage(
   if (page === 'contact') return '/contact';
   if (page === 'admin-login') return '/admin-login';
   if (page === 'admin') return '/admin';
-  if (page === 'support-desk') return '/support-desk';
   if (page === 'meetings') return '/meetings';
   if (page === 'room') return meetingCode ? `/meeting/${meetingCode}` : '/meetings';
   return '/404';

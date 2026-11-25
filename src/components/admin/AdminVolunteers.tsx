@@ -308,6 +308,7 @@ export const AdminVolunteers: React.FC = () => {
       {viewingIdCard && (
         <VolunteerIdCardModal
           volunteer={viewingIdCard}
+          isAdmin={true}
           onAvatarChange={(newUrl) => handleSaveCardAvatar(viewingIdCard.id, newUrl)}
           onClose={() => setViewingIdCard(null)}
         />

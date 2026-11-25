@@ -40,7 +40,6 @@ const AdminAnalytics = lazy(() => import('./components/admin/AdminAnalytics.tsx'
 const AdminMeetings = lazy(() => import('./components/admin/AdminMeetings.tsx').then(m => ({ default: m.AdminMeetings })));
 const AdminEmailComposer = lazy(() => import('./components/admin/AdminEmailComposer.tsx').then(m => ({ default: m.AdminEmailComposer })));
 const MeetingRoomWrapper = lazy(() => import('./components/meetings/MeetingRoomWrapper.tsx').then(m => ({ default: m.MeetingRoomWrapper })));
-const SupportDeskApp = lazy(() => import('./components/support/SupportDeskApp.tsx').then(m => ({ default: m.SupportDeskApp })));
 
 const AppContent: React.FC = () => {
   const { activePage, setActivePage, currentUser, adminTab, setAdminTab } = useApp();
@@ -62,15 +61,6 @@ const AppContent: React.FC = () => {
     return (
       <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
         <MeetingRoomWrapper isPrivatePortal={activePage === 'meetings'} />
-      </Suspense>
-    );
-  }
-
-  // Standalone Mobile/Desktop Live Support Responder PWA
-  if (activePage === 'support-desk') {
-    return (
-      <Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
-        <SupportDeskApp />
       </Suspense>
     );
   }

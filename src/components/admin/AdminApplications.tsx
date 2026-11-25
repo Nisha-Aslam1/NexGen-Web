@@ -640,6 +640,7 @@ export const AdminApplications: React.FC = () => {
             status: 'Active',
             avatar: idCardApp.avatar
           }}
+          isAdmin={true}
           onClose={() => setIdCardApp(null)}
         />
       )}

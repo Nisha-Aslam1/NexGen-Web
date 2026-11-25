@@ -3045,12 +3045,7 @@ async function startServer() {
       index: false,
       maxAge: '1d',
       setHeaders: (res, filePath) => {
-        if (/sw\.js$/i.test(filePath)) {
-          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-        } else if (/manifest\.webmanifest$/i.test(filePath)) {
-          res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
-          res.setHeader('Cache-Control', 'no-cache');
-        } else if (/\.(png|jpe?g|webp|svg|ico|gif)$/i.test(filePath)) {
+        if (/\.(png|jpe?g|webp|svg|ico|gif)$/i.test(filePath)) {
           res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
         } else if (/\.(woff2?|ttf|eot)$/i.test(filePath)) {
           res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
