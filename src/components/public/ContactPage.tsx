@@ -189,6 +189,40 @@ export const ContactPage: React.FC = () => {
                   </div>
                 )}
               </div>
+
+              {settings?.showSocialLinks !== false && (() => {
+                const channels = [
+                  { key: 'facebook' as const, label: 'Facebook', url: settings?.socialLinks?.facebook },
+                  { key: 'instagram' as const, label: 'Instagram', url: settings?.socialLinks?.instagram },
+                  { key: 'linkedin' as const, label: 'LinkedIn', url: settings?.socialLinks?.linkedin },
+                  { key: 'twitter' as const, label: 'X', url: settings?.socialLinks?.twitter },
+                  { key: 'youtube' as const, label: 'YouTube', url: settings?.socialLinks?.youtube }
+                ].filter((c): c is { key: 'facebook' | 'instagram' | 'linkedin' | 'twitter' | 'youtube'; label: string; url: string } => {
+                  const visible = settings?.socialLinksVisibility?.[c.key] !== false;
+                  return visible && typeof c.url === 'string' && /^https?:\/\//i.test(c.url.trim());
+                });
+                if (channels.length === 0) return null;
+                return (
+                  <div className="pt-4 border-t border-slate-800 space-y-2.5">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-400 block">
+                      Connect With Us
+                    </span>
+                    <div className="flex flex-wrap gap-2">
+                      {channels.map(ch => (
+                        <a
+                          key={ch.key}
+                          href={ch.url.trim()}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/15 border border-white/10 text-slate-200 hover:text-amber-300 text-xs font-medium transition-colors"
+                        >
+                          {ch.label}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Quick Note */}

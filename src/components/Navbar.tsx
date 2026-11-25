@@ -23,6 +23,7 @@ export const Navbar: React.FC = () => {
     { label: 'News', page: 'news' },
     { label: 'Gallery', page: 'gallery' },
     { label: 'Leadership', page: 'team' },
+    { label: 'Donate', page: 'donate' },
     { label: 'Contact', page: 'contact' }
   ];
 
@@ -104,17 +105,20 @@ export const Navbar: React.FC = () => {
           </button>
 
           {/* Desktop Navigation Links */}
-          <nav className="hidden lg:flex items-center gap-1 xl:gap-1.5">
+          <nav className="hidden lg:flex items-center gap-0.5 xl:gap-1">
             {navItems.map(item => {
               const isActive = activePage === item.page;
+              const isDonate = item.page === 'donate';
               return (
                 <button
                   key={item.page}
                   onClick={() => navigateTo(item.page)}
-                  className={`px-2.5 xl:px-3 py-1.5 rounded-lg text-[13px] xl:text-[14px] font-medium tracking-tight transition-all whitespace-nowrap cursor-pointer ${
+                  className={`px-2.5 py-1.5 rounded-lg text-[13px] xl:text-[14px] font-medium tracking-tight transition-all whitespace-nowrap cursor-pointer ${
                     isActive
                       ? 'bg-slate-100 text-indigo-950 font-semibold shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                      : isDonate
+                        ? 'text-emerald-800 hover:text-emerald-950 hover:bg-emerald-50 font-semibold'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                   }`}
                 >
                   {item.label}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext.tsx';
-import { authFetch } from '../../lib/api.ts';
+import { authFetch, setInMemoryAuthToken } from '../../lib/api.ts';
 import {
   Settings,
   Save,
@@ -37,6 +37,7 @@ export const AdminSettings: React.FC = () => {
   const [adminStatus, setAdminStatus] = useState<{ username: string; email: string; source: string; isCustomConfigured: boolean } | null>(null);
   const [adminUsernameInput, setAdminUsernameInput] = useState('');
   const [adminEmailInput, setAdminEmailInput] = useState('');
+  const [adminCurrentPasswordInput, setAdminCurrentPasswordInput] = useState('');
   const [adminPasswordInput, setAdminPasswordInput] = useState('');
   const [adminConfirmPasswordInput, setAdminConfirmPasswordInput] = useState('');
   const [updatingCreds, setUpdatingCreds] = useState(false);
@@ -120,12 +121,16 @@ export const AdminSettings: React.FC = () => {
       setCredsError('Please enter an admin username.');
       return;
     }
+    if (!adminCurrentPasswordInput) {
+      setCredsError('Please enter your current password to confirm this change.');
+      return;
+    }
     if (!adminPasswordInput) {
       setCredsError('Please enter a new password.');
       return;
     }
-    if (adminPasswordInput.length < 4) {
-      setCredsError('Password must be at least 4 characters.');
+    if (adminPasswordInput.length < 8 || !/[a-zA-Z]/.test(adminPasswordInput) || !/[\d\W_]/.test(adminPasswordInput)) {
+      setCredsError('New password must be at least 8 characters and include letters plus a number or symbol.');
       return;
     }
     if (adminPasswordInput !== adminConfirmPasswordInput) {
@@ -140,16 +145,21 @@ export const AdminSettings: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           username: adminUsernameInput.trim(),
+          currentPassword: adminCurrentPasswordInput,
           password: adminPasswordInput,
           email: adminEmailInput.trim()
         })
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.message || 'Failed to update credentials.');
+        throw new Error(data.message || data.error || 'Failed to update credentials.');
       }
-      setCredsSuccess('Super Admin credentials successfully updated! You can now log in using these credentials.');
-      addToast('Super Admin credentials updated successfully!', 'success');
+      if (data.token) {
+        setInMemoryAuthToken(data.token);
+      }
+      setCredsSuccess('Super Admin credentials securely updated! Other active sessions were invalidated.');
+      addToast('Super Admin credentials updated securely!', 'success');
+      setAdminCurrentPasswordInput('');
       setAdminPasswordInput('');
       setAdminConfirmPasswordInput('');
       fetchAdminCredsStatus();
@@ -1143,74 +1153,114 @@ export const AdminSettings: React.FC = () => {
           </div>
         </div>
 
-        {/* Social Media Channels */}
-        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
-          <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-            <Share2 className="w-4 h-4 text-indigo-950" />
-            <h3 className="font-serif font-bold text-base text-slate-900">Social Media &amp; Community Channels</h3>
+        {/* Social Media Channels ("Connect With Us") */}
+        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2">
+              <Share2 className="w-4 h-4 text-indigo-950" />
+              <div>
+                <h3 className="font-serif font-bold text-base text-slate-900">
+                  Connect With Us (Social Media Channels)
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Turn individual social media links or the entire Connect With Us section ON or OFF in the Footer &amp; Contact page.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setIsDirty(true);
+                setFormData({
+                  ...formData,
+                  showSocialLinks: formData.showSocialLinks === false ? true : false
+                });
+              }}
+              className={`inline-flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-full transition-colors cursor-pointer shrink-0 ${
+                formData.showSocialLinks !== false
+                  ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+              title="Toggle entire Connect With Us section visibility"
+            >
+              {formData.showSocialLinks !== false ? (
+                <>
+                  <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Section ON (Visible)</span>
+                </>
+              ) : (
+                <>
+                  <EyeOff className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Section OFF (Hidden)</span>
+                </>
+              )}
+            </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">LinkedIn URL</label>
-              <input
-                type="url"
-                value={formData.socialLinks?.linkedin || ''}
-                onChange={e =>
-                  setFormData({
-                    ...formData,
-                    socialLinks: { ...formData.socialLinks, linkedin: e.target.value }
-                  })
-                }
-                placeholder="https://linkedin.com/company/nexgen-council"
-                className="w-full px-3 py-2 rounded-xl border border-slate-300"
-              />
-            </div>
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">Instagram URL</label>
-              <input
-                type="url"
-                value={formData.socialLinks?.instagram || ''}
-                onChange={e =>
-                  setFormData({
-                    ...formData,
-                    socialLinks: { ...formData.socialLinks, instagram: e.target.value }
-                  })
-                }
-                placeholder="https://instagram.com/nexgencouncil"
-                className="w-full px-3 py-2 rounded-xl border border-slate-300"
-              />
-            </div>
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">Facebook URL</label>
-              <input
-                type="url"
-                value={formData.socialLinks?.facebook || ''}
-                onChange={e =>
-                  setFormData({
-                    ...formData,
-                    socialLinks: { ...formData.socialLinks, facebook: e.target.value }
-                  })
-                }
-                placeholder="https://facebook.com/nexgencouncil"
-                className="w-full px-3 py-2 rounded-xl border border-slate-300"
-              />
-            </div>
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">Twitter / X URL</label>
-              <input
-                type="url"
-                value={formData.socialLinks?.twitter || ''}
-                onChange={e =>
-                  setFormData({
-                    ...formData,
-                    socialLinks: { ...formData.socialLinks, twitter: e.target.value }
-                  })
-                }
-                placeholder="https://twitter.com/nexgencouncil"
-                className="w-full px-3 py-2 rounded-xl border border-slate-300"
-              />
-            </div>
+          <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 transition-opacity ${formData.showSocialLinks === false ? 'opacity-55' : ''}`}>
+            {(
+              [
+                { key: 'facebook', label: 'Facebook URL', placeholder: 'https://facebook.com/nexgencouncil' },
+                { key: 'instagram', label: 'Instagram URL', placeholder: 'https://instagram.com/nexgencouncil' },
+                { key: 'linkedin', label: 'LinkedIn URL', placeholder: 'https://linkedin.com/company/nexgen-council' },
+                { key: 'twitter', label: 'Twitter / X URL', placeholder: 'https://twitter.com/nexgencouncil' },
+                { key: 'youtube', label: 'YouTube URL', placeholder: 'https://youtube.com/@nexgencouncil' }
+              ] as const
+            ).map(channel => {
+              const isChannelVisible = formData.socialLinksVisibility?.[channel.key] !== false;
+              return (
+                <div key={channel.key}>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-semibold text-slate-700">{channel.label}</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsDirty(true);
+                        setFormData({
+                          ...formData,
+                          socialLinksVisibility: {
+                            ...(formData.socialLinksVisibility || {}),
+                            [channel.key]: !isChannelVisible
+                          }
+                        });
+                      }}
+                      className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                        isChannelVisible
+                          ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                          : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                      }`}
+                      title={`Toggle ${channel.label.replace(' URL', '')} visibility`}
+                    >
+                      {isChannelVisible ? (
+                        <>
+                          <Eye className="w-3 h-3 text-emerald-600" />
+                          <span>ON</span>
+                        </>
+                      ) : (
+                        <>
+                          <EyeOff className="w-3 h-3 text-slate-400" />
+                          <span>OFF</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <input
+                    type="url"
+                    value={formData.socialLinks?.[channel.key] || ''}
+                    onChange={e => {
+                      setIsDirty(true);
+                      setFormData({
+                        ...formData,
+                        socialLinks: { ...formData.socialLinks, [channel.key]: e.target.value }
+                      });
+                    }}
+                    placeholder={channel.placeholder}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300"
+                  />
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -1482,24 +1532,38 @@ export const AdminSettings: React.FC = () => {
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">New Admin Password</label>
+                <label className="block font-semibold text-slate-700 mb-1">Current Admin Password *</label>
                 <input
                   type="password"
-                  value={adminPasswordInput}
-                  onChange={e => setAdminPasswordInput(e.target.value)}
-                  placeholder="Enter new password (min 4 characters)"
+                  value={adminCurrentPasswordInput}
+                  onChange={e => setAdminCurrentPasswordInput(e.target.value)}
+                  placeholder="Verify current password"
                   required
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono"
                 />
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Confirm New Password</label>
+                <label className="block font-semibold text-slate-700 mb-1">New Admin Password *</label>
+                <input
+                  type="password"
+                  value={adminPasswordInput}
+                  onChange={e => setAdminPasswordInput(e.target.value)}
+                  placeholder="Min 8 chars (letters + numbers/symbols)"
+                  minLength={8}
+                  required
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Confirm New Password *</label>
                 <input
                   type="password"
                   value={adminConfirmPasswordInput}
                   onChange={e => setAdminConfirmPasswordInput(e.target.value)}
                   placeholder="Re-type new password"
+                  minLength={8}
                   required
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono"
                 />

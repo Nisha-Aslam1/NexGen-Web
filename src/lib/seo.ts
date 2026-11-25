@@ -96,11 +96,17 @@ export function useDocumentSEO({
     };
 
     // Helper: update or create link tag
-    const setLink = (rel: string, href: string) => {
-      let element = document.querySelector(`link[rel="${rel}"]`) as HTMLLinkElement;
+    const setLink = (rel: string, href: string, extraAttrs?: Record<string, string>) => {
+      const selector = extraAttrs?.hreflang
+        ? `link[rel="${rel}"][hreflang="${extraAttrs.hreflang}"]`
+        : `link[rel="${rel}"]`;
+      let element = document.querySelector(selector) as HTMLLinkElement;
       if (!element) {
         element = document.createElement('link');
         element.setAttribute('rel', rel);
+        if (extraAttrs) {
+          Object.entries(extraAttrs).forEach(([k, v]) => element.setAttribute(k, v));
+        }
         document.head.appendChild(element);
       }
       element.setAttribute('href', href);
@@ -111,6 +117,8 @@ export function useDocumentSEO({
     setMeta('name', 'keywords', mergedKeywords.join(', '));
     setMeta('name', 'application-name', 'NexGen Council');
     setLink('canonical', fullCanonical);
+    setLink('alternate', fullCanonical, { hreflang: 'en' });
+    setLink('alternate', fullCanonical, { hreflang: 'x-default' });
 
     if (noindex) {
       setMeta('name', 'robots', 'noindex, nofollow');
@@ -125,6 +133,9 @@ export function useDocumentSEO({
     setMeta('property', 'og:url', fullCanonical);
     setMeta('property', 'og:type', ogType);
     setMeta('property', 'og:image', imageToUse);
+    if (imageToUse.startsWith('https://')) {
+      setMeta('property', 'og:image:secure_url', imageToUse);
+    }
     setMeta('property', 'og:image:alt', title);
     setMeta('property', 'og:site_name', 'NexGen Council');
 

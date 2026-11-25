@@ -56,7 +56,7 @@ export const AdminDatabase: React.FC = () => {
 
   const fetchStatus = async () => {
     try {
-      const res = await fetch('/api/system/database-status');
+      const res = await authFetch('/api/system/database-status');
       if (res.ok) {
         const data = await res.json();
         setStatus(data);

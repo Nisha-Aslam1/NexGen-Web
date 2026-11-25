@@ -242,6 +242,14 @@ const defaultSettings: WebsiteSettings = {
   showContactPhone: true,
   showOfficeHours: true,
   showRegistrationNumber: true,
+  showSocialLinks: true,
+  socialLinksVisibility: {
+    facebook: true,
+    instagram: true,
+    linkedin: true,
+    twitter: true,
+    youtube: true
+  },
   siteUrl: 'https://nexgencouncil.bond',
   metaDescription: 'NexGen Women Empowerment & Youth Leadership Council is an international civil society organization dedicated to accelerating female leadership, youth civic engagement, and socio-economic advancement.',
   googleSiteVerification: '',
@@ -932,8 +940,14 @@ class Database {
     if (!username || !password) {
       throw new Error('Admin username and password cannot be empty.');
     }
-    if (password.length < 4) {
-      throw new Error('Super Admin password must be at least 4 characters.');
+    if (password.length < 8) {
+      throw new Error('Super Admin password must be at least 8 characters long.');
+    }
+    if (!/[a-zA-Z]/.test(password) || !/[\d\W_]/.test(password)) {
+      throw new Error('Super Admin password must include letters and at least one number or symbol.');
+    }
+    if (/^(admin123|password|12345678|qwerty123)$/i.test(password)) {
+      throw new Error('Please choose a stronger, non-trivial Super Admin password.');
     }
 
     let superAdmin = this.data.users.find(u => u.role === 'SUPER_ADMIN' || u.id === 'usr_super_1');
@@ -1404,10 +1418,65 @@ class Database {
     ) || null;
   }
 
+  private sanitizeKeywordList(input: unknown, maxItems = 25): string[] {
+    if (Array.isArray(input)) {
+      return Array.from(
+        new Set(
+          input
+            .map(v => (typeof v === 'string' ? v.trim() : ''))
+            .filter(Boolean)
+        )
+      ).slice(0, maxItems);
+    }
+    if (typeof input === 'string') {
+      return Array.from(
+        new Set(
+          input
+            .split(',')
+            .map(v => v.trim())
+            .filter(Boolean)
+        )
+      ).slice(0, maxItems);
+    }
+    return [];
+  }
+
+  private normalizeEventFields(raw: Partial<EventItem>): Partial<EventItem> {
+    const out: Partial<EventItem> = { ...raw };
+    if (out.capacity !== undefined) {
+      const cap = Number(out.capacity);
+      out.capacity = Number.isFinite(cap) && cap > 0 ? Math.min(100000, Math.floor(cap)) : 0;
+    }
+    if (out.registeredCount !== undefined) {
+      const reg = Number(out.registeredCount);
+      out.registeredCount = Number.isFinite(reg) && reg >= 0 ? Math.min(100000, Math.floor(reg)) : 0;
+    }
+    if (out.showCapacity !== undefined) {
+      out.showCapacity = Boolean(out.showCapacity);
+    }
+    if (out.waitlistEnabled !== undefined) {
+      out.waitlistEnabled = Boolean(out.waitlistEnabled);
+    }
+    return out;
+  }
+
   createEvent(eventData: Omit<EventItem, 'id'>) {
+    const normalized = this.normalizeEventFields(eventData);
+    const now = new Date().toISOString();
     const newEvent: EventItem = {
-      ...eventData,
-      id: `evt_${Date.now()}`
+      ...(normalized as Omit<EventItem, 'id'>),
+      id: `evt_${Date.now()}`,
+      slug:
+        normalized.slug ||
+        (normalized.title || 'event')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/(^-|-$)/g, ''),
+      showCapacity: normalized.showCapacity !== undefined ? normalized.showCapacity : true,
+      waitlistEnabled: Boolean(normalized.waitlistEnabled),
+      registeredCount: normalized.registeredCount ?? 0,
+      createdAt: now,
+      updatedAt: now
     };
     this.data.events.unshift(newEvent);
     this.save();
@@ -1418,10 +1487,51 @@ class Database {
   updateEvent(id: string, updates: Partial<EventItem>) {
     const idx = this.data.events.findIndex(e => e.id === id);
     if (idx === -1) return null;
-    this.data.events[idx] = { ...this.data.events[idx], ...updates };
+    const normalized = this.normalizeEventFields(updates);
+    this.data.events[idx] = {
+      ...this.data.events[idx],
+      ...normalized,
+      updatedAt: new Date().toISOString()
+    };
     this.save();
     mongoUpsert('events', id, this.data.events[idx]).catch(() => {});
     return this.data.events[idx];
+  }
+
+  registerEventRsvp(id: string): {
+    status: 'ok' | 'waitlisted' | 'full' | 'not_found';
+    event?: EventItem;
+  } {
+    const idx = this.data.events.findIndex(e => e.id === id || e.slug === id);
+    if (idx === -1) return { status: 'not_found' };
+    const evt = this.data.events[idx];
+    const cap = Number(evt.capacity || 0);
+    const currentReg = Number(evt.registeredCount || 0);
+
+    if (cap > 0 && currentReg >= cap) {
+      if (!evt.waitlistEnabled) {
+        return { status: 'full', event: evt };
+      }
+      const updated: EventItem = {
+        ...evt,
+        registeredCount: currentReg + 1,
+        updatedAt: new Date().toISOString()
+      };
+      this.data.events[idx] = updated;
+      this.save();
+      mongoUpsert('events', updated.id, updated).catch(() => {});
+      return { status: 'waitlisted', event: updated };
+    }
+
+    const updated: EventItem = {
+      ...evt,
+      registeredCount: currentReg + 1,
+      updatedAt: new Date().toISOString()
+    };
+    this.data.events[idx] = updated;
+    this.save();
+    mongoUpsert('events', updated.id, updated).catch(() => {});
+    return { status: 'ok', event: updated };
   }
 
   deleteEvent(id: string) {
@@ -1445,9 +1555,42 @@ class Database {
     ) || null;
   }
 
+  private normalizeNewsFields(raw: Partial<NewsItem>): Partial<NewsItem> {
+    const out: Partial<NewsItem> = { ...raw };
+    if (typeof out.slug === 'string' && out.slug.trim()) {
+      out.slug = out.slug
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, '-')
+        .replace(/(^-|-$)/g, '');
+    }
+    if (out.tags !== undefined) {
+      out.tags = this.sanitizeKeywordList(out.tags, 15);
+    }
+    if (out.seoKeywords !== undefined) {
+      out.seoKeywords = this.sanitizeKeywordList(out.seoKeywords, 30);
+    }
+    if (typeof out.seoTitle === 'string') {
+      out.seoTitle = out.seoTitle.trim().slice(0, 120);
+    }
+    if (typeof out.seoDescription === 'string') {
+      out.seoDescription = out.seoDescription.trim().slice(0, 320);
+    }
+    if (typeof out.canonicalUrl === 'string') {
+      const c = out.canonicalUrl.trim();
+      out.canonicalUrl = !c || /^(\/|https?:\/\/)/i.test(c) ? c : '';
+    }
+    if (out.readTimeMinutes !== undefined) {
+      const rt = Number(out.readTimeMinutes);
+      out.readTimeMinutes = Number.isFinite(rt) && rt > 0 ? Math.min(120, Math.round(rt)) : undefined;
+    }
+    return out;
+  }
+
   createNews(newsData: Omit<NewsItem, 'id'>) {
+    const normalized = this.normalizeNewsFields(newsData);
     const item: NewsItem = {
-      ...newsData,
+      ...(normalized as Omit<NewsItem, 'id'>),
       id: `news_${Date.now()}`
     };
     this.data.news.unshift(item);
@@ -1459,7 +1602,8 @@ class Database {
   updateNews(id: string, updates: Partial<NewsItem>) {
     const idx = this.data.news.findIndex(n => n.id === id);
     if (idx === -1) return null;
-    this.data.news[idx] = { ...this.data.news[idx], ...updates };
+    const normalized = this.normalizeNewsFields(updates);
+    this.data.news[idx] = { ...this.data.news[idx], ...normalized };
     this.save();
     mongoUpsert('news', id, this.data.news[idx]).catch(() => {});
     return this.data.news[idx];
@@ -2159,7 +2303,67 @@ class Database {
   }
 
   updateSettings(updates: Partial<WebsiteSettings>) {
-    this.data.settings = { ...defaultSettings, ...this.data.settings, ...updates };
+    const cleanUpdates: Record<string, any> = {};
+    const raw = (updates && typeof updates === 'object') ? updates as Record<string, any> : {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+      cleanUpdates[k] = v;
+    }
+
+    if (cleanUpdates.socialLinks && typeof cleanUpdates.socialLinks === 'object') {
+      const sanitizedLinks: Record<string, string> = { ...(this.data.settings?.socialLinks || {}) };
+      for (const platform of ['facebook', 'instagram', 'linkedin', 'twitter', 'youtube']) {
+        if (typeof cleanUpdates.socialLinks[platform] === 'string') {
+          const val = cleanUpdates.socialLinks[platform].trim();
+          if (!val) {
+            sanitizedLinks[platform] = '';
+          } else if (/^https?:\/\//i.test(val)) {
+            sanitizedLinks[platform] = val;
+          }
+        }
+      }
+      cleanUpdates.socialLinks = sanitizedLinks;
+    }
+
+    if (cleanUpdates.socialLinksVisibility && typeof cleanUpdates.socialLinksVisibility === 'object') {
+      const vis: Record<string, boolean> = { ...(this.data.settings?.socialLinksVisibility || {}) };
+      for (const platform of ['facebook', 'instagram', 'linkedin', 'twitter', 'youtube']) {
+        if (typeof cleanUpdates.socialLinksVisibility[platform] === 'boolean') {
+          vis[platform] = cleanUpdates.socialLinksVisibility[platform];
+        }
+      }
+      cleanUpdates.socialLinksVisibility = vis;
+    }
+    if (typeof cleanUpdates.siteUrl === 'string') {
+      const s = cleanUpdates.siteUrl.trim();
+      if (!s || /^https?:\/\//i.test(s)) {
+        cleanUpdates.siteUrl = s;
+      } else {
+        delete cleanUpdates.siteUrl;
+      }
+    }
+    if (typeof cleanUpdates.emailLogoUrl === 'string') {
+      const l = cleanUpdates.emailLogoUrl.trim();
+      if (!l || /^(\/|https?:\/\/)/i.test(l)) {
+        cleanUpdates.emailLogoUrl = l;
+      } else {
+        delete cleanUpdates.emailLogoUrl;
+      }
+    }
+    if (cleanUpdates.showSocialLinks !== undefined) {
+      cleanUpdates.showSocialLinks = Boolean(cleanUpdates.showSocialLinks);
+    }
+    if (typeof cleanUpdates.newsSeoTitle === 'string') {
+      cleanUpdates.newsSeoTitle = cleanUpdates.newsSeoTitle.trim().slice(0, 120);
+    }
+    if (typeof cleanUpdates.newsSeoDescription === 'string') {
+      cleanUpdates.newsSeoDescription = cleanUpdates.newsSeoDescription.trim().slice(0, 320);
+    }
+    if (cleanUpdates.newsSeoKeywords !== undefined) {
+      cleanUpdates.newsSeoKeywords = this.sanitizeKeywordList(cleanUpdates.newsSeoKeywords, 35);
+    }
+
+    this.data.settings = { ...defaultSettings, ...this.data.settings, ...cleanUpdates };
     this.save();
     mongoUpsert('settings', 'global_settings', this.data.settings).catch(() => {});
     return this.getSettings();

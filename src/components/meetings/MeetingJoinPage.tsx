@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext.tsx';
+import { getInMemoryAuthToken } from '../../lib/api.ts';
 import {
   Video,
   VideoOff,
@@ -158,8 +159,8 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
 
     setIsJoining(true);
     try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      const token = localStorage.getItem('ng_token');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
+      const token = getInMemoryAuthToken();
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
       const guestStorageKey = `ng_mtg_guest_${meetingCode}`;
@@ -171,6 +172,7 @@ export const MeetingJoinPage: React.FC<MeetingJoinPageProps> = ({ meetingCode, o
       const res = await fetch(`/api/meetings/${encodeURIComponent(meetingCode)}/join`, {
         method: 'POST',
         headers,
+        credentials: 'include',
         body: JSON.stringify({
           displayName: displayName.trim(),
           email: guestEmail.trim(),

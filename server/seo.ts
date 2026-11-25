@@ -448,14 +448,25 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
   // Handle News Listing
   if (cleanPath === '/news' || cleanPath === '/news-and-updates') {
+    const newsListingTitle = (settings.newsSeoTitle || '').trim() || `News & Dispatches | ${shortBrand}`;
+    const newsListingDesc =
+      (settings.newsSeoDescription || '').trim() ||
+      'Stay informed with the latest dispatches, policy research, changemaker spotlights, and official announcements from NexGen Council.';
+    const customNewsKeywords = Array.isArray(settings.newsSeoKeywords) ? settings.newsSeoKeywords : [];
+
     return {
-      title: `News & Dispatches | ${shortBrand}`,
-      description:
-        'Stay informed with the latest dispatches, policy research, changemaker spotlights, and official announcements from NexGen Council.',
+      title: newsListingTitle,
+      description: newsListingDesc,
       canonicalUrl: `${siteUrl}/news`,
       ogType: 'website',
       ogImage: defaultLogo,
-      keywords: [...CORE_NEXGEN_KEYWORDS, 'NexGen news', 'NexGen announcements', 'youth policy updates'],
+      keywords: [
+        ...customNewsKeywords,
+        ...CORE_NEXGEN_KEYWORDS,
+        'NexGen news',
+        'NexGen announcements',
+        'youth policy updates'
+      ],
       jsonLd: [
         orgSchema,
         createBreadcrumbs([
@@ -474,14 +485,38 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
     if (article && article.status === 'Published') {
       const articleSlug = article.slug || article.id;
       const articleImage = article.coverImage.startsWith('http') ? article.coverImage : `${siteUrl}${article.coverImage}`;
+      const articleSeoTitle = (article.seoTitle || '').trim() || `${article.title} | ${shortBrand}`;
+      const articleSeoDesc = ((article.seoDescription || '').trim() || article.summary || '').slice(0, 160);
+      const articleCustomKeywords = Array.isArray(article.seoKeywords) ? article.seoKeywords : [];
+      const articleTags = Array.isArray(article.tags) ? article.tags : [];
+      const resolvedCanonical =
+        article.canonicalUrl && article.canonicalUrl.trim()
+          ? article.canonicalUrl.startsWith('http')
+            ? article.canonicalUrl
+            : `${siteUrl}${article.canonicalUrl.startsWith('/') ? '' : '/'}${article.canonicalUrl}`
+          : `${siteUrl}/news/${articleSlug}`;
+
+      const mergedArticleKeywords = Array.from(
+        new Set([
+          ...articleCustomKeywords,
+          ...articleTags,
+          article.category,
+          article.author,
+          ...CORE_NEXGEN_KEYWORDS
+        ].filter(Boolean))
+      );
+
       const articleSchema = {
         '@context': 'https://schema.org',
         '@type': 'NewsArticle',
         headline: article.title,
-        description: article.summary,
+        description: articleSeoDesc,
         image: [articleImage],
         datePublished: article.publishedAt,
         dateModified: article.publishedAt,
+        articleSection: article.category,
+        keywords: mergedArticleKeywords.join(', '),
+        mainEntityOfPage: resolvedCanonical,
         author: {
           '@type': 'Person',
           name: article.author || 'Council Editorial Board'
@@ -497,12 +532,12 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       };
 
       return {
-        title: `${article.title} | ${shortBrand}`,
-        description: article.summary.slice(0, 160),
-        canonicalUrl: `${siteUrl}/news/${articleSlug}`,
+        title: articleSeoTitle,
+        description: articleSeoDesc,
+        canonicalUrl: resolvedCanonical,
         ogType: 'article',
         ogImage: articleImage,
-        keywords: [...CORE_NEXGEN_KEYWORDS, article.title, article.category, article.author],
+        keywords: mergedArticleKeywords,
         publishedTime: article.publishedAt,
         modifiedTime: article.publishedAt,
         author: article.author,
@@ -512,7 +547,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
           createBreadcrumbs([
             { name: 'Home', url: `${siteUrl}/` },
             { name: 'News', url: `${siteUrl}/news` },
-            { name: article.title, url: `${siteUrl}/news/${articleSlug}` }
+            { name: article.title, url: resolvedCanonical }
           ])
         ]
       };
@@ -647,6 +682,252 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
     };
   }
 
+  // Handle Donate
+  if (cleanPath === '/donate' || cleanPath === '/donation' || cleanPath === '/support-us') {
+    const donatePoster = `${siteUrl}/assets/aistudio/2535e6a6-f29c-44fd-8f0c-05946ee38cac_8942ae05.jpg`;
+    const donateQr = `${siteUrl}/assets/donation-qr.png`;
+    const donateTitle = `Donate to NexGen Council | Support Youth & Communities`;
+    const donateDesc =
+      'Donate to NexGen Council for education, healthcare & community relief. Contribute easily via QR Till 992191268, Easypaisa, NayaPay, or JazzCash today.';
+
+    const donateActionSchema = {
+      '@context': 'https://schema.org',
+      '@type': 'DonateAction',
+      name: 'Donate to NexGen Council',
+      description: donateDesc,
+      recipient: {
+        '@id': `${siteUrl}/#organization`
+      },
+      target: {
+        '@type': 'EntryPoint',
+        urlTemplate: `${siteUrl}/donate`,
+        actionPlatform: [
+          'http://schema.org/DesktopWebPlatform',
+          'http://schema.org/MobileWebPlatform'
+        ]
+      }
+    };
+
+    const donatePageSchema = {
+      '@context': 'https://schema.org',
+      '@type': 'WebPage',
+      '@id': `${siteUrl}/donate#webpage`,
+      url: `${siteUrl}/donate`,
+      name: donateTitle,
+      description: donateDesc,
+      inLanguage: 'en',
+      isPartOf: { '@id': `${siteUrl}/#website` },
+      about: { '@id': `${siteUrl}/#organization` },
+      primaryImageOfPage: {
+        '@type': 'ImageObject',
+        url: donatePoster,
+        width: 1199,
+        height: 1312,
+        caption: 'NexGen Council Official Donation Drive — Your Donation Can Change Lives'
+      },
+      potentialAction: donateActionSchema
+    };
+
+    const donateHowToSchema = {
+      '@context': 'https://schema.org',
+      '@type': 'HowTo',
+      name: 'How to Donate to NexGen Council',
+      description: 'Donate securely to NexGen Council via QR Merchant Till 992191268, Easypaisa, or NayaPay/JazzCash.',
+      image: donateQr,
+      step: [
+        {
+          '@type': 'HowToStep',
+          position: 1,
+          name: 'Open Your Payment App',
+          text: 'Open Easypaisa, NayaPay, JazzCash, or any Raast-enabled Pakistani banking app on your phone.'
+        },
+        {
+          '@type': 'HowToStep',
+          position: 2,
+          name: 'Scan QR or Transfer Direct',
+          text: 'Scan the official Scan to Donate QR code (Merchant Till Number 992191268) or transfer to Easypaisa (Momna Kokab, 03497100560) or NayaPay / JazzCash (Minahil Imran, 03418408350).'
+        },
+        {
+          '@type': 'HowToStep',
+          position: 3,
+          name: 'Confirm Your Contribution',
+          text: 'Submit your Transaction ID (TID) and cause choice through the Donor Acknowledgment Desk on the donation page.'
+        }
+      ]
+    };
+
+    const donateFaqSchema = {
+      '@context': 'https://schema.org',
+      '@type': 'FAQPage',
+      mainEntity: [
+        {
+          '@type': 'Question',
+          name: 'How are donated funds utilized across NexGen Council programs?',
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: 'All contributions directly fuel grassroots program delivery across four pillars: Education (student scholarships, exam fee aid, and school kits), Healthcare (free community medical camps and essential medicines), Community Support (emergency food rations and family welfare), and Women & Youth Empowerment (vocational skill workshops and leadership fellowships).'
+          }
+        },
+        {
+          '@type': 'Question',
+          name: 'How can I donate to NexGen Council online in Pakistan?',
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: 'You can donate within seconds by scanning the official RAAST / Easypaisa Merchant QR code (Merchant Till Number: 992191268) from any Pakistani wallet or banking app, or by transferring directly to Easypaisa (Account Name: Momna Kokab · 03497100560) or NayaPay / JazzCash (Account Name: Minahil Imran · 03418408350).'
+          }
+        },
+        {
+          '@type': 'Question',
+          name: 'Are the Easypaisa, NayaPay, JazzCash, and QR accounts officially verified?',
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: 'Yes. Only the three official channels displayed on this page—Merchant Till 992191268, Easypaisa 03497100560 (Momna Kokab), and NayaPay / JazzCash 03418408350 (Minahil Imran)—are authorized for this campaign. Always verify the exact account title before confirming a transfer.'
+          }
+        },
+        {
+          '@type': 'Question',
+          name: 'Can I choose which specific cause my contribution supports?',
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: 'Yes. Use the cause selector on this page to dedicate your gift to Education, Healthcare, Community Support, or Women & Youth Empowerment, then mention your chosen cause when submitting your transfer confirmation in the Donor Acknowledgment Desk.'
+          }
+        },
+        {
+          '@type': 'Question',
+          name: 'Is there a minimum donation amount required?',
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: 'No contribution is too small. Whether PKR 500, PKR 1,000, PKR 2,500, or a larger institutional sponsorship, every single rupee combines to fund real school supplies, medicines, and household relief.'
+          }
+        },
+        {
+          '@type': 'Question',
+          name: 'Are funds routed through third-party intermediaries or high platform fees?',
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: 'No. Transfers sent via RAAST QR, Easypaisa, NayaPay, or JazzCash go directly to council-stewarded donation accounts without third-party crowdfunding commissions, maximizing the impact of every contribution on the ground.'
+          }
+        },
+        {
+          '@type': 'Question',
+          name: 'How do I receive confirmation or acknowledgment for my donation?',
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: 'Right after sending your transfer, enter your full name, email address, payment channel, amount, and Transaction ID (TID) into the Confirm Your Donation Transfer form on /donate. Our Secretariat records it immediately and issues a confirmation reference.'
+          }
+        },
+        {
+          '@type': 'Question',
+          name: 'How else can I support NexGen Council beyond financial donations?',
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: 'You can share this donation campaign link on WhatsApp or social media, sponsor in-kind educational kits or medical camp supplies through our Secretariat Desk, or apply to volunteer your skills with our regional cohorts.'
+          }
+        }
+      ]
+    };
+
+    return {
+      title: donateTitle,
+      description: donateDesc,
+      canonicalUrl: `${siteUrl}/donate`,
+      ogType: 'website',
+      ogImage: donatePoster,
+      keywords: [
+        ...CORE_NEXGEN_KEYWORDS,
+        'Donate NexGen Council',
+        'NexGen Council Donation',
+        'NexGen Donation Drive',
+        'Charity Pakistan',
+        'Donate Education Pakistan',
+        'Healthcare Charity Pakistan',
+        'Women Empowerment Donation Pakistan',
+        'Easypaisa Donation Pakistan',
+        'NayaPay JazzCash Donation',
+        'Merchant Till 992191268',
+        'Raast QR Charity Pakistan',
+        'SpreadKindness',
+        'TogetherForChange'
+      ],
+      jsonLd: [
+        orgSchema,
+        donatePageSchema,
+        donateHowToSchema,
+        donateFaqSchema,
+        createBreadcrumbs([
+          { name: 'Home', url: `${siteUrl}/` },
+          { name: 'Donate & Support', url: `${siteUrl}/donate` }
+        ])
+      ]
+    };
+  }
+
+  // Handle Site-Wide FAQ (/faq, /faqs)
+  if (cleanPath === '/faq' || cleanPath === '/faqs' || cleanPath === '/help') {
+    const siteFaqTitle = `Frequently Asked Questions | ${shortBrand}`;
+    const siteFaqDesc =
+      'Answers on NexGen Council membership, volunteer applications, Member ID cards, leadership programs, events, partnerships, and verified donation accounts.';
+    return {
+      title: siteFaqTitle,
+      description: siteFaqDesc,
+      canonicalUrl: `${siteUrl}/faq`,
+      ogType: 'website',
+      ogImage: defaultLogo,
+      keywords: [
+        ...CORE_NEXGEN_KEYWORDS,
+        'NexGen Council FAQ',
+        'NexGen volunteer FAQ',
+        'NexGen Member ID card',
+        'NexGen donations FAQ'
+      ],
+      jsonLd: [
+        orgSchema,
+        {
+          '@context': 'https://schema.org',
+          '@type': 'FAQPage',
+          mainEntity: [
+            {
+              '@type': 'Question',
+              name: 'What is NexGen Council (NexGen Women Empowerment & Youth Leadership Council)?',
+              acceptedAnswer: {
+                '@type': 'Answer',
+                text: 'NexGen Council is a civil society leadership organization empowering women and youth across Pakistan and international chapters through structured mentorship, leadership fellowships, civic policy forums, and grassroots humanitarian outreach.'
+              }
+            },
+            {
+              '@type': 'Question',
+              name: 'How can women and youth apply to join or volunteer with NexGen Council?',
+              acceptedAnswer: {
+                '@type': 'Answer',
+                text: `Anyone passionate about community service or leadership can submit an online application via the Join as Volunteer portal (${siteUrl}/volunteer).`
+              }
+            },
+            {
+              '@type': 'Question',
+              name: 'How do I track my volunteer application and get my Member ID Card?',
+              acceptedAnswer: {
+                '@type': 'Answer',
+                text: `Visit the Track Application portal (${siteUrl}/track) and enter your application reference ID or registered email address to check your status and download your official NexGen Council Member ID card.`
+              }
+            },
+            {
+              '@type': 'Question',
+              name: 'How can I donate to NexGen Council and how are funds utilized?',
+              acceptedAnswer: {
+                '@type': 'Answer',
+                text: 'You can donate safely via the official RAAST / Easypaisa Merchant QR (Till Number: 992191268), Easypaisa (Momna Kokab · 03497100560), or NayaPay / JazzCash (Minahil Imran · 03418408350). All funds directly support Education, Healthcare, Community Support, and Women & Youth Empowerment.'
+              }
+            }
+          ]
+        },
+        createBreadcrumbs([
+          { name: 'Home', url: `${siteUrl}/` },
+          { name: 'Frequently Asked Questions', url: `${siteUrl}/faq` }
+        ])
+      ]
+    };
+  }
+
   // Handle Meeting Room / Conferencing (/meeting/:slug, /room/:code) - STRICTLY PRIVATE / NOINDEX
   if (
     cleanPath.startsWith('/meeting/') ||
@@ -768,7 +1049,26 @@ export function generateSitemapXml(siteUrl: string): string {
         caption: g.caption || `${g.title} (${g.category}) photo archive`
       }))
     },
-    { url: `${siteUrl}/contact`, priority: '0.8', changefreq: 'monthly', lastmod: currentDate }
+    { url: `${siteUrl}/contact`, priority: '0.8', changefreq: 'monthly', lastmod: currentDate },
+    {
+      url: `${siteUrl}/donate`,
+      priority: '0.9',
+      changefreq: 'weekly',
+      lastmod: currentDate,
+      images: [
+        {
+          url: '/assets/aistudio/2535e6a6-f29c-44fd-8f0c-05946ee38cac_8942ae05.jpg',
+          title: 'NexGen Council Official Donation Drive — Your Donation Can Change Lives',
+          caption: 'Official NexGen Council donation appeal across Education, Healthcare, Community Support, and Women & Youth Empowerment'
+        },
+        {
+          url: '/assets/donation-qr.png',
+          title: 'Scan to Donate QR Code — NexGen Council Merchant Till 992191268',
+          caption: 'Official Raast & Easypaisa Merchant QR code for NexGen Council donations'
+        }
+      ]
+    },
+    { url: `${siteUrl}/faq`, priority: '0.8', changefreq: 'monthly', lastmod: currentDate }
   ];
 
   // Dynamic Programs
@@ -849,7 +1149,10 @@ Allow: /volunteer
 Allow: /gallery
 Allow: /team
 Allow: /contact
+Allow: /donate
+Allow: /faq
 Allow: /track
+Allow: /assets/
 Allow: /uploads/
 Allow: /*.jpg
 Allow: /*.png
@@ -1021,7 +1324,7 @@ export function injectSeoIntoHtml(
   if (result.includes('<div id="root"></div>')) {
     const cleanBase = escapeHtml(siteUrl.replace(/\/+$/, ''));
     const noscriptSemantic = !meta.noindex
-      ? `\n    <noscript><main style="font-family:system-ui,sans-serif;max-width:960px;margin:0 auto;padding:24px;"><h1>${safeTitle}</h1><p>${safeDesc}</p><nav aria-label="NexGen Council Navigation"><a href="${cleanBase}/">Home</a> | <a href="${cleanBase}/about">About NexGen</a> | <a href="${cleanBase}/programs">Leadership Programs</a> | <a href="${cleanBase}/events">Events</a> | <a href="${cleanBase}/news">News</a> | <a href="${cleanBase}/team">Executive Leadership</a> | <a href="${cleanBase}/gallery">Gallery</a> | <a href="${cleanBase}/volunteer">Volunteer</a> | <a href="${cleanBase}/contact">Contact</a></nav></main></noscript>`
+      ? `\n    <noscript><main style="font-family:system-ui,sans-serif;max-width:960px;margin:0 auto;padding:24px;"><h1>${safeTitle}</h1><p>${safeDesc}</p><nav aria-label="NexGen Council Navigation"><a href="${cleanBase}/">Home</a> | <a href="${cleanBase}/about">About NexGen</a> | <a href="${cleanBase}/programs">Leadership Programs</a> | <a href="${cleanBase}/events">Events</a> | <a href="${cleanBase}/news">News</a> | <a href="${cleanBase}/team">Executive Leadership</a> | <a href="${cleanBase}/gallery">Gallery</a> | <a href="${cleanBase}/donate">Donate</a> | <a href="${cleanBase}/faq">FAQ</a> | <a href="${cleanBase}/volunteer">Volunteer</a> | <a href="${cleanBase}/contact">Contact</a></nav></main></noscript>`
       : '';
 
     if (noscriptSemantic) {

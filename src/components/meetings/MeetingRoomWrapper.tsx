@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext.tsx';
+import { getInMemoryAuthToken } from '../../lib/api.ts';
 import { MeetingJoinPage } from './MeetingJoinPage.tsx';
 import { MeetingWaitingRoomPage } from './MeetingWaitingRoomPage.tsx';
 import { LiveMeetingRoom } from './LiveMeetingRoom.tsx';
@@ -69,13 +70,14 @@ export const MeetingRoomWrapper: React.FC<MeetingRoomWrapperProps> = ({
     const autoJoinLoggedInUser = async () => {
       setAutoJoining(true);
       try {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        const token = authToken || localStorage.getItem('ng_token');
+        const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
+        const token = authToken || getInMemoryAuthToken();
         if (token) headers['Authorization'] = `Bearer ${token}`;
 
         const res = await fetch(`/api/meetings/${encodeURIComponent(code)}/join`, {
           method: 'POST',
           headers,
+          credentials: 'include',
           body: JSON.stringify({
             displayName: currentUser.name || currentUser.username,
             email: currentUser.email || ''

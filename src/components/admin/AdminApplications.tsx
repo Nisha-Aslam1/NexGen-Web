@@ -135,11 +135,26 @@ export const AdminApplications: React.FC = () => {
     }
   };
 
-  const handleExportCSV = () => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('ng_token') : null;
-    const exportUrl = '/api/applications/export/csv' + (token ? `?auth_token=${encodeURIComponent(token)}` : '');
-    window.open(exportUrl, '_blank');
-    addToast('Exporting complete applicant CSV file...', 'info');
+  const handleExportCSV = async () => {
+    try {
+      const res = await authFetch('/api/applications/export/csv');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to export CSV');
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'nexgen-volunteer-applications.csv';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      addToast('Applicant CSV downloaded securely.', 'success');
+    } catch (err: any) {
+      addToast(err.message || 'Could not export CSV', 'error');
+    }
   };
 
   const uniqueCities = Array.from(new Set(applications.map(a => a.city).filter(Boolean)));

@@ -6,11 +6,14 @@ import {
   Edit2,
   Trash2,
   Calendar,
-  Clock,
   MapPin,
-  Users
+  Users,
+  Eye,
+  EyeOff,
+  X
 } from 'lucide-react';
 import { EventItem } from '../../types.ts';
+import { ImageUploader } from '../common/ImageUploader.tsx';
 
 export const AdminEvents: React.FC = () => {
   const { events, refreshData, addToast } = useApp();
@@ -22,30 +25,55 @@ export const AdminEvents: React.FC = () => {
     setEditingEvent({
       title: '',
       category: 'Summit',
-      date: '2026-10-20',
+      date: new Date().toISOString().split('T')[0],
       time: '10:00 AM - 4:00 PM',
       location: 'Central Civic Auditorium',
       description: '',
+      image: '/banner.png',
       capacity: 150,
+      registeredCount: 0,
+      showCapacity: true,
+      waitlistEnabled: false,
       status: 'Upcoming'
     });
     setIsModalOpen(true);
   };
 
   const openEditModal = (evt: EventItem) => {
-    setEditingEvent({ ...evt });
+    setEditingEvent({
+      ...evt,
+      capacity: evt.capacity ?? 0,
+      registeredCount: evt.registeredCount ?? 0,
+      showCapacity: evt.showCapacity !== false,
+      waitlistEnabled: Boolean(evt.waitlistEnabled)
+    });
     setIsModalOpen(true);
   };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingEvent || !editingEvent.title || !editingEvent.location) {
-      addToast('Please fill out required fields', 'error');
+    if (!editingEvent || !editingEvent.title?.trim() || !editingEvent.location?.trim()) {
+      addToast('Please fill out required event title and venue.', 'error');
       return;
     }
 
+    const cap = Math.max(0, Math.floor(Number(editingEvent.capacity) || 0));
+    const reg = Math.max(0, Math.floor(Number(editingEvent.registeredCount) || 0));
+
     setSaving(true);
     try {
+      const payload: Partial<EventItem> = {
+        ...editingEvent,
+        title: editingEvent.title.trim(),
+        location: editingEvent.location.trim(),
+        coverImage: editingEvent.image || editingEvent.coverImage || '/banner.png',
+        image: editingEvent.image || editingEvent.coverImage || '/banner.png',
+        capacity: cap,
+        registeredCount: reg,
+        showCapacity: editingEvent.showCapacity !== false,
+        waitlistEnabled: Boolean(editingEvent.waitlistEnabled)
+      };
+
       const isNew = !editingEvent.id;
       const url = isNew ? '/api/events' : `/api/events/${editingEvent.id}`;
       const method = isNew ? 'POST' : 'PUT';
@@ -53,12 +81,12 @@ export const AdminEvents: React.FC = () => {
       const res = await authFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editingEvent)
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to save event');
 
-      addToast(isNew ? 'Event created successfully!' : 'Event updated successfully!', 'success');
+      addToast(isNew ? 'Event created successfully!' : 'Event & capacity updated successfully!', 'success');
       setIsModalOpen(false);
       setEditingEvent(null);
       await refreshData();
@@ -66,6 +94,22 @@ export const AdminEvents: React.FC = () => {
       addToast(err.message || 'Error saving event', 'error');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleQuickAdjustSeats = async (evt: EventItem, delta: number) => {
+    const nextReg = Math.max(0, (evt.registeredCount || 0) + delta);
+    try {
+      const res = await authFetch(`/api/events/${evt.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ registeredCount: nextReg })
+      });
+      if (!res.ok) throw new Error('Failed to adjust registered seats');
+      addToast(`Updated registered delegates for "${evt.title}" to ${nextReg}`, 'success');
+      await refreshData();
+    } catch (err: any) {
+      addToast(err.message || 'Could not update seat count', 'error');
     }
   };
 
@@ -90,14 +134,15 @@ export const AdminEvents: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-serif font-bold text-slate-900">
-            Events &amp; Summits Manager
+            Events, Summits &amp; Capacity Manager
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Create and maintain scheduled workshops, youth summits, and community gatherings.
+            Create scheduled workshops and summits, configure delegate seat capacity, and control waitlist settings.
           </p>
         </div>
 
         <button
+          type="button"
           onClick={openNewEventModal}
           className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-950 text-white text-xs font-semibold hover:bg-indigo-900 transition-colors shadow-md cursor-pointer self-start sm:self-auto"
         >
@@ -107,75 +152,147 @@ export const AdminEvents: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {events.map(evt => (
-          <div
-            key={evt.id}
-            className="bg-white rounded-3xl border border-slate-200 p-6 shadow-xs hover:shadow-md transition-all flex flex-col justify-between space-y-4"
-          >
-            <div className="space-y-3">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-indigo-950 bg-indigo-50 px-2.5 py-0.5 rounded-full">
-                  {evt.category}
-                </span>
-                <span
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                    evt.status === 'Upcoming' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
-                  }`}
+        {events.map(evt => {
+          const cap = Number(evt.capacity || 0);
+          const reg = Number(evt.registeredCount || 0);
+          const isFull = cap > 0 && reg >= cap;
+
+          return (
+            <div
+              key={evt.id}
+              className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs hover:shadow-md transition-all flex flex-col justify-between space-y-4"
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs text-slate-500">
+                  <span className="font-semibold text-indigo-950">
+                    {evt.category} · {evt.status}
+                  </span>
+                  <span className="inline-flex items-center gap-1 text-[11px]">
+                    {evt.showCapacity !== false ? (
+                      <>
+                        <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Capacity Public</span>
+                      </>
+                    ) : (
+                      <>
+                        <EyeOff className="w-3.5 h-3.5 text-slate-400" />
+                        <span>Capacity Hidden</span>
+                      </>
+                    )}
+                  </span>
+                </div>
+
+                <h3 className="font-serif font-bold text-base text-slate-900 leading-snug">
+                  {evt.title}
+                </h3>
+
+                <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                  {evt.description}
+                </p>
+
+                <div className="space-y-1.5 text-xs text-slate-500 pt-2 border-t border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span>{evt.date} · {evt.time}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span className="truncate">{evt.location}</span>
+                  </div>
+                </div>
+
+                {/* Simple Capacity Text & Controls */}
+                <div className="pt-3 border-t border-slate-100 space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="inline-flex items-center gap-1.5 font-semibold text-slate-700">
+                      <Users className="w-3.5 h-3.5 text-indigo-700" />
+                      <span>Capacity:</span>
+                    </span>
+                    <span className="tabular-nums font-semibold text-slate-800">
+                      {cap > 0 ? `${cap} seats (${reg} registered)` : `Open Seating (${reg} registered)`}
+                    </span>
+                  </div>
+
+                  {cap > 0 && (
+                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                      <span className="tabular-nums">
+                        {isFull
+                          ? evt.waitlistEnabled
+                            ? 'Full · Waitlist Open'
+                            : 'Full'
+                          : 'Seats Available'}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleQuickAdjustSeats(evt, -1)}
+                          disabled={reg <= 0}
+                          className="px-2 py-0.5 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
+                          title="Decrease registered seat count by 1"
+                        >
+                          -1
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleQuickAdjustSeats(evt, 1)}
+                          className="px-2 py-0.5 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer"
+                          title="Add 1 manual/offline delegate seat"
+                        >
+                          +1
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => openEditModal(evt)}
+                  className="text-xs font-semibold text-indigo-900 hover:underline cursor-pointer"
                 >
-                  {evt.status}
-                </span>
-              </div>
-
-              <h3 className="font-serif font-bold text-base text-slate-900 leading-snug">
-                {evt.title}
-              </h3>
-
-              <p className="text-xs text-slate-600 line-clamp-3 leading-relaxed">
-                {evt.description}
-              </p>
-
-              <div className="space-y-1.5 text-xs text-slate-500 pt-2 border-t border-slate-100">
-                <div className="flex items-center gap-2">
-                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                  <span>{evt.date} • {evt.time}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                  <span className="truncate">{evt.location}</span>
+                  Manage Details &amp; Capacity
+                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => openEditModal(evt)}
+                    className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-950 hover:bg-slate-100 transition-colors cursor-pointer"
+                    title="Edit Event"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(evt.id, evt.title)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                    title="Delete Event"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
             </div>
-
-            <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-1.5">
-              <button
-                onClick={() => openEditModal(evt)}
-                className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-950 hover:bg-slate-100 transition-colors cursor-pointer"
-                title="Edit Event"
-              >
-                <Edit2 className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => handleDelete(evt.id, evt.title)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                title="Delete Event"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Modal */}
       {isModalOpen && editingEvent && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 space-y-5 shadow-2xl relative my-8 animate-in zoom-in-95">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 sm:p-8 space-y-5 shadow-2xl relative my-8 max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-200 pb-3">
               <h3 className="font-serif font-bold text-xl text-slate-900">
-                {editingEvent.id ? 'Edit Event Details' : 'Create New Event'}
+                {editingEvent.id ? 'Edit Event & Seat Capacity' : 'Create New Event'}
               </h3>
-              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-700 p-1">
-                ✕
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                className="text-slate-400 hover:text-slate-700 p-1 cursor-pointer"
+                aria-label="Close modal"
+              >
+                <X className="w-5 h-5" />
               </button>
             </div>
 
@@ -197,7 +314,7 @@ export const AdminEvents: React.FC = () => {
                   <label className="block font-semibold text-slate-700 mb-1">Category</label>
                   <select
                     value={editingEvent.category || 'Summit'}
-                    onChange={e => setEditingEvent({ ...editingEvent, category: e.target.value as any })}
+                    onChange={e => setEditingEvent({ ...editingEvent, category: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white"
                   >
                     <option value="Summit">Summit</option>
@@ -212,7 +329,7 @@ export const AdminEvents: React.FC = () => {
                   <label className="block font-semibold text-slate-700 mb-1">Status</label>
                   <select
                     value={editingEvent.status || 'Upcoming'}
-                    onChange={e => setEditingEvent({ ...editingEvent, status: e.target.value as any })}
+                    onChange={e => setEditingEvent({ ...editingEvent, status: e.target.value as EventItem['status'] })}
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white"
                   >
                     <option value="Upcoming">Upcoming</option>
@@ -253,6 +370,87 @@ export const AdminEvents: React.FC = () => {
                   onChange={e => setEditingEvent({ ...editingEvent, location: e.target.value })}
                   placeholder="e.g. City Conference Hall or Virtual Link"
                   className="w-full px-3 py-2 rounded-xl border border-slate-300"
+                />
+              </div>
+
+              {/* Delegate Capacity Management Block */}
+              <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-800 flex items-center gap-1.5">
+                    <Users className="w-4 h-4 text-indigo-800" />
+                    <span>Delegate Capacity &amp; Seat Controls</span>
+                  </span>
+                  <span className="text-[11px] text-slate-500">Set 0 for Unlimited</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Maximum Seat Capacity
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100000}
+                      value={editingEvent.capacity ?? 0}
+                      onChange={e =>
+                        setEditingEvent({
+                          ...editingEvent,
+                          capacity: Math.max(0, Number(e.target.value) || 0)
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Registered Delegates Count
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100000}
+                      value={editingEvent.registeredCount ?? 0}
+                      onChange={e =>
+                        setEditingEvent({
+                          ...editingEvent,
+                          registeredCount: Math.max(0, Number(e.target.value) || 0)
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white tabular-nums"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-5 pt-1">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editingEvent.showCapacity !== false}
+                      onChange={e => setEditingEvent({ ...editingEvent, showCapacity: e.target.checked })}
+                      className="w-4 h-4 rounded text-indigo-950"
+                    />
+                    <span className="font-medium text-slate-700">Show Capacity &amp; Remaining Seats Publicly</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(editingEvent.waitlistEnabled)}
+                      onChange={e => setEditingEvent({ ...editingEvent, waitlistEnabled: e.target.checked })}
+                      className="w-4 h-4 rounded text-indigo-950"
+                    />
+                    <span className="font-medium text-slate-700">Allow Waitlist When Full</span>
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <ImageUploader
+                  value={editingEvent.image || editingEvent.coverImage || ''}
+                  onChange={url => setEditingEvent({ ...editingEvent, image: url, coverImage: url })}
+                  label="Event Cover Banner (Optional)"
+                  helperText="Upload an event banner or paste an image URL"
                 />
               </div>
 

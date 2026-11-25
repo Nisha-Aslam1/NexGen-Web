@@ -119,6 +119,8 @@ export interface EventItem {
   status: 'Upcoming' | 'Past' | 'Draft';
   capacity?: number;
   registeredCount?: number;
+  showCapacity?: boolean;
+  waitlistEnabled?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -136,6 +138,12 @@ export interface NewsItem {
   publishedAt: string;
   status: 'Published' | 'Draft';
   featured: boolean;
+  tags?: string[];
+  readTimeMinutes?: number;
+  seoTitle?: string;
+  seoDescription?: string;
+  seoKeywords?: string[];
+  canonicalUrl?: string;
 }
 
 export interface TeamMember {
@@ -264,11 +272,22 @@ export interface WebsiteSettings {
   showContactPhone?: boolean;
   showOfficeHours?: boolean;
   showRegistrationNumber?: boolean;
+  showSocialLinks?: boolean;
+  socialLinksVisibility?: {
+    facebook?: boolean;
+    instagram?: boolean;
+    linkedin?: boolean;
+    twitter?: boolean;
+    youtube?: boolean;
+  };
   // SEO & Verification
   siteUrl?: string;
   metaDescription?: string;
   googleSiteVerification?: string;
   googleAnalyticsId?: string;
+  newsSeoTitle?: string;
+  newsSeoDescription?: string;
+  newsSeoKeywords?: string[];
   // About Page: Institutional Record & Directory
   directoryHeading?: string;
   primaryDomains?: string;

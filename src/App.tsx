@@ -16,6 +16,8 @@ const NewsPage = lazy(() => import('./components/public/NewsPage.tsx').then(m =>
 const GalleryPage = lazy(() => import('./components/public/GalleryPage.tsx').then(m => ({ default: m.GalleryPage })));
 const TeamPage = lazy(() => import('./components/public/TeamPage.tsx').then(m => ({ default: m.TeamPage })));
 const ContactPage = lazy(() => import('./components/public/ContactPage.tsx').then(m => ({ default: m.ContactPage })));
+const DonatePage = lazy(() => import('./components/public/DonatePage.tsx').then(m => ({ default: m.DonatePage })));
+const FaqPage = lazy(() => import('./components/public/FaqPage.tsx').then(m => ({ default: m.FaqPage })));
 const VolunteerForm = lazy(() => import('./components/public/VolunteerForm.tsx').then(m => ({ default: m.VolunteerForm })));
 const TrackApplication = lazy(() => import('./components/public/TrackApplication.tsx').then(m => ({ default: m.TrackApplication })));
 const NotFoundPage = lazy(() => import('./components/public/NotFoundPage.tsx').then(m => ({ default: m.NotFoundPage })));
@@ -158,6 +160,8 @@ const AppContent: React.FC = () => {
           {activePage === 'gallery' && <GalleryPage />}
           {activePage === 'team' && <TeamPage />}
           {activePage === 'contact' && <ContactPage />}
+          {activePage === 'donate' && <DonatePage />}
+          {activePage === 'faq' && <FaqPage />}
           {(activePage === 'volunteer' || activePage === 'volunteer-apply') && <VolunteerForm />}
           {(activePage === 'track' || activePage === 'track-application') && <TrackApplication />}
           {activePage === '404' && <NotFoundPage />}

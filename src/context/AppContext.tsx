@@ -13,6 +13,7 @@ import {
   DashboardStats,
   ActivityLog
 } from '../types.ts';
+import { getInMemoryAuthToken, setInMemoryAuthToken } from '../lib/api.ts';
 
 export type ActivePage =
   | 'home'
@@ -27,6 +28,8 @@ export type ActivePage =
   | 'track'
   | 'track-application'
   | 'contact'
+  | 'donate'
+  | 'faq'
   | 'admin-login'
   | 'admin'
   | 'room'
@@ -143,6 +146,8 @@ export function parsePathname(pathname: string, hash?: string): {
   if (clean === '/volunteer' || clean === '/volunteer-with-us' || clean === '/volunteer-apply') return { page: 'volunteer' };
   if (clean === '/track' || clean === '/track-application') return { page: 'track' };
   if (clean === '/contact' || clean === '/contact-us') return { page: 'contact' };
+  if (clean === '/donate' || clean === '/donation' || clean === '/support-us') return { page: 'donate' };
+  if (clean === '/faq' || clean === '/faqs' || clean === '/help') return { page: 'faq' };
   if (clean === '/admin-login' || clean === '/login') return { page: 'admin-login' };
   if (clean === '/admin/meetings') return { page: 'admin', adminTab: 'meetings' };
   if (clean === '/admin' || clean.startsWith('/admin/')) return { page: 'admin' };
@@ -176,6 +181,8 @@ export function getPathForPage(
   if (page === 'volunteer') return '/volunteer';
   if (page === 'track') return '/track';
   if (page === 'contact') return '/contact';
+  if (page === 'donate') return '/donate';
+  if (page === 'faq') return '/faq';
   if (page === 'admin-login') return '/admin-login';
   if (page === 'admin') return '/admin';
   if (page === 'meetings') return '/meetings';
@@ -244,7 +251,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [selectedMeetingCode, setSelectedMeetingCode] = useState<string | null>(initialNav.meetingCode || null);
 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem('ng_token'));
+  const [authToken, setAuthToken] = useState<string | null>(null);
   const [isLoadingAuth, setIsLoadingAuth] = useState<boolean>(true);
 
   // Synchronize browser history / popstate / hashchange
@@ -358,8 +365,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
       // Lightweight background badge counters
       if (currentUser) {
-        const token = localStorage.getItem('ng_token');
-        const headers: Record<string, string> = {};
+        const token = getInMemoryAuthToken();
+        const headers: Record<string, string> = { 'X-Requested-With': 'XMLHttpRequest' };
         if (token) headers['Authorization'] = `Bearer ${token}`;
 
         const res = await fetch('/api/analytics', { headers, credentials: 'include' });
@@ -424,8 +431,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const checkSession = async () => {
     setIsLoadingAuth(true);
     try {
-      const headers: Record<string, string> = {};
-      const token = localStorage.getItem('ng_token');
+      // Scrub any legacy localStorage token from prior builds
+      setInMemoryAuthToken(getInMemoryAuthToken());
+      const headers: Record<string, string> = { 'X-Requested-With': 'XMLHttpRequest' };
+      const token = getInMemoryAuthToken();
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
       const res = await fetch('/api/auth/session', { headers, credentials: 'include' });
@@ -454,7 +463,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Automatically log out immediately if backend rejects a session with 401 (revoked/expired)
   useEffect(() => {
     const handleUnauthorized = () => {
-      localStorage.removeItem('ng_token');
+      setInMemoryAuthToken(null);
       setAuthToken(null);
       setCurrentUser(prev => {
         if (prev) {
@@ -479,14 +488,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     const triggerIdleLogout = async () => {
       try {
-        const token = localStorage.getItem('ng_token');
-        const headers: Record<string, string> = {};
+        const token = getInMemoryAuthToken();
+        const headers: Record<string, string> = { 'X-Requested-With': 'XMLHttpRequest' };
         if (token) headers['Authorization'] = `Bearer ${token}`;
         await fetch('/api/auth/logout', { method: 'POST', headers, credentials: 'include' });
       } catch {
         // ignore
       }
-      localStorage.removeItem('ng_token');
+      setInMemoryAuthToken(null);
       setAuthToken(null);
       setCurrentUser(null);
       addToast('Signed out automatically after 30 minutes of inactivity for security.', 'info');
@@ -544,8 +553,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         };
       }
 
-      setAuthToken(data.token);
-      localStorage.setItem('ng_token', data.token);
+      setInMemoryAuthToken(data.token || null);
+      setAuthToken(data.token || null);
       setCurrentUser(data.user);
       addToast(`Welcome back, ${data.user.name}!`, 'success');
       setActivePage('admin');
@@ -561,7 +570,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     try {
       const res = await fetch('/api/auth/2fa/verify-login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
         body: JSON.stringify({ temp2faToken, code }),
         credentials: 'include'
       });
@@ -577,8 +586,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         };
       }
 
-      setAuthToken(data.token);
-      localStorage.setItem('ng_token', data.token);
+      setInMemoryAuthToken(data.token || null);
+      setAuthToken(data.token || null);
       setCurrentUser(data.user);
       if (data.usedBackupCode) {
         addToast(
@@ -599,14 +608,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const logout = async () => {
     try {
-      const token = localStorage.getItem('ng_token');
-      const headers: Record<string, string> = {};
+      const token = getInMemoryAuthToken();
+      const headers: Record<string, string> = { 'X-Requested-With': 'XMLHttpRequest' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
       await fetch('/api/auth/logout', { method: 'POST', headers, credentials: 'include' });
     } catch {
       // ignore
     }
-    localStorage.removeItem('ng_token');
+    setInMemoryAuthToken(null);
     setAuthToken(null);
     setCurrentUser(null);
     addToast('You have been securely logged out.', 'info');

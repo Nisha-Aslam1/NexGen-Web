@@ -120,6 +120,8 @@ function isHttpsRequest(req: Request): boolean {
 // Security Headers Middleware
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
   const reqHost = (req.headers['x-forwarded-host'] as string || req.headers.host || '').split(',')[0].trim().toLowerCase();
   const isAiStudioOrLocal =
     !reqHost ||
@@ -154,6 +156,7 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/api/') || req.path === '/admin' || req.path.startsWith('/admin/') || req.path === '/admin-login') {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.setHeader('Pragma', 'no-cache');
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
   }
   next();
 });
@@ -269,6 +272,10 @@ app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 const generalApiLimiter = rateLimit(240, 60 * 1000, 'global_api');
 const meetingRealtimeLimiter = rateLimit(2400, 60 * 1000, 'meetings_live_api');
+const authLoginLimiter = rateLimit(20, 15 * 60 * 1000, 'auth_login');
+const auth2faLimiter = rateLimit(25, 15 * 60 * 1000, 'auth_2fa');
+const passwordChangeLimiter = rateLimit(15, 15 * 60 * 1000, 'pwd_change');
+
 app.use('/api', (req, res, next) => {
   if (req.path.startsWith('/meetings')) {
     return meetingRealtimeLimiter(req, res, next);
@@ -276,23 +283,74 @@ app.use('/api', (req, res, next) => {
   return generalApiLimiter(req, res, next);
 });
 
-// Origin / CSRF guard for cookie-authenticated state-changing requests
+const PRIVILEGED_CSRF_PREFIXES = [
+  '/users',
+  '/system',
+  '/settings',
+  '/auth/change-password',
+  '/auth/2fa/setup',
+  '/auth/2fa/verify-setup',
+  '/auth/2fa/disable',
+  '/auth/revoke-all',
+  '/volunteers',
+  '/programs',
+  '/events',
+  '/news',
+  '/team',
+  '/gallery',
+  '/upload',
+  '/send-email',
+  '/email',
+  '/support-live/conversations',
+  '/support-ai/conversations'
+];
+
+// Origin / Referer / Custom-Header CSRF guard for cookie-authenticated state-changing requests
 app.use('/api', (req, res, next) => {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
-  // Skip check for explicit Bearer header API clients or public analytics beacons
+  // Skip check for explicit Bearer header API clients (including mobile APK & in-memory web header)
   if (req.headers.authorization?.startsWith('Bearer ')) return next();
-  const origin = req.headers.origin;
+
   const host = (req.headers['x-forwarded-host'] as string || req.headers.host || '').split(',')[0].trim().toLowerCase();
+  const origin = req.headers.origin;
+  const referer = req.headers.referer;
+
   if (origin && host) {
     try {
       const originHost = new URL(origin).host.toLowerCase();
       if (originHost !== host) {
         return res.status(403).json({ error: 'Cross-site request blocked for security.' });
       }
+      return next();
     } catch {
       return res.status(403).json({ error: 'Invalid request origin.' });
     }
   }
+
+  if (referer && host) {
+    try {
+      const refererHost = new URL(referer).host.toLowerCase();
+      if (refererHost !== host) {
+        return res.status(403).json({ error: 'Cross-site referer blocked for security.' });
+      }
+      return next();
+    } catch {
+      return res.status(403).json({ error: 'Invalid request referer.' });
+    }
+  }
+
+  const cookies = parseCookies(req.headers.cookie);
+  const isPrivilegedRoute =
+    PRIVILEGED_CSRF_PREFIXES.some(prefix => req.path.startsWith(prefix)) ||
+    (req.path.startsWith('/applications') && req.method !== 'POST');
+
+  if (cookies['ng_session'] && isPrivilegedRoute) {
+    const xrw = String(req.headers['x-requested-with'] || '').toLowerCase();
+    if (xrw !== 'xmlhttprequest') {
+      return res.status(403).json({ error: 'Missing same-origin verification header.' });
+    }
+  }
+
   next();
 });
 
@@ -385,6 +443,30 @@ function getSession(req: Request): AuthSession | null {
   return verifyToken(extractRawToken(req));
 }
 
+function buildSessionCookie(req: Request, token: string, maxAgeSeconds: number): string {
+  const encoded = encodeURIComponent(token);
+  if (isHttpsRequest(req)) {
+    return `ng_session=${encoded}; Path=/; HttpOnly; SameSite=None; Secure; Partitioned; Max-Age=${maxAgeSeconds}`;
+  }
+  return `ng_session=${encoded}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+}
+
+function validatePasswordStrength(password: string): string | null {
+  if (!password || password.length < 8) {
+    return 'Password must be at least 8 characters long.';
+  }
+  if (password.length > 200) {
+    return 'Password exceeds maximum allowed length.';
+  }
+  if (!/[a-zA-Z]/.test(password) || !/[\d\W_]/.test(password)) {
+    return 'Password must include letters and at least one number or symbol.';
+  }
+  if (/^(admin123|password|12345678|qwerty123)$/i.test(password)) {
+    return 'Please choose a stronger, non-trivial password.';
+  }
+  return null;
+}
+
 function normalizeRole(r?: string): string {
   if (!r) return '';
   const s = r.toUpperCase().replace(/[\s-]+/g, '_');
@@ -453,8 +535,8 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// 2. Authentication (Protected by Brute-Force Lockout Shield)
-app.post('/api/auth/login', async (req, res) => {
+// 2. Authentication (Protected by Brute-Force Lockout Shield + Route Rate Limiter)
+app.post('/api/auth/login', authLoginLimiter, async (req, res) => {
   const username = String(req.body?.username || req.body?.usernameOrEmail || '').trim();
   const password = String(req.body?.password || '').trim();
 
@@ -656,11 +738,10 @@ function issueFullSessionResponse(
   };
 
   const token = signToken(tokenPayload);
-  const secureFlag = isHttpsRequest(req) ? '; Secure' : '';
 
   res.setHeader(
     'Set-Cookie',
-    `ng_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secureFlag}`
+    buildSessionCookie(req, token, Math.floor(SESSION_TTL_MS / 1000))
   );
 
   db.logActivity({
@@ -682,8 +763,32 @@ function issueFullSessionResponse(
   });
 }
 
+// Per-user brute-force tracking for authenticated 2FA setup / disable actions
+const twoFactorActionFailures = new Map<string, { count: number; lockedUntil: number }>();
+
+function check2faActionLock(userId: string): number {
+  const rec = twoFactorActionFailures.get(userId);
+  if (rec && rec.lockedUntil > Date.now()) {
+    return Math.ceil((rec.lockedUntil - Date.now()) / 1000);
+  }
+  return 0;
+}
+
+function record2faActionFailure(userId: string): { locked: boolean; remaining: number; retryAfterSeconds: number } {
+  const now = Date.now();
+  const existing = twoFactorActionFailures.get(userId);
+  const nextCount = (!existing || existing.lockedUntil <= now - LOGIN_WINDOW_MS) ? 1 : existing.count + 1;
+  if (nextCount >= MAX_2FA_ATTEMPTS) {
+    const lockedUntil = now + LOGIN_LOCKOUT_MS;
+    twoFactorActionFailures.set(userId, { count: nextCount, lockedUntil });
+    return { locked: true, remaining: 0, retryAfterSeconds: Math.ceil(LOGIN_LOCKOUT_MS / 1000) };
+  }
+  twoFactorActionFailures.set(userId, { count: nextCount, lockedUntil: 0 });
+  return { locked: false, remaining: MAX_2FA_ATTEMPTS - nextCount, retryAfterSeconds: 0 };
+}
+
 // 2FA Step 2: Verify TOTP or single-use Backup Code
-app.post('/api/auth/2fa/verify-login', async (req, res) => {
+app.post('/api/auth/2fa/verify-login', auth2faLimiter, async (req, res) => {
   const temp2faToken = String(req.body?.temp2faToken || '').trim();
   const rawCode = String(req.body?.code || '').trim();
 
@@ -803,7 +908,7 @@ app.post('/api/auth/2fa/verify-login', async (req, res) => {
 });
 
 // 2FA Setup: Generate unique secret & QR Code for authenticated user
-app.post('/api/auth/2fa/setup', requireAuth(), async (req, res) => {
+app.post('/api/auth/2fa/setup', auth2faLimiter, requireAuth(), async (req, res) => {
   const session = (req as any).user as AuthSession;
   const liveUser = db.getUserById(session.userId);
   if (!liveUser) {
@@ -837,8 +942,16 @@ app.post('/api/auth/2fa/setup', requireAuth(), async (req, res) => {
 });
 
 // 2FA Verify Setup: Confirm 6-digit code, activate 2FA, and issue 6 one-time backup codes
-app.post('/api/auth/2fa/verify-setup', requireAuth(), (req, res) => {
+app.post('/api/auth/2fa/verify-setup', auth2faLimiter, requireAuth(), (req, res) => {
   const session = (req as any).user as AuthSession;
+  const lockRetry = check2faActionLock(session.userId);
+  if (lockRetry > 0) {
+    res.setHeader('Retry-After', String(lockRetry));
+    return res.status(429).json({
+      error: `Too many invalid 2FA verification attempts. Please try again in ${Math.ceil(lockRetry / 60)} minute(s).`
+    });
+  }
+
   const token = String(req.body?.token || req.body?.code || '').replace(/\s+/g, '');
 
   if (!/^\d{6}$/.test(token)) {
@@ -863,9 +976,30 @@ app.post('/api/auth/2fa/verify-setup', requireAuth(), (req, res) => {
   }
 
   if (!isValid) {
-    return res.status(400).json({ error: 'Invalid 6-digit code. Make sure your device clock is synced and try the latest code.' });
+    const fail = record2faActionFailure(session.userId);
+    if (fail.locked) {
+      blockedAttemptsCount += 1;
+      db.logActivity({
+        userId: session.userId,
+        userName: session.name,
+        userRole: session.role,
+        action: 'TWO_FACTOR_ACTION_LOCKED',
+        entityType: 'Security',
+        entityId: session.userId,
+        details: `Locked 2FA setup verification for ${session.username} after ${MAX_2FA_ATTEMPTS} invalid codes.`,
+        ipAddress: getClientIp(req)
+      });
+      res.setHeader('Retry-After', String(fail.retryAfterSeconds));
+      return res.status(429).json({
+        error: 'Too many invalid 2FA attempts. Temporarily locked for 15 minutes.'
+      });
+    }
+    return res.status(400).json({
+      error: `Invalid 6-digit code. Make sure your device clock is synced and try the latest code (${fail.remaining} attempt(s) left).`
+    });
   }
 
+  twoFactorActionFailures.delete(session.userId);
   const backupCodes = generateBackupCodes(6);
   const hashedCodes = backupCodes.map(c => hashBackupCode(session.userId, c));
   const updatedUser = db.enableUser2fa(session.userId, hashedCodes);
@@ -889,8 +1023,16 @@ app.post('/api/auth/2fa/verify-setup', requireAuth(), (req, res) => {
 });
 
 // 2FA Disable: Requires valid current password OR valid 6-digit TOTP code
-app.post('/api/auth/2fa/disable', requireAuth(), (req, res) => {
+app.post('/api/auth/2fa/disable', auth2faLimiter, requireAuth(), (req, res) => {
   const session = (req as any).user as AuthSession;
+  const lockRetry = check2faActionLock(session.userId);
+  if (lockRetry > 0) {
+    res.setHeader('Retry-After', String(lockRetry));
+    return res.status(429).json({
+      error: `Too many invalid verification attempts. Please try again in ${Math.ceil(lockRetry / 60)} minute(s).`
+    });
+  }
+
   const password = String(req.body?.password || '').trim();
   const code = String(req.body?.code || req.body?.token || '').replace(/\s+/g, '');
 
@@ -916,11 +1058,30 @@ app.post('/api/auth/2fa/disable', requireAuth(), (req, res) => {
   }
 
   if (!authorized) {
+    const fail = record2faActionFailure(session.userId);
+    if (fail.locked) {
+      blockedAttemptsCount += 1;
+      db.logActivity({
+        userId: session.userId,
+        userName: session.name,
+        userRole: session.role,
+        action: 'TWO_FACTOR_ACTION_LOCKED',
+        entityType: 'Security',
+        entityId: session.userId,
+        details: `Locked 2FA disable verification for ${session.username} after repeated failed checks.`,
+        ipAddress: getClientIp(req)
+      });
+      res.setHeader('Retry-After', String(fail.retryAfterSeconds));
+      return res.status(429).json({
+        error: 'Too many invalid verification attempts. Temporarily locked for 15 minutes.'
+      });
+    }
     return res.status(401).json({
-      error: 'Verification failed. Enter your current password or a valid 6-digit Google Authenticator code to disable 2FA.'
+      error: `Verification failed. Enter your current password or a valid 6-digit Google Authenticator code (${fail.remaining} attempt(s) left).`
     });
   }
 
+  twoFactorActionFailures.delete(session.userId);
   const updatedUser = db.disableUser2fa(session.userId);
   db.logActivity({
     userId: session.userId,
@@ -944,12 +1105,11 @@ app.post('/api/auth/logout', (req, res) => {
   if (session?.jti) {
     revokedTokenJtis.set(session.jti, session.exp);
   }
-  const secureFlag = isHttpsRequest(req) ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `ng_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureFlag}`);
+  res.setHeader('Set-Cookie', buildSessionCookie(req, '', 0));
   res.json({ ok: true });
 });
 
-app.post('/api/auth/revoke-all', requireAuth(['SUPER_ADMIN']), (req, res) => {
+app.post('/api/auth/revoke-all', passwordChangeLimiter, requireAuth(['SUPER_ADMIN']), (req, res) => {
   const cutoff = db.revokeAllSessions();
   const user = (req as any).user as AuthSession;
   db.logActivity({
@@ -961,12 +1121,11 @@ app.post('/api/auth/revoke-all', requireAuth(['SUPER_ADMIN']), (req, res) => {
     details: 'Super Admin invalidated all active authentication sessions across all devices.',
     ipAddress: getClientIp(req)
   });
-  const secureFlag = isHttpsRequest(req) ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `ng_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureFlag}`);
+  res.setHeader('Set-Cookie', buildSessionCookie(req, '', 0));
   res.json({ ok: true, revokedAt: cutoff, message: 'All active admin sessions have been signed out immediately.' });
 });
 
-app.put('/api/auth/change-password', requireAuth(), (req, res) => {
+app.put('/api/auth/change-password', passwordChangeLimiter, requireAuth(), (req, res) => {
   const session = (req as any).user as AuthSession;
   const currentPassword = String(req.body?.currentPassword || '').trim();
   const newPassword = String(req.body?.newPassword || '').trim();
@@ -974,15 +1133,34 @@ app.put('/api/auth/change-password', requireAuth(), (req, res) => {
   if (!currentPassword || !newPassword) {
     return res.status(400).json({ error: 'Current password and new password are required.' });
   }
-  if (newPassword.length < 8) {
-    return res.status(400).json({ error: 'New password must be at least 8 characters long.' });
+  const strengthErr = validatePasswordStrength(newPassword);
+  if (strengthErr) {
+    return res.status(400).json({ error: strengthErr });
   }
   if (!db.verifyUserPassword(session.userId, currentPassword)) {
     return res.status(401).json({ error: 'Current password is incorrect.' });
   }
 
   try {
-    db.updateUser(session.userId, { password: newPassword });
+    const updatedUser = db.updateUser(session.userId, { password: newPassword });
+    if (session.jti) {
+      revokedTokenJtis.set(session.jti, session.exp);
+    }
+
+    const now = Date.now();
+    const refreshedPayload: AuthSession = {
+      userId: session.userId,
+      username: updatedUser?.username || session.username,
+      name: updatedUser?.name || session.name,
+      role: updatedUser?.role || session.role,
+      jti: crypto.randomBytes(16).toString('hex'),
+      iat: now,
+      tv: db.getUserTokenVersion(session.userId),
+      exp: now + SESSION_TTL_MS
+    };
+    const freshToken = signToken(refreshedPayload);
+    res.setHeader('Set-Cookie', buildSessionCookie(req, freshToken, Math.floor(SESSION_TTL_MS / 1000)));
+
     db.logActivity({
       userId: session.userId,
       userName: session.name,
@@ -993,7 +1171,12 @@ app.put('/api/auth/change-password', requireAuth(), (req, res) => {
       details: `${session.username} updated their own account password.`,
       ipAddress: getClientIp(req)
     });
-    res.json({ ok: true, message: 'Password updated cleanly. Other active sessions were invalidated.' });
+    res.json({
+      ok: true,
+      token: freshToken,
+      user: updatedUser,
+      message: 'Password updated cleanly. Other active sessions were invalidated.'
+    });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -1014,6 +1197,10 @@ app.get('/api/system/security-status', requireAuth(['SUPER_ADMIN']), (req, res) 
     blockedAttemptsCount,
     csrfOriginProtection: true,
     httpsSecureCookies: isHttpsRequest(req),
+    httpOnlyPartitionedCookies: isHttpsRequest(req),
+    inMemoryWebTokens: true,
+    passwordPolicyMinLength: 8,
+    twoFactorBruteForceProtection: true,
     svgUploadBlocked: true
   });
 });
@@ -1515,24 +1702,80 @@ app.get('/api/events', (req, res) => {
   res.json(events);
 });
 
+const eventRsvpLimiter = rateLimit(30, 15 * 60 * 1000, 'event_rsvp');
+
+app.post('/api/events/:id/rsvp', eventRsvpLimiter, (req, res) => {
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+
+  if (name.length < 2 || !isValidEmailAddress(email)) {
+    return res.status(400).json({ error: 'Please provide your full name and a valid email address.' });
+  }
+
+  const outcome = db.registerEventRsvp(req.params.id);
+  if (outcome.status === 'not_found' || !outcome.event) {
+    return res.status(404).json({ error: 'Event not found.' });
+  }
+  if (outcome.status === 'full') {
+    return res.status(409).json({
+      error: 'This event has reached maximum delegate capacity.',
+      event: outcome.event
+    });
+  }
+
+  db.logActivity({
+    userId: 'public_visitor',
+    userName: name.slice(0, 80),
+    userRole: 'DELEGATE',
+    action: outcome.status === 'waitlisted' ? 'EVENT_WAITLISTED' : 'EVENT_RSVP',
+    entityType: 'Event',
+    entityId: outcome.event.id,
+    details: `${name.slice(0, 80)} (${email}) ${outcome.status === 'waitlisted' ? 'joined waitlist' : 'reserved seat'} for "${outcome.event.title}" (${outcome.event.registeredCount || 0}/${outcome.event.capacity || '∞'}).`,
+    ipAddress: getClientIp(req)
+  });
+
+  res.status(201).json({
+    ok: true,
+    status: outcome.status,
+    event: outcome.event,
+    message:
+      outcome.status === 'waitlisted'
+        ? 'Event capacity is currently full — your seat request has been placed on the priority waitlist.'
+        : 'Your delegate seat has been reserved successfully.'
+  });
+});
+
 app.post('/api/events', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), (req, res) => {
-  const body = req.body;
+  const body = req.body || {};
   if (!body.title || !body.date) {
     return res.status(400).json({ error: 'Title and date are required.' });
   }
+  const parsedCapacity =
+    body.capacity !== undefined && body.capacity !== '' && body.capacity !== null
+      ? Math.max(0, Math.floor(Number(body.capacity) || 0))
+      : 100;
+  const parsedRegistered =
+    body.registeredCount !== undefined && body.registeredCount !== '' && body.registeredCount !== null
+      ? Math.max(0, Math.floor(Number(body.registeredCount) || 0))
+      : 0;
+
   const eventItem = db.createEvent({
-    title: body.title,
+    title: String(body.title).trim(),
+    slug: body.slug ? String(body.slug).trim() : undefined,
     category: body.category || 'General',
     description: body.description || '',
-    image: body.image || 'https://images.unsplash.com/photo-1511578314322-379afb476865?w=900&auto=format&fit=crop&q=80',
+    image: body.image || body.coverImage || '/banner.png',
+    coverImage: body.coverImage || body.image || '/banner.png',
     date: body.date,
     time: body.time || '10:00 AM',
     location: body.location || 'Online / Regional Center',
     isVirtual: Boolean(body.isVirtual),
     registrationUrl: body.registrationUrl || '#volunteer',
     status: body.status || 'Upcoming',
-    capacity: body.capacity ? Number(body.capacity) : 100,
-    registeredCount: 0
+    capacity: parsedCapacity,
+    registeredCount: parsedRegistered,
+    showCapacity: body.showCapacity !== undefined ? Boolean(body.showCapacity) : true,
+    waitlistEnabled: Boolean(body.waitlistEnabled)
   });
 
   const user = (req as any).user;
@@ -1543,16 +1786,27 @@ app.post('/api/events', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINA
     action: 'EVENT_CREATED',
     entityType: 'Event',
     entityId: eventItem.id,
-    details: `Created event: "${eventItem.title}" on ${eventItem.date}`,
-    ipAddress: req.ip || 'unknown'
+    details: `Created event: "${eventItem.title}" on ${eventItem.date} (Capacity: ${eventItem.capacity || 'Unlimited'})`,
+    ipAddress: getClientIp(req)
   });
 
   res.status(201).json(eventItem);
 });
 
 app.put('/api/events/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), (req, res) => {
-  const updated = db.updateEvent(req.params.id, req.body);
+  const updated = db.updateEvent(req.params.id, req.body || {});
   if (!updated) return res.status(404).json({ error: 'Event not found' });
+  const user = (req as any).user;
+  db.logActivity({
+    userId: user.userId,
+    userName: user.name,
+    userRole: user.role,
+    action: 'EVENT_UPDATED',
+    entityType: 'Event',
+    entityId: updated.id,
+    details: `Updated event "${updated.title}" (Registered: ${updated.registeredCount || 0}/${updated.capacity || 'Unlimited'})`,
+    ipAddress: getClientIp(req)
+  });
   res.json(updated);
 });
 
@@ -1570,24 +1824,31 @@ app.get('/api/news', (req, res) => {
 });
 
 app.post('/api/news', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
-  const body = req.body;
-  if (!body.title || !body.content) {
-    return res.status(400).json({ error: 'Title and content are required.' });
+  const body = req.body || {};
+  if (!body.title || (!body.content && !body.summary)) {
+    return res.status(400).json({ error: 'Title and article content or summary are required.' });
   }
-  const slug = body.slug || body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  const slug = (body.slug || body.title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
   const user = (req as any).user;
+  const articleBody = String(body.content || body.summary || '').trim();
   const newsItem = db.createNews({
-    title: body.title,
+    title: String(body.title).trim(),
     slug,
     category: body.category || 'Announcement',
     author: body.author || user.name,
     authorRole: body.authorRole || 'Editorial Board',
-    coverImage: body.coverImage || 'https://images.unsplash.com/photo-1521737604893-d14cc237f11d?w=900&auto=format&fit=crop&q=80',
-    summary: body.summary || body.content.slice(0, 150) + '...',
-    content: body.content,
+    coverImage: body.coverImage || '/banner.png',
+    summary: body.summary || articleBody.slice(0, 160),
+    content: articleBody,
     publishedAt: body.publishedAt || new Date().toISOString(),
     status: body.status || 'Published',
-    featured: Boolean(body.featured)
+    featured: Boolean(body.featured),
+    tags: body.tags,
+    readTimeMinutes: body.readTimeMinutes,
+    seoTitle: body.seoTitle,
+    seoDescription: body.seoDescription,
+    seoKeywords: body.seoKeywords,
+    canonicalUrl: body.canonicalUrl
   });
 
   db.logActivity({
@@ -1598,15 +1859,26 @@ app.post('/api/news', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_O
     entityType: 'News',
     entityId: newsItem.id,
     details: `Published news article: "${newsItem.title}"`,
-    ipAddress: req.ip || 'unknown'
+    ipAddress: getClientIp(req)
   });
 
   res.status(201).json(newsItem);
 });
 
 app.put('/api/news/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
-  const updated = db.updateNews(req.params.id, req.body);
+  const updated = db.updateNews(req.params.id, req.body || {});
   if (!updated) return res.status(404).json({ error: 'Article not found' });
+  const user = (req as any).user;
+  db.logActivity({
+    userId: user.userId,
+    userName: user.name,
+    userRole: user.role,
+    action: 'NEWS_UPDATED',
+    entityType: 'News',
+    entityId: updated.id,
+    details: `Updated news article & SEO metadata: "${updated.title}"`,
+    ipAddress: getClientIp(req)
+  });
   res.json(updated);
 });
 
@@ -2362,7 +2634,7 @@ app.put('/api/settings', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) =
     action: 'SETTINGS_UPDATED',
     entityType: 'WebsiteSettings',
     details: 'Website configuration and content text were updated.',
-    ipAddress: req.ip || 'unknown'
+    ipAddress: getClientIp(req)
   });
   res.json(updated);
 });
@@ -2391,8 +2663,9 @@ app.post('/api/users', requireAuth(['SUPER_ADMIN']), (req, res) => {
   if (!ALLOWED_ROLES.includes(String(role))) {
     return res.status(400).json({ error: 'Invalid role specified.' });
   }
-  if (String(password).trim().length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters long for security.' });
+  const strengthErr = validatePasswordStrength(String(password).trim());
+  if (strengthErr) {
+    return res.status(400).json({ error: strengthErr });
   }
   const cleanAvatar = typeof avatar === 'string' ? avatar.trim() : undefined;
   if (cleanAvatar && !/^(\/|https?:\/\/)/i.test(cleanAvatar)) {
@@ -2424,8 +2697,11 @@ app.put('/api/users/:id', requireAuth(['SUPER_ADMIN']), (req, res) => {
   if (role && !ALLOWED_ROLES.includes(String(role))) {
     return res.status(400).json({ error: 'Invalid role specified.' });
   }
-  if (password && String(password).trim().length < 8) {
-    return res.status(400).json({ error: 'Reset password must be at least 8 characters long.' });
+  if (password) {
+    const strengthErr = validatePasswordStrength(String(password).trim());
+    if (strengthErr) {
+      return res.status(400).json({ error: strengthErr });
+    }
   }
   const cleanAvatar = typeof avatar === 'string' ? avatar.trim() : undefined;
   if (cleanAvatar && !/^(\/|https?:\/\/)/i.test(cleanAvatar)) {
@@ -2711,7 +2987,7 @@ app.get('/api/analytics/export', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'CON
 });
 
 // 16. MongoDB & System Status (Strictly Super Admin Authenticated)
-app.get('/api/system/database-status', requireAuth(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
+app.get('/api/system/database-status', requireAuth(['SUPER_ADMIN']), async (req, res) => {
   const mongoStatus = await getMongoStatus();
   const summary = {
     ...mongoStatus,
@@ -2779,23 +3055,67 @@ app.get('/api/system/admin-credentials', requireAuth(['SUPER_ADMIN']), (req, res
   res.json(creds);
 });
 
-app.post('/api/system/admin-credentials', requireAuth(['SUPER_ADMIN']), (req, res) => {
-  const { username, password, email } = req.body;
+app.post('/api/system/admin-credentials', passwordChangeLimiter, requireAuth(['SUPER_ADMIN']), (req, res) => {
+  const session = (req as any).user as AuthSession;
+  const username = String(req.body?.username || '').trim();
+  const currentPassword = String(req.body?.currentPassword || '').trim();
+  const password = String(req.body?.password || '').trim();
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim() : undefined;
+
   if (!username || !password) {
-    return res.status(400).json({ success: false, message: 'Username and password are required.' });
+    return res.status(400).json({ success: false, message: 'Username and new password are required.' });
   }
-  if (password.length < 4) {
-    return res.status(400).json({ success: false, message: 'Password must be at least 4 characters.' });
+  if (!currentPassword) {
+    return res.status(400).json({ success: false, message: 'Current admin password is required to confirm this change.' });
   }
+  if (!db.verifyUserPassword(session.userId, currentPassword)) {
+    return res.status(401).json({ success: false, message: 'Current admin password is incorrect.' });
+  }
+  const strengthErr = validatePasswordStrength(password);
+  if (strengthErr) {
+    return res.status(400).json({ success: false, message: strengthErr });
+  }
+
   try {
     const updatedUser = db.updateSuperAdminCredentials(username, password, email);
+    if (session.jti) {
+      revokedTokenJtis.set(session.jti, session.exp);
+    }
+
+    const now = Date.now();
+    const refreshedPayload: AuthSession = {
+      userId: updatedUser.id,
+      username: updatedUser.username,
+      name: updatedUser.name,
+      role: updatedUser.role,
+      jti: crypto.randomBytes(16).toString('hex'),
+      iat: now,
+      tv: db.getUserTokenVersion(updatedUser.id),
+      exp: now + SESSION_TTL_MS
+    };
+    const freshToken = signToken(refreshedPayload);
+    res.setHeader('Set-Cookie', buildSessionCookie(req, freshToken, Math.floor(SESSION_TTL_MS / 1000)));
+
+    db.logActivity({
+      userId: session.userId,
+      userName: session.name,
+      userRole: session.role,
+      action: 'SUPER_ADMIN_CREDENTIALS_UPDATED',
+      entityType: 'Security',
+      entityId: updatedUser.id,
+      details: `Updated Super Admin credentials for @${updatedUser.username} and rotated active session tokens.`,
+      ipAddress: getClientIp(req)
+    });
+
     res.json({
+      ok: true,
       success: true,
-      message: 'Super Admin credentials successfully updated and synced across .env and persistent storage.',
+      token: freshToken,
+      message: 'Super Admin credentials securely updated. Other active sessions were invalidated.',
       user: updatedUser
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(400).json({ success: false, message: err.message });
   }
 });
 

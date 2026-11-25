@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext.tsx';
-import { authFetch } from '../../lib/api.ts';
+import { authFetch, setInMemoryAuthToken } from '../../lib/api.ts';
 import {
   ShieldCheck,
   UserPlus,
@@ -415,8 +415,8 @@ export const AdminUsers: React.FC = () => {
 
   const handleOwnPasswordUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (ownPwdForm.newPassword.length < 8) {
-      addToast('New password must be at least 8 characters long.', 'error');
+    if (ownPwdForm.newPassword.length < 8 || !/[a-zA-Z]/.test(ownPwdForm.newPassword) || !/[\d\W_]/.test(ownPwdForm.newPassword)) {
+      addToast('New password must be at least 8 characters and include letters plus a number or symbol.', 'error');
       return;
     }
     if (ownPwdForm.newPassword !== ownPwdForm.confirmPassword) {
@@ -435,6 +435,9 @@ export const AdminUsers: React.FC = () => {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Password update failed');
+      if (data.token) {
+        setInMemoryAuthToken(data.token);
+      }
       addToast(data.message || 'Password updated cleanly!', 'success');
       setIsOwnPwdOpen(false);
       setOwnPwdForm({ currentPassword: '', newPassword: '', confirmPassword: '' });

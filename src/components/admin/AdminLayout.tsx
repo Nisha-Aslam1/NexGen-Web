@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp, AdminTab, canAccessAdminTab } from '../../context/AppContext.tsx';
-import { authFetch } from '../../lib/api.ts';
+import { authFetch, setInMemoryAuthToken } from '../../lib/api.ts';
 import { TwoFactorSettingsCard } from './TwoFactorSettingsCard.tsx';
 import { VolunteerIdCardModal } from './VolunteerIdCardModal.tsx';
 import {
@@ -56,10 +56,12 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
   const [showPwdFields, setShowPwdFields] = useState(false);
   const [savingPwd, setSavingPwd] = useState(false);
 
+  const [dismissed2faReminder, setDismissed2faReminder] = useState(false);
+
   const handleChangeOwnPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (pwdForm.newPassword.length < 8) {
-      addToast('New password must be at least 8 characters long.', 'error');
+    if (pwdForm.newPassword.length < 8 || !/[a-zA-Z]/.test(pwdForm.newPassword) || !/[\d\W_]/.test(pwdForm.newPassword)) {
+      addToast('New password must be at least 8 characters and include letters plus a number or symbol.', 'error');
       return;
     }
     if (pwdForm.newPassword !== pwdForm.confirmPassword) {
@@ -78,6 +80,9 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to update password');
+      if (data.token) {
+        setInMemoryAuthToken(data.token);
+      }
       addToast(data.message || 'Password updated successfully!', 'success');
       setIsPasswordModalOpen(false);
       setPwdForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
@@ -361,15 +366,46 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
 
         {/* Scrollable Dashboard Body */}
         <div className="flex-1 p-4 sm:p-8 overflow-y-auto flex flex-col justify-between">
-          <div className="max-w-7xl mx-auto w-full">{children}</div>
+          <div className="max-w-7xl mx-auto w-full space-y-5">
+            {currentUser && !currentUser.twoFactorEnabled && !dismissed2faReminder && (
+              <div className="rounded-2xl border border-amber-300/80 bg-amber-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950">
+                <div className="flex items-center gap-2.5">
+                  <ShieldCheck className="w-4 h-4 text-amber-700 shrink-0" />
+                  <span>
+                    <strong>Recommended Security Step:</strong> Enable Two-Factor Authentication (2FA) to protect your staff account with Google Authenticator.
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setIsPasswordModalOpen(true)}
+                    className="px-3 py-1.5 rounded-lg bg-indigo-950 hover:bg-indigo-900 text-white font-semibold cursor-pointer transition-colors"
+                  >
+                    Enable 2FA Now
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDismissed2faReminder(true)}
+                    className="px-2 py-1 text-amber-800 hover:text-amber-950 cursor-pointer"
+                    aria-label="Dismiss 2FA reminder"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
+            {children}
+          </div>
 
-          {/* Admin Workspace Footer & Developer Watermark */}
+          {/* Admin Workspace Footer */}
           <footer className="max-w-7xl mx-auto w-full mt-12 pt-6 pb-2 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
             <p>© {new Date().getFullYear()} NexGen Council Administrative Console. All rights reserved.</p>
-            <div className="inline-flex items-center gap-1.5 font-medium text-slate-600 bg-white px-3 py-1.5 rounded-full border border-slate-200 shadow-2xs">
-              <Code2 className="w-3.5 h-3.5 text-indigo-600" />
-              <span>Platform Developed by</span>
-              <span className="font-bold text-slate-900">Nisha Aslam</span>
+            <div className="flex items-center gap-2 text-slate-500">
+              <span>Session Auto-Lock: 30m</span>
+              <span aria-hidden="true">·</span>
+              <span>
+                Platform Developed by <strong className="font-semibold text-slate-900">Nisha Aslam</strong>
+              </span>
             </div>
           </footer>
         </div>

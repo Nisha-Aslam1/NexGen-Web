@@ -23,6 +23,7 @@ import {
 import { Program, EventItem, TeamMember } from '../../types.ts';
 import { useDocumentSEO } from '../../lib/seo.ts';
 import { LeaderProfileModal } from './LeaderProfileModal.tsx';
+import { SiteFAQ } from './SiteFAQ.tsx';
 
 export const HomePage: React.FC = () => {
   const { setActivePage, settings, programs, events, news, team } = useApp();
@@ -766,6 +767,11 @@ export const HomePage: React.FC = () => {
             ))}
           </div>
         </div>
+      </section>
+
+      {/* Site-Wide Frequently Asked Questions */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <SiteFAQ defaultCategory="All" />
       </section>
 
       {/* 10 & 11. VOLUNTEER CTA & CONTACT INQUIRY BANNER */}
