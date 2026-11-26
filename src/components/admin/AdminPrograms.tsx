@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { Program } from '../../types.ts';
 import { ImageUploader } from '../common/ImageUploader.tsx';
+import { buildAutoImageAlt } from '../../lib/imageSeo.ts';
 
 export const AdminPrograms: React.FC = () => {
   const { programs, refreshData, addToast } = useApp();
@@ -122,7 +123,12 @@ export const AdminPrograms: React.FC = () => {
               <div className="aspect-16/9 bg-slate-900 relative overflow-hidden">
                 <img
                   src={prg.coverImage || '/banner.png'}
-                  alt={prg.title}
+                  alt={buildAutoImageAlt({
+                    type: 'program',
+                    customAlt: prg.imageAlt,
+                    title: prg.title,
+                    category: prg.category
+                  })}
                   referrerPolicy="no-referrer"
                   onError={(e) => {
                     const el = e.currentTarget;
@@ -230,9 +236,27 @@ export const AdminPrograms: React.FC = () => {
               <div>
                 <ImageUploader
                   value={editingProgram.coverImage || ''}
-                  onChange={(url) => setEditingProgram({ ...editingProgram, coverImage: url })}
+                  onChange={(url) => setEditingProgram(prev => (prev ? { ...prev, coverImage: url } : prev))}
                   label="Cover Image"
                   helperText="Upload program hero graphic or specify image URL"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold text-slate-700">Image Alt Text (Auto-SEO)</label>
+                  <span className="text-[11px] text-emerald-700 font-medium">Auto-generated if left blank</span>
+                </div>
+                <input
+                  type="text"
+                  value={editingProgram.imageAlt || ''}
+                  onChange={e => setEditingProgram({ ...editingProgram, imageAlt: e.target.value })}
+                  placeholder={buildAutoImageAlt({
+                    type: 'program',
+                    title: editingProgram.title,
+                    category: editingProgram.category
+                  })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-300"
                 />
               </div>
 

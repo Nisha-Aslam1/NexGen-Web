@@ -1662,6 +1662,7 @@ app.post('/api/programs', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDI
     shortDescription: body.shortDescription,
     fullDescription: body.fullDescription || body.shortDescription,
     coverImage: body.coverImage || 'https://images.unsplash.com/photo-1573497491768-dccce02ce85f?w=900&auto=format&fit=crop&q=80',
+    imageAlt: typeof body.imageAlt === 'string' && body.imageAlt.trim() ? body.imageAlt.trim().slice(0, 220) : undefined,
     startDate: body.startDate,
     endDate: body.endDate,
     featured: Boolean(body.featured),
@@ -1767,6 +1768,7 @@ app.post('/api/events', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINA
     description: body.description || '',
     image: body.image || body.coverImage || '/banner.png',
     coverImage: body.coverImage || body.image || '/banner.png',
+    imageAlt: typeof body.imageAlt === 'string' && body.imageAlt.trim() ? body.imageAlt.trim().slice(0, 220) : undefined,
     date: body.date,
     time: body.time || '10:00 AM',
     location: body.location || 'Online / Regional Center',
@@ -1832,13 +1834,20 @@ app.post('/api/news', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_O
   const slug = (body.slug || body.title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
   const user = (req as any).user;
   const articleBody = String(body.content || body.summary || '').trim();
+  const rawCover = typeof body.coverImage === 'string'
+    ? body.coverImage.trim()
+    : typeof body.image === 'string'
+      ? body.image.trim()
+      : '';
+  const coverImage = rawCover.startsWith('uploads/') ? `/${rawCover}` : rawCover;
   const newsItem = db.createNews({
     title: String(body.title).trim(),
     slug,
     category: body.category || 'Announcement',
     author: body.author || user.name,
     authorRole: body.authorRole || 'Editorial Board',
-    coverImage: body.coverImage || '/banner.png',
+    coverImage,
+    imageAlt: typeof body.imageAlt === 'string' && body.imageAlt.trim() ? body.imageAlt.trim().slice(0, 220) : undefined,
     summary: body.summary || articleBody.slice(0, 160),
     content: articleBody,
     publishedAt: body.publishedAt || new Date().toISOString(),
@@ -1867,7 +1876,11 @@ app.post('/api/news', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_O
 });
 
 app.put('/api/news/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
-  const updated = db.updateNews(req.params.id, req.body || {});
+  const body = { ...(req.body || {}) };
+  if (body.coverImage === undefined && typeof body.image === 'string') {
+    body.coverImage = body.image;
+  }
+  const updated = db.updateNews(req.params.id, body);
   if (!updated) return res.status(404).json({ error: 'Article not found' });
   const user = (req as any).user;
   db.logActivity({
@@ -3317,15 +3330,16 @@ async function startServer() {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.setHeader('Cache-Control', 'public, max-age=31536000');
+    res.setHeader('X-Robots-Tag', 'index, follow');
 
     // 1. Direct file on disk
-    if (fs.existsSync(publicPath)) {
+    if (fs.existsSync(publicPath) && fs.statSync(publicPath).isFile()) {
       return res.sendFile(publicPath);
     }
 
     // 2. Check local data/uploads backup
     const backupPath = path.join(persistentUploadsDir, safeFilename);
-    if (fs.existsSync(backupPath)) {
+    if (fs.existsSync(backupPath) && fs.statSync(backupPath).isFile()) {
       try {
         fs.copyFileSync(backupPath, publicPath);
         return res.sendFile(publicPath);

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { TeamMember } from '../../types.ts';
 import { ImageUploader } from '../common/ImageUploader.tsx';
+import { buildAutoImageAlt } from '../../lib/imageSeo.ts';
 
 export const AdminTeam: React.FC = () => {
   const { team, refreshData, addToast } = useApp();
@@ -266,7 +267,13 @@ export const AdminTeam: React.FC = () => {
                 <div className="aspect-square bg-slate-900 relative overflow-hidden">
                   <img
                     src={mem.image || '/logo.png'}
-                    alt={mem.name}
+                    alt={buildAutoImageAlt({
+                      type: 'team',
+                      customAlt: mem.imageAlt,
+                      name: mem.name,
+                      role: mem.position,
+                      department: mem.department
+                    })}
                     referrerPolicy="no-referrer"
                     onError={(e) => {
                       const el = e.currentTarget;
@@ -441,9 +448,28 @@ export const AdminTeam: React.FC = () => {
               <div>
                 <ImageUploader
                   value={editingMember.image || ''}
-                  onChange={(url) => setEditingMember({ ...editingMember, image: url })}
+                  onChange={(url) => setEditingMember(prev => (prev ? { ...prev, image: url } : prev))}
                   label="Profile Photograph"
                   helperText="Upload a portrait photo or enter an image URL"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold text-slate-700">Portrait Alt Text (Auto-SEO)</label>
+                  <span className="text-[11px] text-emerald-700 font-medium">Auto-generated if left blank</span>
+                </div>
+                <input
+                  type="text"
+                  value={editingMember.imageAlt || ''}
+                  onChange={e => setEditingMember({ ...editingMember, imageAlt: e.target.value })}
+                  placeholder={buildAutoImageAlt({
+                    type: 'team',
+                    name: editingMember.name,
+                    role: editingMember.position,
+                    department: editingMember.department
+                  })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-300"
                 />
               </div>
 

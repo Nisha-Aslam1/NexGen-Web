@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { GalleryItem } from '../../types.ts';
 import { ImageUploader } from '../common/ImageUploader.tsx';
+import { buildAutoImageAlt } from '../../lib/imageSeo.ts';
 
 const GALLERY_CATEGORIES = [
   'Workshops',
@@ -52,6 +53,7 @@ export const AdminGallery: React.FC = () => {
       title: item.title || '',
       category: item.category || 'Workshops',
       caption: item.caption || '',
+      imageAlt: item.imageAlt || '',
       imageUrl: item.imageUrl || '',
       date: item.date || new Date().toISOString().split('T')[0],
       displayOrder: item.displayOrder ?? 1
@@ -145,7 +147,13 @@ export const AdminGallery: React.FC = () => {
           >
             <img
               src={item.imageUrl || '/banner.png'}
-              alt={item.title}
+              alt={buildAutoImageAlt({
+                type: 'gallery',
+                customAlt: item.imageAlt,
+                title: item.title,
+                category: item.category,
+                caption: item.caption
+              })}
               referrerPolicy="no-referrer"
               onError={(e) => {
                 const el = e.currentTarget;
@@ -266,9 +274,28 @@ export const AdminGallery: React.FC = () => {
               <div>
                 <ImageUploader
                   value={formItem.imageUrl || ''}
-                  onChange={url => setFormItem({ ...formItem, imageUrl: url })}
+                  onChange={url => setFormItem(prev => ({ ...prev, imageUrl: url }))}
                   label="Archive Photo"
                   helperText="Upload an image directly from your computer or provide an image URL"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold text-slate-700">Image Alt Text (Auto-SEO)</label>
+                  <span className="text-[11px] text-emerald-700 font-medium">Auto-generated if left blank</span>
+                </div>
+                <input
+                  type="text"
+                  value={formItem.imageAlt || ''}
+                  onChange={e => setFormItem({ ...formItem, imageAlt: e.target.value })}
+                  placeholder={buildAutoImageAlt({
+                    type: 'gallery',
+                    title: formItem.title,
+                    category: formItem.category,
+                    caption: formItem.caption
+                  })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-900"
                 />
               </div>
 

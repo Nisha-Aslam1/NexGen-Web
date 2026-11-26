@@ -14,6 +14,12 @@ import {
 } from 'lucide-react';
 import { Program } from '../../types.ts';
 import { NotFoundPage } from './NotFoundPage.tsx';
+import {
+  buildAutoImageAlt,
+  buildAutoImageCaption,
+  buildImageObjectSchema,
+  resolvePublicImageUrl
+} from '../../lib/imageSeo.ts';
 
 export const ProgramsPage: React.FC = () => {
   const { programs, setActivePage, selectedProgramSlug, isLoadingPublicData } = useApp();
@@ -45,6 +51,21 @@ export const ProgramsPage: React.FC = () => {
   const isNotFoundSlug = Boolean(selectedProgramSlug && !isLoadingPublicData && !matchedProgram);
   const shouldSkipSeo = Boolean(selectedProgramSlug && (isLoadingPublicData || !matchedProgram));
 
+  const effectiveProgramAlt = effectiveProgram
+    ? buildAutoImageAlt({
+        type: 'program',
+        customAlt: effectiveProgram.imageAlt,
+        title: effectiveProgram.title,
+        category: effectiveProgram.category
+      })
+    : 'Empowerment & Leadership Programs — NexGen Council';
+  const effectiveProgramImageUrl = effectiveProgram
+    ? resolvePublicImageUrl(effectiveProgram.coverImage, window.location.origin, {
+        allowDataUrl: true,
+        fallbackPath: '/banner.png'
+      }) || '/banner.png'
+    : '/banner.png';
+
   useDocumentSEO({
     skip: shouldSkipSeo,
     title: effectiveProgram
@@ -55,13 +76,28 @@ export const ProgramsPage: React.FC = () => {
       : 'Browse active youth civic fellowships, women leadership cohorts, and skills accelerator programs designed to foster grassroots change.',
     canonicalPath: effectiveProgram ? `/programs/${effectiveProgram.slug || effectiveProgram.id}` : '/programs',
     ogType: 'website',
-    ogImage: effectiveProgram?.coverImage || '/banner.png',
+    ogImage: effectiveProgramImageUrl,
+    ogImageAlt: effectiveProgramAlt,
     jsonLd: effectiveProgram
       ? {
           '@context': 'https://schema.org',
           '@type': 'EducationalOccupationalProgram',
           name: effectiveProgram.title,
           description: effectiveProgram.shortDescription,
+          image: buildImageObjectSchema({
+            url: effectiveProgramImageUrl,
+            alt: effectiveProgramAlt,
+            name: effectiveProgram.title,
+            caption: buildAutoImageCaption({
+              type: 'program',
+              customAlt: effectiveProgram.imageAlt,
+              title: effectiveProgram.title,
+              category: effectiveProgram.category,
+              summary: effectiveProgram.shortDescription
+            }),
+            pageUrl: `${window.location.origin}/programs/${effectiveProgram.slug || effectiveProgram.id}`,
+            representativeOfPage: true
+          }),
           provider: {
             '@type': 'NGO',
             name: 'NexGen Council',
@@ -77,6 +113,7 @@ export const ProgramsPage: React.FC = () => {
             '@type': 'ListItem',
             position: idx + 1,
             name: p.title,
+            image: resolvePublicImageUrl(p.coverImage, window.location.origin, { allowDataUrl: false }) || undefined,
             url: `${window.location.origin}/programs/${p.slug || p.id}`
           }))
         }
@@ -165,7 +202,15 @@ export const ProgramsPage: React.FC = () => {
                 <div className="relative aspect-16/10 overflow-hidden bg-slate-900">
                   <img
                     src={prg.coverImage || '/banner.png'}
-                    alt={prg.title}
+                    alt={buildAutoImageAlt({
+                      type: 'program',
+                      customAlt: prg.imageAlt,
+                      title: prg.title,
+                      category: prg.category
+                    })}
+                    title={`${prg.title} — NexGen Council`}
+                    loading="lazy"
+                    decoding="async"
                     referrerPolicy="no-referrer"
                     onError={(e) => {
                       const el = e.currentTarget;
@@ -247,7 +292,13 @@ export const ProgramsPage: React.FC = () => {
             <div className="aspect-16/9 rounded-2xl overflow-hidden bg-slate-900">
               <img
                 src={activeModalProgram.coverImage || '/banner.png'}
-                alt={`${activeModalProgram.title} cohort overview banner`}
+                alt={buildAutoImageAlt({
+                  type: 'program',
+                  customAlt: activeModalProgram.imageAlt,
+                  title: activeModalProgram.title,
+                  category: activeModalProgram.category
+                })}
+                title={`${activeModalProgram.title} — NexGen Council`}
                 loading="lazy"
                 decoding="async"
                 referrerPolicy="no-referrer"

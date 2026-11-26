@@ -1,5 +1,11 @@
 import type { Request } from 'express';
 import { db } from './db.ts';
+import {
+  buildAutoImageAlt,
+  buildAutoImageCaption,
+  buildImageObjectSchema,
+  resolvePublicImageUrl
+} from '../src/lib/imageSeo.ts';
 
 export const CORE_NEXGEN_KEYWORDS = [
   'NexGen',
@@ -19,18 +25,26 @@ export const CORE_NEXGEN_KEYWORDS = [
   'nexgencouncil.bond'
 ];
 
+export interface NoscriptImageEntry {
+  url: string;
+  alt: string;
+  title?: string;
+}
+
 export interface RouteMetadata {
   title: string;
   description: string;
   canonicalUrl: string;
   ogType: 'website' | 'article';
   ogImage: string;
+  ogImageAlt?: string;
   keywords?: string[];
   noindex?: boolean;
   publishedTime?: string;
   modifiedTime?: string;
   author?: string;
   jsonLd?: Record<string, any>[];
+  noscriptImages?: NoscriptImageEntry[];
 }
 
 export function getSiteBaseUrl(req?: Request): string {
@@ -198,8 +212,110 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
     }))
   });
 
+  const dedupeImages = (entries: NoscriptImageEntry[]): NoscriptImageEntry[] => {
+    const seen = new Set<string>();
+    const out: NoscriptImageEntry[] = [];
+    for (const entry of entries) {
+      const resolved = resolvePublicImageUrl(entry.url, siteUrl, { allowDataUrl: false });
+      if (!resolved || seen.has(resolved)) continue;
+      seen.add(resolved);
+      out.push({
+        url: resolved,
+        alt: entry.alt,
+        title: entry.title || entry.alt
+      });
+    }
+    return out;
+  };
+
   // Handle Home
   if (cleanPath === '/' || cleanPath === '/home') {
+    const homePrograms = (typeof db.getPrograms === 'function' ? db.getPrograms(true) : []).slice(0, 6);
+    const homeTeam = (typeof db.getTeam === 'function' ? db.getTeam(true) : []).slice(0, 6);
+    const homeNews = (typeof db.getNews === 'function' ? db.getNews(true) : [])
+      .filter(n => Boolean((n.coverImage || '').trim()))
+      .slice(0, 4);
+
+    const homeImages = dedupeImages([
+      {
+        url: '/assets/aistudio/NexGen_Poster_190b79d4.png',
+        alt: 'NexGen Women Empowerment & Youth Leadership Council Official Poster — Leadership & Civic Action',
+        title: 'NexGen Council Official Showcase Poster'
+      },
+      {
+        url: '/banner.png',
+        alt: 'NexGen Women Empowerment & Youth Leadership Council Official Hero Banner',
+        title: 'NexGen Council Official Banner'
+      },
+      {
+        url: '/logo.png',
+        alt: 'NexGen Women Empowerment & Youth Leadership Council Official Crest Logo',
+        title: 'NexGen Council Official Logo'
+      },
+      ...homePrograms.map(p => ({
+        url: p.coverImage,
+        alt: buildAutoImageAlt({
+          type: 'program',
+          customAlt: p.imageAlt,
+          title: p.title,
+          category: p.category
+        }),
+        title: p.title
+      })),
+      ...homeTeam.map(m => ({
+        url: m.image,
+        alt: buildAutoImageAlt({
+          type: 'team',
+          customAlt: m.imageAlt,
+          name: m.name,
+          role: m.position,
+          department: m.department
+        }),
+        title: `${m.name} — ${m.position}`
+      })),
+      ...homeNews.map(n => ({
+        url: n.coverImage || '',
+        alt: buildAutoImageAlt({
+          type: 'news',
+          customAlt: n.imageAlt,
+          title: n.title,
+          category: n.category
+        }),
+        title: n.title
+      }))
+    ]);
+
+    const homePageSchema = {
+      '@context': 'https://schema.org',
+      '@type': 'WebPage',
+      '@id': `${siteUrl}/#webpage`,
+      url: `${siteUrl}/`,
+      name: 'NexGen Council — Women Empowerment & Youth Leadership',
+      description: defaultDescription,
+      inLanguage: 'en',
+      isPartOf: { '@id': `${siteUrl}/#website` },
+      about: { '@id': `${siteUrl}/#organization` },
+      primaryImageOfPage: buildImageObjectSchema({
+        url: `${siteUrl}/banner.png`,
+        alt: 'NexGen Women Empowerment & Youth Leadership Council Official Banner',
+        caption: defaultDescription,
+        pageUrl: `${siteUrl}/`,
+        orgName,
+        representativeOfPage: true
+      }),
+      associatedMedia: homeImages.map((img, idx) =>
+        buildImageObjectSchema({
+          url: img.url,
+          alt: img.alt,
+          name: img.title,
+          caption: img.alt,
+          pageUrl: `${siteUrl}/`,
+          orgName,
+          representativeOfPage: idx === 0
+        })
+      )
+    };
+
     return {
       title: 'NexGen Council — Women Empowerment & Youth Leadership',
       description:
@@ -207,13 +323,15 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       canonicalUrl: `${siteUrl}/`,
       ogType: 'website',
       ogImage: defaultLogo,
+      ogImageAlt: 'NexGen Women Empowerment & Youth Leadership Council Official Banner',
       keywords: [
         ...CORE_NEXGEN_KEYWORDS,
         'NexGen official website',
         'women empowerment NGO Pakistan',
         'youth mentorship program'
       ],
-      jsonLd: [orgSchema, websiteSchema, faqSchema]
+      noscriptImages: homeImages,
+      jsonLd: [orgSchema, websiteSchema, homePageSchema, faqSchema]
     };
   }
 
@@ -277,12 +395,26 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       ]
     };
 
+    const aboutImages = dedupeImages([
+      {
+        url: '/banner.png',
+        alt: 'About NexGen Women Empowerment & Youth Leadership Council — Mission & Institutional Charter Banner',
+        title: 'About NexGen Council Banner'
+      },
+      {
+        url: '/logo.png',
+        alt: 'NexGen Women Empowerment & Youth Leadership Council Official Crest',
+        title: 'NexGen Council Logo'
+      }
+    ]);
+
     return {
       title: aboutTitle,
       description: aboutDesc,
       canonicalUrl: `${siteUrl}/about`,
       ogType: 'website',
       ogImage: defaultLogo,
+      ogImageAlt: 'About NexGen Women Empowerment & Youth Leadership Council',
       keywords: [
         ...CORE_NEXGEN_KEYWORDS,
         'about NexGen',
@@ -293,6 +425,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
         'youth leadership academy Pakistan',
         'Minahil Imran Awan NexGen'
       ],
+      noscriptImages: aboutImages,
       jsonLd: [
         orgSchema,
         aboutPageSchema,
@@ -307,16 +440,62 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
   // Handle Programs Listing
   if (cleanPath === '/programs') {
+    const publishedPrograms = typeof db.getPrograms === 'function' ? db.getPrograms(true) : [];
+    const programImages = dedupeImages([
+      ...publishedPrograms.map(p => ({
+        url: p.coverImage,
+        alt: buildAutoImageAlt({
+          type: 'program',
+          customAlt: p.imageAlt,
+          title: p.title,
+          category: p.category
+        }),
+        title: p.title
+      })),
+      {
+        url: '/banner.png',
+        alt: 'NexGen Council Leadership Programs & Fellowship Cohorts',
+        title: 'NexGen Council Programs Banner'
+      }
+    ]);
+
+    const programsCollectionSchema = {
+      '@context': 'https://schema.org',
+      '@type': 'CollectionPage',
+      '@id': `${siteUrl}/programs#webpage`,
+      url: `${siteUrl}/programs`,
+      name: `Leadership Programs & Cohorts | ${shortBrand}`,
+      description:
+        'Explore NexGen Council training cohorts, 30-Day Leadership Development Series, Women in Tech fellowships, and grassroots community entrepreneurship programs.',
+      associatedMedia: programImages.map((img, idx) =>
+        buildImageObjectSchema({
+          url: img.url,
+          alt: img.alt,
+          name: img.title,
+          caption: img.alt,
+          pageUrl: `${siteUrl}/programs`,
+          orgName,
+          representativeOfPage: idx === 0
+        })
+      )
+    };
+
+    const firstProgramImg = programImages[0]?.url || defaultLogo;
+    const firstProgramAlt = programImages[0]?.alt || `Leadership Programs & Cohorts | ${shortBrand}`;
+
     return {
       title: `Leadership Programs & Cohorts | ${shortBrand}`,
       description:
         'Explore NexGen Council training cohorts, 30-Day Leadership Development Series, Women in Tech fellowships, and grassroots community entrepreneurship programs.',
       canonicalUrl: `${siteUrl}/programs`,
       ogType: 'website',
-      ogImage: defaultLogo,
+      ogImage: firstProgramImg,
+      ogImageAlt: firstProgramAlt,
       keywords: [...CORE_NEXGEN_KEYWORDS, 'NexGen programs', '30-Day Leadership Series', 'women in tech fellowship'],
+      noscriptImages: programImages,
       jsonLd: [
         orgSchema,
+        programsCollectionSchema,
         createBreadcrumbs([
           { name: 'Home', url: `${siteUrl}/` },
           { name: 'Programs & Activities', url: `${siteUrl}/programs` }
@@ -332,7 +511,23 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
     if (program && program.status === 'Published') {
       const progSlug = program.slug || program.id;
-      const progImage = program.coverImage.startsWith('http') ? program.coverImage : `${siteUrl}${program.coverImage}`;
+      const progImage = resolvePublicImageUrl(program.coverImage, siteUrl, {
+        allowDataUrl: false,
+        fallbackPath: '/banner.png'
+      }) || defaultLogo;
+      const progAlt = buildAutoImageAlt({
+        type: 'program',
+        customAlt: program.imageAlt,
+        title: program.title,
+        category: program.category
+      });
+      const progCaption = buildAutoImageCaption({
+        type: 'program',
+        customAlt: program.imageAlt,
+        title: program.title,
+        category: program.category,
+        summary: program.shortDescription
+      });
       const courseSchema = {
         '@context': 'https://schema.org',
         '@type': 'Course',
@@ -343,7 +538,15 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
           name: orgName,
           sameAs: siteUrl
         },
-        image: progImage,
+        image: buildImageObjectSchema({
+          url: progImage,
+          alt: progAlt,
+          name: program.title,
+          caption: progCaption,
+          pageUrl: `${siteUrl}/programs/${progSlug}`,
+          orgName,
+          representativeOfPage: true
+        }),
         hasCourseInstance: {
           '@type': 'CourseInstance',
           courseMode: 'Blended',
@@ -358,7 +561,9 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
         canonicalUrl: `${siteUrl}/programs/${progSlug}`,
         ogType: 'website',
         ogImage: progImage,
+        ogImageAlt: progAlt,
         keywords: [...CORE_NEXGEN_KEYWORDS, program.title, program.category, 'NexGen leadership cohort'],
+        noscriptImages: [{ url: progImage, alt: progAlt, title: program.title }],
         jsonLd: [
           orgSchema,
           courseSchema,
@@ -374,16 +579,60 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
   // Handle Events Listing
   if (cleanPath === '/events' || cleanPath === '/upcoming-events') {
+    const visibleEvents = (typeof db.getEvents === 'function' ? db.getEvents() : []).filter(e => e.status !== 'Draft');
+    const eventImages = dedupeImages([
+      ...visibleEvents.map(e => ({
+        url: e.coverImage || e.image || '',
+        alt: buildAutoImageAlt({
+          type: 'event',
+          customAlt: e.imageAlt,
+          title: e.title,
+          category: e.category,
+          location: e.location
+        }),
+        title: e.title
+      })),
+      {
+        url: '/banner.png',
+        alt: 'NexGen Council Youth Leadership Summits & Community Events',
+        title: 'NexGen Council Events Banner'
+      }
+    ]);
+
+    const eventsCollectionSchema = {
+      '@context': 'https://schema.org',
+      '@type': 'CollectionPage',
+      '@id': `${siteUrl}/events#webpage`,
+      url: `${siteUrl}/events`,
+      name: `Events & Leadership Summits | ${shortBrand}`,
+      description:
+        'Attend upcoming youth leadership summits, policy symposiums, community outreach workshops, and networking conferences hosted by NexGen Council.',
+      associatedMedia: eventImages.map((img, idx) =>
+        buildImageObjectSchema({
+          url: img.url,
+          alt: img.alt,
+          name: img.title,
+          caption: img.alt,
+          pageUrl: `${siteUrl}/events`,
+          orgName,
+          representativeOfPage: idx === 0
+        })
+      )
+    };
+
     return {
       title: `Events & Leadership Summits | ${shortBrand}`,
       description:
         'Attend upcoming youth leadership summits, policy symposiums, community outreach workshops, and networking conferences hosted by NexGen Council.',
       canonicalUrl: `${siteUrl}/events`,
       ogType: 'website',
-      ogImage: defaultLogo,
+      ogImage: eventImages[0]?.url || defaultLogo,
+      ogImageAlt: eventImages[0]?.alt || 'NexGen Council Youth Leadership Summits & Community Events',
       keywords: [...CORE_NEXGEN_KEYWORDS, 'NexGen events', 'youth leadership summit', 'women empowerment conference'],
+      noscriptImages: eventImages,
       jsonLd: [
         orgSchema,
+        eventsCollectionSchema,
         createBreadcrumbs([
           { name: 'Home', url: `${siteUrl}/` },
           { name: 'Events & Conferences', url: `${siteUrl}/events` }
@@ -399,7 +648,17 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
     if (event && event.status !== 'Draft') {
       const rawImg = event.coverImage || event.image || '/banner.png';
-      const eventImage = rawImg.startsWith('http') ? rawImg : `${siteUrl}${rawImg}`;
+      const eventImage = resolvePublicImageUrl(rawImg, siteUrl, {
+        allowDataUrl: false,
+        fallbackPath: '/banner.png'
+      }) || defaultLogo;
+      const eventAlt = buildAutoImageAlt({
+        type: 'event',
+        customAlt: event.imageAlt,
+        title: event.title,
+        category: event.category,
+        location: event.location
+      });
       const eventSlug = event.slug || event.id;
       const eventSchema = {
         '@context': 'https://schema.org',
@@ -418,7 +677,17 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
             streetAddress: event.location
           }
         },
-        image: [eventImage],
+        image: [
+          buildImageObjectSchema({
+            url: eventImage,
+            alt: eventAlt,
+            name: event.title,
+            caption: eventAlt,
+            pageUrl: `${siteUrl}/events/${eventSlug}`,
+            orgName,
+            representativeOfPage: true
+          })
+        ],
         organizer: {
           '@type': 'Organization',
           name: orgName,
@@ -432,7 +701,9 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
         canonicalUrl: `${siteUrl}/events/${eventSlug}`,
         ogType: 'website',
         ogImage: eventImage,
+        ogImageAlt: eventAlt,
         keywords: [...CORE_NEXGEN_KEYWORDS, event.title, event.category, event.location],
+        noscriptImages: [{ url: eventImage, alt: eventAlt, title: event.title }],
         jsonLd: [
           orgSchema,
           eventSchema,
@@ -453,13 +724,54 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       (settings.newsSeoDescription || '').trim() ||
       'Stay informed with the latest dispatches, policy research, changemaker spotlights, and official announcements from NexGen Council.';
     const customNewsKeywords = Array.isArray(settings.newsSeoKeywords) ? settings.newsSeoKeywords : [];
+    const publishedNews = (typeof db.getNews === 'function' ? db.getNews(true) : []).filter(
+      n => Boolean((n.coverImage || '').trim())
+    );
+    const newsImages = dedupeImages([
+      ...publishedNews.map(n => ({
+        url: n.coverImage || '',
+        alt: buildAutoImageAlt({
+          type: 'news',
+          customAlt: n.imageAlt,
+          title: n.title,
+          category: n.category
+        }),
+        title: n.title
+      })),
+      {
+        url: '/banner.png',
+        alt: 'NexGen Council Newsroom & Official Dispatches',
+        title: 'NexGen Council News Banner'
+      }
+    ]);
+
+    const newsCollectionSchema = {
+      '@context': 'https://schema.org',
+      '@type': 'CollectionPage',
+      '@id': `${siteUrl}/news#webpage`,
+      url: `${siteUrl}/news`,
+      name: newsListingTitle,
+      description: newsListingDesc,
+      associatedMedia: newsImages.map((img, idx) =>
+        buildImageObjectSchema({
+          url: img.url,
+          alt: img.alt,
+          name: img.title,
+          caption: img.alt,
+          pageUrl: `${siteUrl}/news`,
+          orgName,
+          representativeOfPage: idx === 0
+        })
+      )
+    };
 
     return {
       title: newsListingTitle,
       description: newsListingDesc,
       canonicalUrl: `${siteUrl}/news`,
       ogType: 'website',
-      ogImage: defaultLogo,
+      ogImage: newsImages[0]?.url || defaultLogo,
+      ogImageAlt: newsImages[0]?.alt || newsListingTitle,
       keywords: [
         ...customNewsKeywords,
         ...CORE_NEXGEN_KEYWORDS,
@@ -467,8 +779,10 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
         'NexGen announcements',
         'youth policy updates'
       ],
+      noscriptImages: newsImages,
       jsonLd: [
         orgSchema,
+        newsCollectionSchema,
         createBreadcrumbs([
           { name: 'Home', url: `${siteUrl}/` },
           { name: 'News & Updates', url: `${siteUrl}/news` }
@@ -484,7 +798,18 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
     if (article && article.status === 'Published') {
       const articleSlug = article.slug || article.id;
-      const articleImage = article.coverImage.startsWith('http') ? article.coverImage : `${siteUrl}${article.coverImage}`;
+      const rawCover = (article.coverImage || '').trim();
+      const hasCoverImage = Boolean(rawCover);
+      const articleImage =
+        resolvePublicImageUrl(rawCover, siteUrl, { allowDataUrl: false, fallbackPath: '/banner.png' }) || defaultLogo;
+      const articleImageAlt = hasCoverImage
+        ? buildAutoImageAlt({
+            type: 'news',
+            customAlt: article.imageAlt,
+            title: article.title,
+            category: article.category
+          })
+        : `${article.title} — NexGen Council Official Dispatch`;
       const articleSeoTitle = (article.seoTitle || '').trim() || `${article.title} | ${shortBrand}`;
       const articleSeoDesc = ((article.seoDescription || '').trim() || article.summary || '').slice(0, 160);
       const articleCustomKeywords = Array.isArray(article.seoKeywords) ? article.seoKeywords : [];
@@ -511,7 +836,17 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
         '@type': 'NewsArticle',
         headline: article.title,
         description: articleSeoDesc,
-        image: [articleImage],
+        image: [
+          buildImageObjectSchema({
+            url: articleImage,
+            alt: articleImageAlt,
+            name: article.title,
+            caption: articleSeoDesc || articleImageAlt,
+            pageUrl: resolvedCanonical,
+            orgName,
+            representativeOfPage: true
+          })
+        ],
         datePublished: article.publishedAt,
         dateModified: article.publishedAt,
         articleSection: article.category,
@@ -537,10 +872,12 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
         canonicalUrl: resolvedCanonical,
         ogType: 'article',
         ogImage: articleImage,
+        ogImageAlt: articleImageAlt,
         keywords: mergedArticleKeywords,
         publishedTime: article.publishedAt,
         modifiedTime: article.publishedAt,
         author: article.author,
+        noscriptImages: hasCoverImage ? [{ url: articleImage, alt: articleImageAlt, title: article.title }] : [],
         jsonLd: [
           orgSchema,
           articleSchema,
@@ -563,7 +900,15 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       canonicalUrl: `${siteUrl}/volunteer`,
       ogType: 'website',
       ogImage: defaultLogo,
+      ogImageAlt: 'Volunteer With NexGen Women Empowerment & Youth Leadership Council',
       keywords: [...CORE_NEXGEN_KEYWORDS, 'join NexGen Council', 'NexGen volunteer registration', 'youth volunteer Pakistan'],
+      noscriptImages: [
+        {
+          url: `${siteUrl}/banner.png`,
+          alt: 'Join NexGen Council Volunteer & Youth Leadership Network',
+          title: 'NexGen Volunteer Enrollment'
+        }
+      ],
       jsonLd: [
         orgSchema,
         createBreadcrumbs([
@@ -583,7 +928,15 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       canonicalUrl: `${siteUrl}/track`,
       ogType: 'website',
       ogImage: defaultLogo,
+      ogImageAlt: 'NexGen Council Volunteer Application Tracker',
       keywords: [...CORE_NEXGEN_KEYWORDS, 'NexGen application status', 'track volunteer application'],
+      noscriptImages: [
+        {
+          url: `${siteUrl}/logo.png`,
+          alt: 'NexGen Council Official Crest Logo',
+          title: 'NexGen Council Official Logo'
+        }
+      ],
       jsonLd: [
         orgSchema,
         createBreadcrumbs([
@@ -596,16 +949,86 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
   // Handle Leadership / Team
   if (cleanPath === '/team' || cleanPath === '/leadership') {
+    const activeTeam = typeof db.getTeam === 'function' ? db.getTeam(true) : [];
+    const teamImages = dedupeImages([
+      ...activeTeam.map(m => ({
+        url: m.image || '/logo.png',
+        alt: buildAutoImageAlt({
+          type: 'team',
+          customAlt: m.imageAlt,
+          name: m.name,
+          role: m.position,
+          department: m.department
+        }),
+        title: `${m.name} — ${m.position}`
+      })),
+      {
+        url: '/banner.png',
+        alt: 'NexGen Council Executive Leadership & Board of Directors',
+        title: 'NexGen Council Executive Leadership'
+      }
+    ]);
+
+    const teamPageSchema = {
+      '@context': 'https://schema.org',
+      '@type': 'AboutPage',
+      '@id': `${siteUrl}/team#webpage`,
+      url: `${siteUrl}/team`,
+      name: `Executive Leadership & Board | ${shortBrand}`,
+      description:
+        'Meet the founder, board of directors, council executives, and program coordinators leading NexGen Women Empowerment & Youth Leadership Council.',
+      mainEntity: activeTeam.map(m => {
+        const portraitUrl =
+          resolvePublicImageUrl(m.image, siteUrl, { allowDataUrl: false, fallbackPath: '/logo.png' }) || defaultLogo;
+        const portraitAlt = buildAutoImageAlt({
+          type: 'team',
+          customAlt: m.imageAlt,
+          name: m.name,
+          role: m.position,
+          department: m.department
+        });
+        return {
+          '@type': 'Person',
+          name: m.name,
+          jobTitle: m.position,
+          description: m.bio,
+          worksFor: { '@id': `${siteUrl}/#organization` },
+          image: buildImageObjectSchema({
+            url: portraitUrl,
+            alt: portraitAlt,
+            name: `${m.name} — ${m.position}`,
+            caption: m.bio || portraitAlt,
+            pageUrl: `${siteUrl}/team`,
+            orgName
+          })
+        };
+      }),
+      associatedMedia: teamImages.map((img, idx) =>
+        buildImageObjectSchema({
+          url: img.url,
+          alt: img.alt,
+          name: img.title,
+          caption: img.alt,
+          pageUrl: `${siteUrl}/team`,
+          orgName,
+          representativeOfPage: idx === 0
+        })
+      )
+    };
+
     return {
       title: `Executive Leadership & Board | ${shortBrand}`,
       description:
         'Meet the founder, board of directors, council executives, and program coordinators leading NexGen Women Empowerment & Youth Leadership Council.',
       canonicalUrl: `${siteUrl}/team`,
       ogType: 'website',
-      ogImage: defaultLogo,
+      ogImage: teamImages[0]?.url || defaultLogo,
+      ogImageAlt: teamImages[0]?.alt || 'NexGen Council Executive Leadership & Board',
       keywords: [...CORE_NEXGEN_KEYWORDS, 'NexGen leadership', 'NexGen executive board', 'Minahil Imran Awan'],
+      noscriptImages: teamImages,
       jsonLd: [
         orgSchema,
+        teamPageSchema,
         createBreadcrumbs([
           { name: 'Home', url: `${siteUrl}/` },
           { name: 'Leadership & Executive Board', url: `${siteUrl}/team` }
@@ -617,20 +1040,48 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
   // Handle Gallery
   if (cleanPath === '/gallery') {
     const galleryItems = typeof db.getGallery === 'function' ? db.getGallery() : [];
-    const imageObjects = galleryItems.map(item => {
-      const imgUrl = item.imageUrl.startsWith('http') ? item.imageUrl : `${siteUrl}${item.imageUrl}`;
-      return {
-        '@type': 'ImageObject',
-        url: imgUrl,
-        contentUrl: imgUrl,
-        name: item.title,
-        caption: item.caption || item.category,
-        description: item.caption || `${item.title} - ${item.category} field activity photo`,
-        creditText: orgName,
-        copyrightNotice: `© ${new Date().getFullYear()} ${orgName}`,
-        acquireLicensePage: `${siteUrl}/gallery`
-      };
-    });
+    const galleryImages = dedupeImages(
+      galleryItems.map(item => ({
+        url: item.imageUrl,
+        alt: buildAutoImageAlt({
+          type: 'gallery',
+          customAlt: item.imageAlt,
+          title: item.title,
+          category: item.category,
+          caption: item.caption
+        }),
+        title: item.title
+      }))
+    );
+
+    const imageObjects = galleryItems
+      .map(item => {
+        const imgUrl = resolvePublicImageUrl(item.imageUrl, siteUrl, { allowDataUrl: false });
+        if (!imgUrl) return null;
+        const alt = buildAutoImageAlt({
+          type: 'gallery',
+          customAlt: item.imageAlt,
+          title: item.title,
+          category: item.category,
+          caption: item.caption
+        });
+        const caption = buildAutoImageCaption({
+          type: 'gallery',
+          customAlt: item.imageAlt,
+          title: item.title,
+          category: item.category,
+          caption: item.caption
+        });
+        return buildImageObjectSchema({
+          url: imgUrl,
+          alt,
+          name: item.title,
+          caption,
+          pageUrl: `${siteUrl}/gallery`,
+          orgName
+        });
+      })
+      .filter(Boolean);
 
     const gallerySchema = {
       '@context': 'https://schema.org',
@@ -641,7 +1092,8 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       image: imageObjects.length > 0 ? imageObjects : [`${siteUrl}/banner.png`]
     };
 
-    const firstImage = imageObjects.length > 0 ? imageObjects[0].url : defaultLogo;
+    const firstImage = galleryImages[0]?.url || defaultLogo;
+    const firstAlt = galleryImages[0]?.alt || `Field Photos & Media Gallery | ${shortBrand}`;
 
     return {
       title: `Field Photos & Media Gallery | ${shortBrand}`,
@@ -650,7 +1102,9 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       canonicalUrl: `${siteUrl}/gallery`,
       ogType: 'website',
       ogImage: firstImage,
+      ogImageAlt: firstAlt,
       keywords: [...CORE_NEXGEN_KEYWORDS, 'NexGen gallery', 'youth summit photos', 'women empowerment events gallery'],
+      noscriptImages: galleryImages,
       jsonLd: [
         orgSchema,
         gallerySchema,
@@ -671,7 +1125,15 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       canonicalUrl: `${siteUrl}/contact`,
       ogType: 'website',
       ogImage: defaultLogo,
+      ogImageAlt: 'Contact NexGen Women Empowerment & Youth Leadership Council Secretariat',
       keywords: [...CORE_NEXGEN_KEYWORDS, 'contact NexGen Council', 'NexGen secretariat'],
+      noscriptImages: [
+        {
+          url: `${siteUrl}/banner.png`,
+          alt: 'NexGen Council Central Secretariat & Partnerships Desk',
+          title: 'Contact NexGen Council'
+        }
+      ],
       jsonLd: [
         orgSchema,
         createBreadcrumbs([
@@ -756,12 +1218,31 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       ]
     };
 
+    const donateImages = dedupeImages([
+      {
+        url: donatePoster,
+        alt: 'NexGen Council Official Donation Drive — Your Donation Can Change Lives',
+        title: 'NexGen Council Official Donation Drive Poster'
+      },
+      {
+        url: donateQr,
+        alt: 'Scan to Donate Easypaisa Raast QR Code — NexGen Council Merchant Till 992191268',
+        title: 'Easypaisa & Raast QR Merchant Till 992191268'
+      },
+      {
+        url: '/assets/aistudio/WhatsApp_Image_2026-11-25_at_9.04.33_PM_ae4e7388.jpeg',
+        alt: 'Official Easypaisa & Raast QR Payment Card — Merchant Till 992191268 for NexGen Council',
+        title: 'Easypaisa Merchant Till 992191268 Payment Card'
+      }
+    ]);
+
     return {
       title: donateTitle,
       description: donateDesc,
       canonicalUrl: `${siteUrl}/donate`,
       ogType: 'website',
       ogImage: donatePoster,
+      ogImageAlt: 'NexGen Council Official Donation Drive — Your Donation Can Change Lives',
       keywords: [
         ...CORE_NEXGEN_KEYWORDS,
         'Donate NexGen Council',
@@ -778,6 +1259,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
         'SpreadKindness',
         'TogetherForChange'
       ],
+      noscriptImages: donateImages,
       jsonLd: [
         orgSchema,
         donatePageSchema,
@@ -804,7 +1286,15 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       description: siteFaqDesc,
       inLanguage: 'en',
       isPartOf: { '@id': `${siteUrl}/#website` },
-      about: { '@id': `${siteUrl}/#organization` }
+      about: { '@id': `${siteUrl}/#organization` },
+      primaryImageOfPage: buildImageObjectSchema({
+        url: defaultLogo,
+        alt: 'NexGen Council Official FAQ — Membership, Programs & Donations',
+        caption: siteFaqDesc,
+        pageUrl: `${siteUrl}/faq`,
+        orgName,
+        representativeOfPage: true
+      })
     };
 
     const liveFaqs = db.getFaqs(true);
@@ -829,6 +1319,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       canonicalUrl: `${siteUrl}/faq`,
       ogType: 'website',
       ogImage: defaultLogo,
+      ogImageAlt: 'NexGen Council Official FAQ — Membership, Programs & Donations',
       keywords: [
         ...CORE_NEXGEN_KEYWORDS,
         'NexGen Council FAQ',
@@ -841,6 +1332,13 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
         'NexGen Council donation accounts',
         'NexGen Pakistan Sialkot NGO',
         'youth leadership mentorship FAQ'
+      ],
+      noscriptImages: [
+        {
+          url: `${siteUrl}/banner.png`,
+          alt: 'NexGen Council Official Frequently Asked Questions Banner',
+          title: 'NexGen Council FAQ'
+        }
       ],
       jsonLd: [
         orgSchema,
@@ -905,25 +1403,40 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 export function generateSitemapXml(siteUrl: string): string {
   const currentDate = new Date().toISOString().split('T')[0];
   const galleryItems = typeof db.getGallery === 'function' ? db.getGallery() : [];
-  const teamMembers = typeof db.getTeam === 'function' ? db.getTeam() : [];
+  const teamMembers = typeof db.getTeam === 'function' ? db.getTeam(true) : [];
+  const publishedPrograms = typeof db.getPrograms === 'function' ? db.getPrograms(true) : [];
+  const visibleEvents = (typeof db.getEvents === 'function' ? db.getEvents() : []).filter(e => e.status !== 'Draft');
+  const publishedNews = typeof db.getNews === 'function' ? db.getNews(true) : [];
 
-  // Helper for image sitemap node
-  const makeImageNode = (url: string, title?: string, caption?: string) => {
-    const fullUrl = url.startsWith('http') ? url : `${siteUrl}${url}`;
-    let node = `\n    <image:image>\n      <image:loc>${escapeXml(fullUrl)}</image:loc>`;
-    if (title) node += `\n      <image:title>${escapeXml(title)}</image:title>`;
-    if (caption) node += `\n      <image:caption>${escapeXml(caption)}</image:caption>`;
-    node += `\n    </image:image>`;
-    return node;
+  type SitemapImage = { url: string; title?: string; caption?: string };
+
+  // Helper for image sitemap node (strictly excludes invalid/data URIs and deduplicates cleanly)
+  const makeImageNodes = (images?: SitemapImage[]): string => {
+    if (!images || images.length === 0) return '';
+    const seen = new Set<string>();
+    const chunks: string[] = [];
+
+    for (const img of images) {
+      const fullUrl = resolvePublicImageUrl(img.url, siteUrl, { allowDataUrl: false });
+      if (!fullUrl || seen.has(fullUrl)) continue;
+      seen.add(fullUrl);
+      let node = `\n    <image:image>\n      <image:loc>${escapeXml(fullUrl)}</image:loc>`;
+      if (img.title) node += `\n      <image:title>${escapeXml(img.title)}</image:title>`;
+      if (img.caption) node += `\n      <image:caption>${escapeXml(img.caption)}</image:caption>`;
+      node += `\n    </image:image>`;
+      chunks.push(node);
+    }
+
+    return chunks.join('');
   };
 
-  // Static public routes with priorities and images
+  // Static public routes with priorities and comprehensive images for Google Image Search
   const staticRoutes: Array<{
     url: string;
     priority: string;
     changefreq: string;
     lastmod: string;
-    images?: Array<{ url: string; title?: string; caption?: string }>;
+    images?: SitemapImage[];
   }> = [
     {
       url: `${siteUrl}/`,
@@ -931,8 +1444,36 @@ export function generateSitemapXml(siteUrl: string): string {
       changefreq: 'daily',
       lastmod: currentDate,
       images: [
-        { url: '/logo.png', title: 'NexGen Council Official Logo' },
-        { url: '/banner.png', title: 'NexGen Women Empowerment & Youth Leadership Banner' }
+        {
+          url: '/assets/aistudio/NexGen_Poster_190b79d4.png',
+          title: 'NexGen Council Official Showcase Poster',
+          caption: 'NexGen Women Empowerment & Youth Leadership Council Official Showcase Poster'
+        },
+        {
+          url: '/logo.png',
+          title: 'NexGen Council Official Logo',
+          caption: 'Official crest and insignia of NexGen Women Empowerment & Youth Leadership Council'
+        },
+        {
+          url: '/banner.png',
+          title: 'NexGen Women Empowerment & Youth Leadership Banner',
+          caption: 'Empowering Women. Inspiring Youth. Transforming Communities.'
+        },
+        ...publishedPrograms.slice(0, 6).map(p => ({
+          url: p.coverImage,
+          title: buildAutoImageAlt({ type: 'program', customAlt: p.imageAlt, title: p.title, category: p.category }),
+          caption: buildAutoImageCaption({ type: 'program', customAlt: p.imageAlt, title: p.title, category: p.category, summary: p.shortDescription })
+        })),
+        ...teamMembers.slice(0, 6).map(m => ({
+          url: m.image,
+          title: buildAutoImageAlt({ type: 'team', customAlt: m.imageAlt, name: m.name, role: m.position, department: m.department }),
+          caption: buildAutoImageCaption({ type: 'team', customAlt: m.imageAlt, name: m.name, role: m.position, department: m.department, caption: m.bio })
+        })),
+        ...publishedNews.filter(n => Boolean((n.coverImage || '').trim())).slice(0, 4).map(n => ({
+          url: n.coverImage || '',
+          title: buildAutoImageAlt({ type: 'news', customAlt: n.imageAlt, title: n.title, category: n.category }),
+          caption: buildAutoImageCaption({ type: 'news', customAlt: n.imageAlt, title: n.title, category: n.category, summary: n.summary })
+        }))
       ]
     },
     {
@@ -945,23 +1486,84 @@ export function generateSitemapXml(siteUrl: string): string {
           url: '/banner.png',
           title: 'About NexGen Council — Women Empowerment & Youth Leadership',
           caption: 'NexGen Women Empowerment & Youth Leadership Council mission, charter, and milestones'
+        },
+        {
+          url: '/logo.png',
+          title: 'NexGen Council Official Crest',
+          caption: 'Institutional emblem of NexGen Women Empowerment & Youth Leadership Council'
         }
       ]
     },
-    { url: `${siteUrl}/programs`, priority: '0.9', changefreq: 'weekly', lastmod: currentDate },
-    { url: `${siteUrl}/events`, priority: '0.9', changefreq: 'weekly', lastmod: currentDate },
-    { url: `${siteUrl}/news`, priority: '0.9', changefreq: 'weekly', lastmod: currentDate },
-    { url: `${siteUrl}/volunteer`, priority: '0.9', changefreq: 'monthly', lastmod: currentDate },
-    { url: `${siteUrl}/track`, priority: '0.5', changefreq: 'monthly', lastmod: currentDate },
+    {
+      url: `${siteUrl}/programs`,
+      priority: '0.9',
+      changefreq: 'weekly',
+      lastmod: currentDate,
+      images: publishedPrograms.map(p => ({
+        url: p.coverImage,
+        title: buildAutoImageAlt({ type: 'program', customAlt: p.imageAlt, title: p.title, category: p.category }),
+        caption: buildAutoImageCaption({ type: 'program', customAlt: p.imageAlt, title: p.title, category: p.category, summary: p.shortDescription })
+      }))
+    },
+    {
+      url: `${siteUrl}/events`,
+      priority: '0.9',
+      changefreq: 'weekly',
+      lastmod: currentDate,
+      images: visibleEvents.map(e => ({
+        url: e.coverImage || e.image || '',
+        title: buildAutoImageAlt({ type: 'event', customAlt: e.imageAlt, title: e.title, category: e.category, location: e.location }),
+        caption: buildAutoImageCaption({ type: 'event', customAlt: e.imageAlt, title: e.title, category: e.category, location: e.location, summary: e.description })
+      }))
+    },
+    {
+      url: `${siteUrl}/news`,
+      priority: '0.9',
+      changefreq: 'weekly',
+      lastmod: currentDate,
+      images: publishedNews
+        .filter(n => Boolean((n.coverImage || '').trim()))
+        .map(n => ({
+          url: n.coverImage || '',
+          title: buildAutoImageAlt({ type: 'news', customAlt: n.imageAlt, title: n.title, category: n.category }),
+          caption: buildAutoImageCaption({ type: 'news', customAlt: n.imageAlt, title: n.title, category: n.category, summary: n.summary })
+        }))
+    },
+    {
+      url: `${siteUrl}/volunteer`,
+      priority: '0.9',
+      changefreq: 'monthly',
+      lastmod: currentDate,
+      images: [
+        {
+          url: '/banner.png',
+          title: 'Volunteer With NexGen Women Empowerment & Youth Leadership Council',
+          caption: 'Official NexGen Council volunteer and fellowship registration portal'
+        }
+      ]
+    },
+    {
+      url: `${siteUrl}/track`,
+      priority: '0.5',
+      changefreq: 'monthly',
+      lastmod: currentDate,
+      images: [
+        {
+          url: '/logo.png',
+          title: 'NexGen Council Application Status Tracker',
+          caption: 'Track your NexGen Council volunteer enrollment and Member ID card status'
+        }
+      ]
+    },
     {
       url: `${siteUrl}/team`,
       priority: '0.7',
       changefreq: 'monthly',
       lastmod: currentDate,
       images: teamMembers.map(m => ({
-        url: m.image || '/banner.png',
-        title: `${m.name} - ${m.position}`,
-        caption: m.bio || `${m.name}, ${m.position} at NexGen Council`
+        url: m.image || '/logo.png',
+        title: buildAutoImageAlt({ type: 'team', customAlt: m.imageAlt, name: m.name, role: m.position, department: m.department }),
+        caption: buildAutoImageCaption({ type: 'team', customAlt: m.imageAlt, name: m.name, role: m.position, department: m.department, caption: m.bio })
       }))
     },
     {
@@ -971,11 +1573,23 @@ export function generateSitemapXml(siteUrl: string): string {
       lastmod: currentDate,
       images: galleryItems.map(g => ({
         url: g.imageUrl,
-        title: g.title,
-        caption: g.caption || `${g.title} (${g.category}) photo archive`
+        title: buildAutoImageAlt({ type: 'gallery', customAlt: g.imageAlt, title: g.title, category: g.category, caption: g.caption }),
+        caption: buildAutoImageCaption({ type: 'gallery', customAlt: g.imageAlt, title: g.title, category: g.category, caption: g.caption })
       }))
     },
-    { url: `${siteUrl}/contact`, priority: '0.8', changefreq: 'monthly', lastmod: currentDate },
+    {
+      url: `${siteUrl}/contact`,
+      priority: '0.8',
+      changefreq: 'monthly',
+      lastmod: currentDate,
+      images: [
+        {
+          url: '/banner.png',
+          title: 'Contact NexGen Council Secretariat',
+          caption: 'Reach the NexGen Council central secretariat for institutional partnerships and inquiries'
+        }
+      ]
+    },
     {
       url: `${siteUrl}/donate`,
       priority: '0.9',
@@ -991,52 +1605,88 @@ export function generateSitemapXml(siteUrl: string): string {
           url: '/assets/donation-qr-easypaisa.png',
           title: 'Scan to Donate Easypaisa Raast QR Code — NexGen Council Merchant Till 992191268',
           caption: 'Official Easypaisa Digital Bank & Raast Merchant QR code for NexGen Council donations'
+        },
+        {
+          url: '/assets/aistudio/WhatsApp_Image_2026-11-25_at_9.04.33_PM_ae4e7388.jpeg',
+          title: 'Official Easypaisa & Raast QR Payment Card — Merchant Till 992191268',
+          caption: 'Official Easypaisa & Raast merchant payment card for verified NexGen Council contributions'
         }
       ]
     },
-    { url: `${siteUrl}/faq`, priority: '0.9', changefreq: 'weekly', lastmod: currentDate }
+    {
+      url: `${siteUrl}/faq`,
+      priority: '0.9',
+      changefreq: 'weekly',
+      lastmod: currentDate,
+      images: [
+        {
+          url: '/banner.png',
+          title: 'NexGen Council Frequently Asked Questions',
+          caption: 'Official answers about NexGen Council membership, programs, Member ID cards, and donations'
+        }
+      ]
+    }
   ];
 
   // Dynamic Programs
-  const dynamicPrograms = db.getPrograms()
-    .filter(p => p.status === 'Published')
-    .map(p => ({
-      url: `${siteUrl}/programs/${p.slug}`,
-      priority: '0.8',
-      changefreq: 'weekly',
-      lastmod: p.createdAt ? p.createdAt.split('T')[0] : currentDate,
-      images: p.coverImage ? [{ url: p.coverImage, title: p.title, caption: p.shortDescription || p.title }] : []
-    }));
+  const dynamicPrograms = publishedPrograms.map(p => ({
+    url: `${siteUrl}/programs/${p.slug}`,
+    priority: '0.8',
+    changefreq: 'weekly',
+    lastmod: p.createdAt ? p.createdAt.split('T')[0] : currentDate,
+    images: p.coverImage
+      ? [
+          {
+            url: p.coverImage,
+            title: buildAutoImageAlt({ type: 'program', customAlt: p.imageAlt, title: p.title, category: p.category }),
+            caption: buildAutoImageCaption({ type: 'program', customAlt: p.imageAlt, title: p.title, category: p.category, summary: p.shortDescription })
+          }
+        ]
+      : []
+  }));
 
   // Dynamic Events
-  const dynamicEvents = db.getEvents()
-    .map(e => ({
+  const dynamicEvents = visibleEvents.map(e => {
+    const rawImg = (e.coverImage || e.image || '').trim();
+    return {
       url: `${siteUrl}/events/${e.slug || e.id}`,
       priority: '0.8',
       changefreq: 'weekly',
       lastmod: (e.createdAt || e.date) ? (e.createdAt || e.date).split('T')[0] : currentDate,
-      images: (e.coverImage || e.image) ? [{ url: e.coverImage || e.image || '', title: e.title, caption: e.location }] : []
-    }));
+      images: rawImg
+        ? [
+            {
+              url: rawImg,
+              title: buildAutoImageAlt({ type: 'event', customAlt: e.imageAlt, title: e.title, category: e.category, location: e.location }),
+              caption: buildAutoImageCaption({ type: 'event', customAlt: e.imageAlt, title: e.title, category: e.category, location: e.location, summary: e.description })
+            }
+          ]
+        : []
+    };
+  });
 
   // Dynamic News
-  const dynamicNews = db.getNews()
-    .filter(n => n.status === 'Published')
-    .map(n => ({
-      url: `${siteUrl}/news/${n.slug}`,
-      priority: '0.8',
-      changefreq: 'monthly',
-      lastmod: n.publishedAt ? n.publishedAt.split('T')[0] : currentDate,
-      images: n.coverImage ? [{ url: n.coverImage, title: n.title, caption: n.summary }] : []
-    }));
+  const dynamicNews = publishedNews.map(n => ({
+    url: `${siteUrl}/news/${n.slug}`,
+    priority: '0.8',
+    changefreq: 'monthly',
+    lastmod: n.publishedAt ? n.publishedAt.split('T')[0] : currentDate,
+    images: (n.coverImage || '').trim()
+      ? [
+          {
+            url: n.coverImage || '',
+            title: buildAutoImageAlt({ type: 'news', customAlt: n.imageAlt, title: n.title, category: n.category }),
+            caption: buildAutoImageCaption({ type: 'news', customAlt: n.imageAlt, title: n.title, category: n.category, summary: n.summary })
+          }
+        ]
+      : []
+  }));
 
   const allUrls = [...staticRoutes, ...dynamicPrograms, ...dynamicEvents, ...dynamicNews];
 
   const xmlEntries = allUrls
     .map(item => {
-      let imgXml = '';
-      if (item.images && item.images.length > 0) {
-        imgXml = item.images.map(img => makeImageNode(img.url, img.title, img.caption)).join('');
-      }
+      const imgXml = makeImageNodes(item.images);
       return `  <url>
     <loc>${escapeXml(item.url)}</loc>
     <lastmod>${item.lastmod}</lastmod>
@@ -1062,6 +1712,27 @@ export function generateRobotsTxt(siteUrl: string): string {
   return `# Robots.txt for NexGen Council Official Website
 # Optimized for Google, Google Image Search, Bing, and major search engine crawlers
 
+User-agent: Googlebot-Image
+Allow: /
+Allow: /uploads/
+Allow: /assets/
+Allow: /*.jpg
+Allow: /*.jpeg
+Allow: /*.png
+Allow: /*.webp
+Allow: /*.svg
+Allow: /*.gif
+Disallow: /admin
+Disallow: /admin/*
+Disallow: /meeting
+Disallow: /meeting/*
+Disallow: /room
+Disallow: /room/*
+Disallow: /meet
+Disallow: /meet/*
+Disallow: /api/
+Disallow: /data/
+
 User-agent: *
 Allow: /
 Allow: /about
@@ -1082,9 +1753,11 @@ Allow: /track
 Allow: /assets/
 Allow: /uploads/
 Allow: /*.jpg
+Allow: /*.jpeg
 Allow: /*.png
 Allow: /*.webp
 Allow: /*.svg
+Allow: /*.gif
 
 # Disallow administrative portals, private meeting rooms, and API surfaces
 Disallow: /admin
@@ -1147,6 +1820,7 @@ export function injectSeoIntoHtml(
   const safeDesc = escapeHtml(meta.description);
   const safeCanonical = escapeHtml(meta.canonicalUrl);
   const safeOgImage = escapeHtml(meta.ogImage);
+  const safeOgImageAlt = escapeHtml((meta.ogImageAlt || '').trim() || meta.title);
   const mergedKeywords = Array.from(
     new Set([...(meta.keywords || []), ...CORE_NEXGEN_KEYWORDS].map(k => k.trim()).filter(Boolean))
   );
@@ -1178,13 +1852,13 @@ export function injectSeoIntoHtml(
     `<meta property="og:type" content="${meta.ogType}" />`,
     `<meta property="og:image" content="${safeOgImage}" />`,
     `<meta property="og:image:secure_url" content="${safeOgImage}" />`,
-    `<meta property="og:image:alt" content="${safeTitle}" />`,
+    `<meta property="og:image:alt" content="${safeOgImageAlt}" />`,
     `<meta property="og:site_name" content="NexGen Council" />`,
     `<meta name="twitter:card" content="summary_large_image" />`,
     `<meta name="twitter:title" content="${safeTitle}" />`,
     `<meta name="twitter:description" content="${safeDesc}" />`,
     `<meta name="twitter:image" content="${safeOgImage}" />`,
-    `<meta name="twitter:image:alt" content="${safeTitle}" />`
+    `<meta name="twitter:image:alt" content="${safeOgImageAlt}" />`
   ];
 
   if (meta.publishedTime) {
@@ -1247,11 +1921,20 @@ export function injectSeoIntoHtml(
   result = result.replace('</head>', `    ${injectedTagsString}\n  </head>`);
 
   // Always leave <div id="root"></div> clean for browser hydration and Lighthouse audits.
-  // Provide semantic noscript fallback for non-JS bots, crawlers, and accessibility.
+  // Provide semantic noscript fallback + image figures for Googlebot-Image & non-JS crawlers.
   if (result.includes('<div id="root"></div>')) {
     const cleanBase = escapeHtml(siteUrl.replace(/\/+$/, ''));
+    const noscriptImageHtml = (meta.noscriptImages || [])
+      .map(img => {
+        const safeSrc = escapeHtml(img.url);
+        const safeImgAlt = escapeHtml(img.alt);
+        const safeImgTitle = escapeHtml(img.title || img.alt);
+        return `<figure><img src="${safeSrc}" alt="${safeImgAlt}" title="${safeImgTitle}" loading="lazy" /><figcaption>${safeImgAlt}</figcaption></figure>`;
+      })
+      .join('');
+
     const noscriptSemantic = !meta.noindex
-      ? `\n    <noscript><main style="font-family:system-ui,sans-serif;max-width:960px;margin:0 auto;padding:24px;"><h1>${safeTitle}</h1><p>${safeDesc}</p><nav aria-label="NexGen Council Navigation"><a href="${cleanBase}/">Home</a> | <a href="${cleanBase}/about">About NexGen</a> | <a href="${cleanBase}/programs">Leadership Programs</a> | <a href="${cleanBase}/events">Events</a> | <a href="${cleanBase}/news">News</a> | <a href="${cleanBase}/team">Executive Leadership</a> | <a href="${cleanBase}/gallery">Gallery</a> | <a href="${cleanBase}/donate">Donate</a> | <a href="${cleanBase}/faq">FAQ</a> | <a href="${cleanBase}/volunteer">Volunteer</a> | <a href="${cleanBase}/contact">Contact</a></nav></main></noscript>`
+      ? `\n    <noscript><main style="font-family:system-ui,sans-serif;max-width:960px;margin:0 auto;padding:24px;"><h1>${safeTitle}</h1><p>${safeDesc}</p><nav aria-label="NexGen Council Navigation"><a href="${cleanBase}/">Home</a> | <a href="${cleanBase}/about">About NexGen</a> | <a href="${cleanBase}/programs">Leadership Programs</a> | <a href="${cleanBase}/events">Events</a> | <a href="${cleanBase}/news">News</a> | <a href="${cleanBase}/team">Executive Leadership</a> | <a href="${cleanBase}/gallery">Gallery</a> | <a href="${cleanBase}/donate">Donate</a> | <a href="${cleanBase}/faq">FAQ</a> | <a href="${cleanBase}/volunteer">Volunteer</a> | <a href="${cleanBase}/contact">Contact</a></nav>${noscriptImageHtml ? `<section aria-label="Page Images">${noscriptImageHtml}</section>` : ''}</main></noscript>`
       : '';
 
     if (noscriptSemantic) {

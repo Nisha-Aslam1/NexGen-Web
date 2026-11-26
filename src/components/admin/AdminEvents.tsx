@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { EventItem } from '../../types.ts';
 import { ImageUploader } from '../common/ImageUploader.tsx';
+import { buildAutoImageAlt } from '../../lib/imageSeo.ts';
 
 export const AdminEvents: React.FC = () => {
   const { events, refreshData, addToast } = useApp();
@@ -186,7 +187,7 @@ export const AdminEvents: React.FC = () => {
                   {evt.title}
                 </h3>
 
-                <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed whitespace-pre-line">
                   {evt.description}
                 </p>
 
@@ -448,9 +449,29 @@ export const AdminEvents: React.FC = () => {
               <div>
                 <ImageUploader
                   value={editingEvent.image || editingEvent.coverImage || ''}
-                  onChange={url => setEditingEvent({ ...editingEvent, image: url, coverImage: url })}
+                  onChange={url => setEditingEvent(prev => (prev ? { ...prev, image: url, coverImage: url } : prev))}
                   label="Event Cover Banner (Optional)"
                   helperText="Upload an event banner or paste an image URL"
+                  required={false}
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold text-slate-700">Image Alt Text (Auto-SEO)</label>
+                  <span className="text-[11px] text-emerald-700 font-medium">Auto-generated if left blank</span>
+                </div>
+                <input
+                  type="text"
+                  value={editingEvent.imageAlt || ''}
+                  onChange={e => setEditingEvent({ ...editingEvent, imageAlt: e.target.value })}
+                  placeholder={buildAutoImageAlt({
+                    type: 'event',
+                    title: editingEvent.title,
+                    category: editingEvent.category,
+                    location: editingEvent.location
+                  })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-300"
                 />
               </div>
 

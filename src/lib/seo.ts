@@ -24,6 +24,7 @@ export interface SEOProps {
   canonicalPath?: string;
   ogType?: 'website' | 'article';
   ogImage?: string;
+  ogImageAlt?: string;
   keywords?: string[];
   noindex?: boolean;
   publishedTime?: string;
@@ -51,6 +52,7 @@ export function useDocumentSEO({
   canonicalPath = '',
   ogType = 'website',
   ogImage,
+  ogImageAlt,
   keywords,
   noindex = false,
   publishedTime,
@@ -136,7 +138,8 @@ export function useDocumentSEO({
     if (imageToUse.startsWith('https://')) {
       setMeta('property', 'og:image:secure_url', imageToUse);
     }
-    setMeta('property', 'og:image:alt', title);
+    const resolvedImageAlt = (ogImageAlt || '').trim() || title;
+    setMeta('property', 'og:image:alt', resolvedImageAlt);
     setMeta('property', 'og:site_name', 'NexGen Council');
 
     // 5. Twitter / X Cards
@@ -144,7 +147,7 @@ export function useDocumentSEO({
     setMeta('name', 'twitter:title', title);
     setMeta('name', 'twitter:description', description);
     setMeta('name', 'twitter:image', imageToUse);
-    setMeta('name', 'twitter:image:alt', title);
+    setMeta('name', 'twitter:image:alt', resolvedImageAlt);
 
     if (publishedTime) {
       setMeta('property', 'article:published_time', publishedTime);
@@ -184,6 +187,7 @@ export function useDocumentSEO({
     canonicalPath,
     ogType,
     ogImage,
+    ogImageAlt,
     serializedKeywords,
     noindex,
     publishedTime,

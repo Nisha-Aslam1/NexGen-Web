@@ -15,6 +15,12 @@ import {
   Image as ImageIcon
 } from 'lucide-react';
 import { GalleryItem } from '../../types.ts';
+import {
+  buildAutoImageAlt,
+  buildAutoImageCaption,
+  buildImageObjectSchema,
+  resolvePublicImageUrl
+} from '../../lib/imageSeo.ts';
 
 const PRESET_CATEGORIES = ['Workshops', 'Summits', 'Technology', 'Outreach', 'Ceremonies'];
 
@@ -52,16 +58,43 @@ export const GalleryPage: React.FC = () => {
 
   const orgName = settings?.organizationName || 'NexGen Women Empowerment & Youth Leadership Council';
 
-  const imageLdObjects = filteredItems.map(item => ({
-    '@type': 'ImageObject',
-    name: item.title,
-    caption: item.caption || item.category,
-    contentUrl: item.imageUrl,
-    url: item.imageUrl,
-    description: item.caption || `${item.title} - ${item.category} NexGen Council initiative photo`,
-    creditText: orgName,
-    copyrightNotice: `© ${new Date().getFullYear()} ${orgName}`
-  }));
+  const imageLdObjects = filteredItems
+    .map(item => {
+      const resolvedUrl = resolvePublicImageUrl(item.imageUrl, window.location.origin, { allowDataUrl: false });
+      if (!resolvedUrl) return null;
+      return buildImageObjectSchema({
+        url: resolvedUrl,
+        alt: buildAutoImageAlt({
+          type: 'gallery',
+          customAlt: item.imageAlt,
+          title: item.title,
+          category: item.category,
+          caption: item.caption
+        }),
+        name: item.title,
+        caption: buildAutoImageCaption({
+          type: 'gallery',
+          customAlt: item.imageAlt,
+          title: item.title,
+          category: item.category,
+          caption: item.caption
+        }),
+        pageUrl: `${window.location.origin}/gallery`,
+        orgName
+      });
+    })
+    .filter(Boolean);
+
+  const firstGalleryItem = filteredItems[0];
+  const firstGalleryAlt = firstGalleryItem
+    ? buildAutoImageAlt({
+        type: 'gallery',
+        customAlt: firstGalleryItem.imageAlt,
+        title: firstGalleryItem.title,
+        category: firstGalleryItem.category,
+        caption: firstGalleryItem.caption
+      })
+    : 'Field Photos & Media Gallery — NexGen Council';
 
   useDocumentSEO({
     title: 'Field Photos & Media Gallery | NexGen Council',
@@ -69,7 +102,8 @@ export const GalleryPage: React.FC = () => {
       'Explore photos and archival visual highlights from NexGen Council youth leadership conventions, skills workshops, and women empowerment outreach cohorts.',
     canonicalPath: '/gallery',
     ogType: 'website',
-    ogImage: filteredItems.length > 0 ? filteredItems[0].imageUrl : '/banner.png',
+    ogImage: firstGalleryItem ? firstGalleryItem.imageUrl : '/banner.png',
+    ogImageAlt: firstGalleryAlt,
     keywords: ['NexGen gallery', 'youth leadership photos', 'women empowerment events gallery'],
     jsonLd: [
       {
@@ -273,8 +307,14 @@ export const GalleryPage: React.FC = () => {
               >
                 <img
                   src={item.imageUrl || '/banner.png'}
-                  alt={`${item.title} - ${item.category} photo | ${orgName}`}
-                  title={`${item.title} (${item.category})`}
+                  alt={buildAutoImageAlt({
+                    type: 'gallery',
+                    customAlt: item.imageAlt,
+                    title: item.title,
+                    category: item.category,
+                    caption: item.caption
+                  })}
+                  title={`${item.title} (${item.category}) — NexGen Council`}
                   itemProp="contentUrl"
                   loading="lazy"
                   decoding="async"
@@ -330,8 +370,14 @@ export const GalleryPage: React.FC = () => {
               >
                 <img
                   src={item.imageUrl || '/banner.png'}
-                  alt={`${item.title} - ${item.category} photo | ${orgName}`}
-                  title={`${item.title} (${item.category})`}
+                  alt={buildAutoImageAlt({
+                    type: 'gallery',
+                    customAlt: item.imageAlt,
+                    title: item.title,
+                    category: item.category,
+                    caption: item.caption
+                  })}
+                  title={`${item.title} (${item.category}) — NexGen Council`}
                   itemProp="contentUrl"
                   loading="lazy"
                   decoding="async"
@@ -436,7 +482,14 @@ export const GalleryPage: React.FC = () => {
             <div className="max-w-5xl max-h-full flex flex-col items-center justify-center px-10 sm:px-16 space-y-3">
               <img
                 src={activeLightboxItem.imageUrl || '/banner.png'}
-                alt={activeLightboxItem.title}
+                alt={buildAutoImageAlt({
+                  type: 'gallery',
+                  customAlt: activeLightboxItem.imageAlt,
+                  title: activeLightboxItem.title,
+                  category: activeLightboxItem.category,
+                  caption: activeLightboxItem.caption
+                })}
+                title={`${activeLightboxItem.title} (${activeLightboxItem.category}) — NexGen Council`}
                 referrerPolicy="no-referrer"
                 onError={(e) => {
                   const el = e.currentTarget;
@@ -490,7 +543,14 @@ export const GalleryPage: React.FC = () => {
                 >
                   <img
                     src={thumb.imageUrl || '/banner.png'}
-                    alt=""
+                    alt={buildAutoImageAlt({
+                      type: 'gallery',
+                      customAlt: thumb.imageAlt,
+                      title: thumb.title,
+                      category: thumb.category,
+                      caption: thumb.caption
+                    })}
+                    title={thumb.title}
                     referrerPolicy="no-referrer"
                     className="w-full h-full object-cover"
                   />

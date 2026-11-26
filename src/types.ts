@@ -94,6 +94,7 @@ export interface Program {
   shortDescription: string;
   fullDescription: string;
   coverImage: string;
+  imageAlt?: string;
   startDate?: string;
   endDate?: string;
   featured: boolean;
@@ -111,6 +112,7 @@ export interface EventItem {
   description: string;
   image: string;
   coverImage?: string;
+  imageAlt?: string;
   date: string;
   time: string;
   location: string;
@@ -132,7 +134,8 @@ export interface NewsItem {
   category: string;
   author: string;
   authorRole?: string;
-  coverImage: string;
+  coverImage?: string;
+  imageAlt?: string;
   summary: string;
   content: string;
   publishedAt: string;
@@ -153,6 +156,7 @@ export interface TeamMember {
   department: string;
   bio: string;
   image: string;
+  imageAlt?: string;
   displayOrder: number;
   active: boolean;
   linkedinUrl?: string;
@@ -168,6 +172,7 @@ export interface GalleryItem {
   date: string;
   displayOrder: number;
   caption?: string;
+  imageAlt?: string;
 }
 
 export interface FaqItem {

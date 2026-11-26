@@ -7,6 +7,8 @@ interface ImageUploaderProps {
   onChange: (url: string) => void;
   label?: string;
   helperText?: string;
+  required?: boolean;
+  onUploadingChange?: (uploading: boolean) => void;
 }
 
 const IMAGE_EXT_REGEX = /\.(png|jpe?g|webp|gif|svg|bmp|avif|ico)$/i;
@@ -16,7 +18,9 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
   value,
   onChange,
   label = 'Image / Visual Asset',
-  helperText = 'Upload from your device or paste an external image URL'
+  helperText = 'Upload from your device or paste an external image URL',
+  required = true,
+  onUploadingChange
 }) => {
   const [activeTab, setActiveTab] = useState<'upload' | 'url'>(
     value && !value.startsWith('/uploads/') && !value.startsWith('data:') && !value.startsWith('/')
@@ -32,6 +36,10 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
   useEffect(() => {
     setPreviewError(false);
   }, [value]);
+
+  useEffect(() => {
+    onUploadingChange?.(uploading);
+  }, [uploading, onUploadingChange]);
 
   const processFile = async (file: File) => {
     const isImageMime = file.type.startsWith('image/');
@@ -183,7 +191,10 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <div>
-          <label className="block font-semibold text-slate-800 text-xs">{label} *</label>
+          <label className="block font-semibold text-slate-800 text-xs">
+            {label}
+            {required ? ' *' : ''}
+          </label>
           <p className="text-[11px] text-slate-500">{helperText}</p>
         </div>
         <div className="flex bg-slate-100 p-0.5 rounded-lg text-[11px] font-medium text-slate-600">
@@ -298,9 +309,20 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
         <div className="space-y-2">
           <div className="flex gap-2">
             <input
-              type="url"
+              type="text"
               value={value}
-              onChange={(e) => onChange(e.target.value)}
+              onChange={(e) => {
+                const raw = e.target.value;
+                const trimmed = raw.trim();
+                onChange(trimmed.startsWith('uploads/') ? `/${trimmed}` : raw);
+              }}
+              onBlur={(e) => {
+                const trimmed = e.target.value.trim();
+                const normalized = trimmed.startsWith('uploads/') ? `/${trimmed}` : trimmed;
+                if (normalized !== e.target.value) {
+                  onChange(normalized);
+                }
+              }}
               placeholder="https://images.unsplash.com/photo-... or /uploads/..."
               className="flex-1 px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono focus:border-indigo-600 outline-none"
             />

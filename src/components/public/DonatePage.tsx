@@ -698,6 +698,7 @@ export const DonatePage: React.FC = () => {
                     <img
                       src={QR_IMAGE_PATH}
                       alt="Scan to Donate Easypaisa Raast QR Code — NexGen Council Merchant Till 992191268"
+                      title="Scan to Donate Easypaisa & Raast QR Code — NexGen Council Till 992191268"
                       width={512}
                       height={512}
                       loading="eager"
@@ -713,6 +714,7 @@ export const DonatePage: React.FC = () => {
                     <img
                       src={EASYPAISA_QR_CARD_PATH}
                       alt="Official Easypaisa Digital Bank & Raast QR Card for NexGen Council — Merchant Till 992191268"
+                      title="Official Easypaisa & Raast QR Payment Card — NexGen Council"
                       width={720}
                       height={455}
                       loading="eager"
@@ -1394,6 +1396,7 @@ export const DonatePage: React.FC = () => {
               <img
                 src={POSTER_IMAGE_PATH}
                 alt="NexGen Women Empowerment and Youth Leadership Council Official Donation Poster"
+                title="NexGen Council Official Donation Campaign Poster"
                 width={1199}
                 height={1312}
                 className="max-h-[75vh] w-auto rounded-lg shadow-sm object-contain"

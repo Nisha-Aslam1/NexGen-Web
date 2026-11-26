@@ -334,6 +334,7 @@ export const AboutPage: React.FC = () => {
                       <img
                         src="/logo.png"
                         alt="NexGen Women Empowerment & Youth Leadership Council Official Logo"
+                        title="NexGen Women Empowerment & Youth Leadership Council Crest"
                         width={208}
                         height={208}
                         loading="lazy"

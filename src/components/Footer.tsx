@@ -164,7 +164,8 @@ export const Footer: React.FC = () => {
                   <source srcSet="/logo.webp" type="image/webp" />
                   <img
                     src="/logo.png"
-                    alt="NexGen Council Logo"
+                    alt="NexGen Women Empowerment & Youth Leadership Council Official Logo"
+                    title="NexGen Council Official Logo"
                     width={48}
                     height={48}
                     loading="lazy"

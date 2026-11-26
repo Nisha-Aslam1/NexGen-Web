@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { NewsItem } from '../../types.ts';
 import { ImageUploader } from '../common/ImageUploader.tsx';
+import { buildAutoImageAlt } from '../../lib/imageSeo.ts';
 
 const SUGGESTED_SEO_KEYWORDS = [
   'NexGen Council',
@@ -58,6 +59,7 @@ export const AdminNews: React.FC = () => {
   const [modalTab, setModalTab] = useState<'content' | 'seo'>('content');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
 
   // Admin News list filter & search
   const [searchQuery, setSearchQuery] = useState('');
@@ -109,7 +111,7 @@ export const AdminNews: React.FC = () => {
       authorRole: 'Editorial Board',
       summary: '',
       content: '',
-      coverImage: '/banner.png',
+      coverImage: '',
       publishedAt: new Date().toISOString().split('T')[0],
       featured: false,
       status: 'Published',
@@ -211,10 +213,13 @@ export const AdminNews: React.FC = () => {
 
     setSaving(true);
     try {
+      const rawCover = (editingNews.coverImage || '').trim();
+      const normalizedCover = rawCover.startsWith('uploads/') ? `/${rawCover}` : rawCover;
       const payload: Partial<NewsItem> = {
         ...editingNews,
         title: editingNews.title.trim(),
         slug: (editingNews.slug || '').trim() || toSlug(editingNews.title),
+        coverImage: normalizedCover,
         summary: editingNews.summary.trim(),
         content: (editingNews.content || '').trim() || editingNews.summary.trim()
       };
@@ -450,21 +455,25 @@ export const AdminNews: React.FC = () => {
               className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col justify-between"
             >
               <div>
-                <div className="aspect-16/9 bg-slate-900 relative overflow-hidden">
-                  <img
-                    src={item.coverImage || '/banner.png'}
-                    alt={item.title}
-                    referrerPolicy="no-referrer"
-                    onError={(e) => {
-                      const el = e.currentTarget;
-                      if (!el.dataset.fallbackApplied) {
-                        el.dataset.fallbackApplied = '1';
-                        el.src = '/banner.png';
-                      }
-                    }}
-                    className="w-full h-full object-cover"
-                  />
-                </div>
+                {item.coverImage?.trim() && (
+                  <div className="w-full bg-slate-950 relative overflow-hidden flex items-center justify-center">
+                    <img
+                      src={item.coverImage.trim().startsWith('uploads/') ? `/${item.coverImage.trim()}` : item.coverImage.trim()}
+                      alt={buildAutoImageAlt({
+                        type: 'news',
+                        customAlt: item.imageAlt,
+                        title: item.title,
+                        category: item.category
+                      })}
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        const wrapper = e.currentTarget.parentElement;
+                        if (wrapper) wrapper.style.display = 'none';
+                      }}
+                      className="w-full h-auto block object-contain"
+                    />
+                  </div>
+                )}
 
                 <div className="p-5 space-y-2.5">
                   <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
@@ -660,11 +669,33 @@ export const AdminNews: React.FC = () => {
                   <div>
                     <ImageUploader
                       value={editingNews.coverImage || ''}
-                      onChange={url => setEditingNews({ ...editingNews, coverImage: url })}
-                      label="Cover Image"
-                      helperText="Upload a high-resolution editorial cover or provide a URL"
+                      onChange={url => setEditingNews(prev => (prev ? { ...prev, coverImage: url } : prev))}
+                      label="Cover Image (Optional)"
+                      helperText="Optional — upload a cover photo, paste an image URL, or leave blank for a text-only dispatch"
+                      required={false}
+                      onUploadingChange={setUploadingImage}
                     />
                   </div>
+
+                  {Boolean((editingNews.coverImage || '').trim()) && (
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="font-semibold text-slate-700">Cover Image Alt Text (Auto-SEO)</label>
+                        <span className="text-[11px] text-emerald-700 font-medium">Auto-generated if left blank</span>
+                      </div>
+                      <input
+                        type="text"
+                        value={editingNews.imageAlt || ''}
+                        onChange={e => setEditingNews({ ...editingNews, imageAlt: e.target.value })}
+                        placeholder={buildAutoImageAlt({
+                          type: 'news',
+                          title: editingNews.title,
+                          category: editingNews.category
+                        })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-300"
+                      />
+                    </div>
+                  )}
 
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Executive Summary (Deck) *</label>
@@ -930,10 +961,10 @@ export const AdminNews: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={saving}
+                  disabled={saving || uploadingImage}
                   className="px-5 py-2 bg-indigo-950 text-white rounded-xl font-bold hover:bg-indigo-900 transition-colors shadow-xs cursor-pointer disabled:opacity-50"
                 >
-                  {saving ? 'Saving...' : editingNews.id ? 'Update Story & SEO' : 'Publish Story'}
+                  {uploadingImage ? 'Uploading Image...' : saving ? 'Saving...' : editingNews.id ? 'Update Story & SEO' : 'Publish Story'}
                 </button>
               </div>
             </form>

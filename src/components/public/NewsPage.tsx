@@ -13,11 +13,24 @@ import {
 } from 'lucide-react';
 import { NewsItem } from '../../types.ts';
 import { NotFoundPage } from './NotFoundPage.tsx';
+import {
+  buildAutoImageAlt,
+  buildAutoImageCaption,
+  buildImageObjectSchema,
+  resolvePublicImageUrl
+} from '../../lib/imageSeo.ts';
 
 function getReadMinutes(item: NewsItem): number {
   if (item.readTimeMinutes && item.readTimeMinutes > 0) return item.readTimeMinutes;
   const words = `${item.summary || ''} ${item.content || ''}`.trim().split(/\s+/).filter(Boolean).length;
   return Math.max(1, Math.ceil(words / 200));
+}
+
+function resolveNewsCoverImage(raw?: string): string | null {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('uploads/')) return `/${trimmed}`;
+  return trimmed;
 }
 
 export const NewsPage: React.FC = () => {
@@ -139,6 +152,16 @@ export const NewsPage: React.FC = () => {
     );
   }, [effectiveArticle, listingSeoKeywords]);
 
+  const effectiveArticleCover = resolveNewsCoverImage(effectiveArticle?.coverImage) || '/banner.png';
+  const effectiveArticleAlt = effectiveArticle
+    ? buildAutoImageAlt({
+        type: 'news',
+        customAlt: effectiveArticle.imageAlt,
+        title: effectiveArticle.title,
+        category: effectiveArticle.category
+      })
+    : 'News, Dispatches & Announcements — NexGen Council';
+
   useDocumentSEO({
     skip: shouldSkipSeo,
     title: effectiveArticle
@@ -151,7 +174,8 @@ export const NewsPage: React.FC = () => {
       ? effectiveArticle.canonicalUrl?.trim() || `/news/${effectiveArticle.slug || effectiveArticle.id}`
       : '/news',
     ogType: effectiveArticle ? 'article' : 'website',
-    ogImage: effectiveArticle?.coverImage || '/banner.png',
+    ogImage: effectiveArticleCover,
+    ogImageAlt: effectiveArticleAlt,
     keywords: articleKeywords,
     publishedTime: effectiveArticle?.publishedAt,
     author: effectiveArticle?.author || 'NexGen Secretariat',
@@ -161,7 +185,26 @@ export const NewsPage: React.FC = () => {
           '@type': 'NewsArticle',
           headline: effectiveArticle.title,
           description: (effectiveArticle.seoDescription || '').trim() || effectiveArticle.summary,
-          image: [effectiveArticle.coverImage || '/banner.png'],
+          image: [
+            buildImageObjectSchema({
+              url:
+                resolvePublicImageUrl(effectiveArticleCover, window.location.origin, {
+                  allowDataUrl: true,
+                  fallbackPath: '/banner.png'
+                }) || `${window.location.origin}/banner.png`,
+              alt: effectiveArticleAlt,
+              name: effectiveArticle.title,
+              caption: buildAutoImageCaption({
+                type: 'news',
+                customAlt: effectiveArticle.imageAlt,
+                title: effectiveArticle.title,
+                category: effectiveArticle.category,
+                summary: effectiveArticle.summary
+              }),
+              pageUrl: `${window.location.origin}/news/${effectiveArticle.slug || effectiveArticle.id}`,
+              representativeOfPage: true
+            })
+          ],
           datePublished: effectiveArticle.publishedAt,
           dateModified: effectiveArticle.publishedAt,
           articleSection: effectiveArticle.category,
@@ -187,6 +230,7 @@ export const NewsPage: React.FC = () => {
             '@type': 'ListItem',
             position: idx + 1,
             name: n.title,
+            image: resolvePublicImageUrl(n.coverImage, window.location.origin, { allowDataUrl: false }) || undefined,
             url: `${window.location.origin}/news/${n.slug || n.id}`
           }))
         }
@@ -296,26 +340,33 @@ export const NewsPage: React.FC = () => {
       </section>
 
       {/* Lead Story Spotlight */}
-      {featured && !search && selectedCategory === 'All' && (
-        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <article className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs grid grid-cols-1 lg:grid-cols-12 items-stretch">
-            <div className="lg:col-span-7 aspect-16/10 lg:aspect-auto min-h-[280px] overflow-hidden bg-slate-900">
-              <img
-                src={featured.coverImage || '/banner.png'}
-                alt={featured.title}
-                referrerPolicy="no-referrer"
-                onError={(e) => {
-                  const el = e.currentTarget;
-                  if (!el.dataset.fallbackApplied) {
-                    el.dataset.fallbackApplied = '1';
-                    el.src = '/banner.png';
-                  }
-                }}
-                className="w-full h-full object-cover"
-              />
-            </div>
+      {featured && !search && selectedCategory === 'All' && (() => {
+        const featuredCover = resolveNewsCoverImage(featured.coverImage);
+        return (
+          <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <article className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs grid grid-cols-1 lg:grid-cols-12 items-stretch">
+              {featuredCover && (
+                <div className="lg:col-span-7 overflow-hidden bg-slate-950 flex items-center justify-center">
+                  <img
+                    src={featuredCover}
+                    alt={buildAutoImageAlt({
+                      type: 'news',
+                      customAlt: featured.imageAlt,
+                      title: featured.title,
+                      category: featured.category
+                    })}
+                    title={`${featured.title} — NexGen Council`}
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      const container = e.currentTarget.parentElement;
+                      if (container) container.style.display = 'none';
+                    }}
+                    className="w-full h-auto block object-contain"
+                  />
+                </div>
+              )}
 
-            <div className="lg:col-span-5 p-8 sm:p-10 flex flex-col justify-between space-y-6">
+              <div className={`${featuredCover ? 'lg:col-span-5' : 'lg:col-span-12'} p-8 sm:p-10 flex flex-col justify-between space-y-6`}>
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                   <span className="font-semibold text-amber-800 uppercase tracking-wider">Lead Story</span>
@@ -364,7 +415,8 @@ export const NewsPage: React.FC = () => {
             </div>
           </article>
         </section>
-      )}
+        );
+      })()}
 
       {/* Filter, Sort & Editorial Archive Grid */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
@@ -441,6 +493,7 @@ export const NewsPage: React.FC = () => {
             {filteredNews.map(item => {
               const readMins = getReadMinutes(item);
               const topicList = (item.tags && item.tags.length > 0 ? item.tags : item.seoKeywords || []).slice(0, 3);
+              const itemCover = resolveNewsCoverImage(item.coverImage);
 
               return (
                 <article
@@ -449,23 +502,28 @@ export const NewsPage: React.FC = () => {
                   className="group bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-lg transition-all flex flex-col justify-between cursor-pointer"
                 >
                   <div>
-                    <div className="aspect-16/9 overflow-hidden bg-slate-900 relative">
-                      <img
-                        src={item.coverImage || '/banner.png'}
-                        alt={`${item.title} article cover`}
-                        loading="lazy"
-                        decoding="async"
-                        referrerPolicy="no-referrer"
-                        onError={(e) => {
-                          const el = e.currentTarget;
-                          if (!el.dataset.fallbackApplied) {
-                            el.dataset.fallbackApplied = '1';
-                            el.src = '/banner.png';
-                          }
-                        }}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                      />
-                    </div>
+                    {itemCover && (
+                      <div className="w-full overflow-hidden bg-slate-950 relative flex items-center justify-center">
+                        <img
+                          src={itemCover}
+                          alt={buildAutoImageAlt({
+                            type: 'news',
+                            customAlt: item.imageAlt,
+                            title: item.title,
+                            category: item.category
+                          })}
+                          title={`${item.title} — NexGen Council`}
+                          loading="lazy"
+                          decoding="async"
+                          referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            const container = e.currentTarget.parentElement;
+                            if (container) container.style.display = 'none';
+                          }}
+                          className="w-full h-auto block object-contain group-hover:scale-[1.02] transition-transform duration-500"
+                        />
+                      </div>
+                    )}
 
                     <div className="p-6 space-y-2.5">
                       <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
@@ -590,26 +648,35 @@ export const NewsPage: React.FC = () => {
                 </div>
               </header>
 
-              <figure className="max-w-2xl mx-auto">
-                <div className="aspect-16/9 rounded-2xl overflow-hidden bg-slate-900">
-                  <img
-                    src={selectedArticle.coverImage || '/banner.png'}
-                    alt={`${selectedArticle.title} article cover`}
-                    referrerPolicy="no-referrer"
-                    onError={(e) => {
-                      const el = e.currentTarget;
-                      if (!el.dataset.fallbackApplied) {
-                        el.dataset.fallbackApplied = '1';
-                        el.src = '/banner.png';
-                      }
-                    }}
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-                <figcaption className="text-xs font-serif italic text-slate-500 mt-2">
-                  Official NexGen Council Dispatch — {selectedArticle.category}
-                </figcaption>
-              </figure>
+              {(() => {
+                const selectedCover = resolveNewsCoverImage(selectedArticle.coverImage);
+                if (!selectedCover) return null;
+                return (
+                  <figure className="w-full max-w-2xl mx-auto">
+                    <div className="rounded-2xl overflow-hidden bg-slate-950 flex items-center justify-center">
+                      <img
+                        src={selectedCover}
+                        alt={buildAutoImageAlt({
+                          type: 'news',
+                          customAlt: selectedArticle.imageAlt,
+                          title: selectedArticle.title,
+                          category: selectedArticle.category
+                        })}
+                        title={`${selectedArticle.title} — NexGen Council`}
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          const fig = e.currentTarget.closest('figure');
+                          if (fig) fig.style.display = 'none';
+                        }}
+                        className="w-full h-auto block object-contain"
+                      />
+                    </div>
+                    <figcaption className="text-xs font-serif italic text-slate-500 mt-2">
+                      Official NexGen Council Dispatch — {selectedArticle.category}
+                    </figcaption>
+                  </figure>
+                );
+              })()}
 
               <div className="max-w-2xl mx-auto space-y-5 text-slate-700 text-[15px] leading-[1.8]">
                 <p className="font-serif text-lg text-slate-900 leading-relaxed">

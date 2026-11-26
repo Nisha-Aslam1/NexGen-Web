@@ -1724,6 +1724,10 @@ class Database {
       const c = out.canonicalUrl.trim();
       out.canonicalUrl = !c || /^(\/|https?:\/\/)/i.test(c) ? c : '';
     }
+    if (typeof out.coverImage === 'string') {
+      const cleaned = out.coverImage.trim();
+      out.coverImage = cleaned.startsWith('uploads/') ? `/${cleaned}` : cleaned;
+    }
     if (out.readTimeMinutes !== undefined) {
       const rt = Number(out.readTimeMinutes);
       out.readTimeMinutes = Number.isFinite(rt) && rt > 0 ? Math.min(120, Math.round(rt)) : undefined;

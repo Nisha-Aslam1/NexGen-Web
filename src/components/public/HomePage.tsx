@@ -22,6 +22,12 @@ import {
 } from 'lucide-react';
 import { Program, EventItem, TeamMember } from '../../types.ts';
 import { useDocumentSEO } from '../../lib/seo.ts';
+import {
+  buildAutoImageAlt,
+  buildAutoImageCaption,
+  buildImageObjectSchema,
+  resolvePublicImageUrl
+} from '../../lib/imageSeo.ts';
 import { LeaderProfileModal } from './LeaderProfileModal.tsx';
 
 export const HomePage: React.FC = () => {
@@ -36,6 +42,69 @@ export const HomePage: React.FC = () => {
       ? 'https://nexgencouncil.bond'
       : window.location.origin;
 
+  const featuredPrograms = programs.filter(p => p.featured || p.status === 'Published').slice(0, 3);
+  const upcomingEvents = events.filter(e => e.status === 'Upcoming').slice(0, 3);
+  const latestNews = news.filter(n => n.status === 'Published').slice(0, 3);
+  const leadershipPreview = [...team]
+    .filter(t => t.active)
+    .sort((a, b) => (a.displayOrder ?? (a as any).order ?? 999) - (b.displayOrder ?? (b as any).order ?? 999))
+    .slice(0, 4);
+
+  const homeOrgName = settings?.organizationName || 'NexGen Women Empowerment & Youth Leadership Council';
+  const homeImageObjects = [
+    buildImageObjectSchema({
+      url: `${canonicalBase}/banner.png`,
+      alt: 'NexGen Women Empowerment and Youth Leadership Council official banner showcasing flagship community initiatives',
+      name: 'NexGen Council Official Banner',
+      caption: 'Empowering Women. Inspiring Youth. Transforming Communities.',
+      pageUrl: `${canonicalBase}/`,
+      orgName: homeOrgName,
+      representativeOfPage: true
+    }),
+    ...featuredPrograms
+      .map(p => {
+        const url = resolvePublicImageUrl(p.coverImage, canonicalBase, { allowDataUrl: false });
+        if (!url) return null;
+        return buildImageObjectSchema({
+          url,
+          alt: buildAutoImageAlt({ type: 'program', customAlt: p.imageAlt, title: p.title, category: p.category }),
+          name: p.title,
+          caption: buildAutoImageCaption({ type: 'program', customAlt: p.imageAlt, title: p.title, category: p.category, summary: p.shortDescription }),
+          pageUrl: `${canonicalBase}/programs/${p.slug || p.id}`,
+          orgName: homeOrgName
+        });
+      })
+      .filter(Boolean),
+    ...leadershipPreview
+      .map(m => {
+        const url = resolvePublicImageUrl(m.image, canonicalBase, { allowDataUrl: false });
+        if (!url) return null;
+        return buildImageObjectSchema({
+          url,
+          alt: buildAutoImageAlt({ type: 'team', customAlt: m.imageAlt, name: m.name, role: m.position, department: m.department }),
+          name: `${m.name} — ${m.position}`,
+          caption: buildAutoImageCaption({ type: 'team', customAlt: m.imageAlt, name: m.name, role: m.position, department: m.department, caption: m.bio }),
+          pageUrl: `${canonicalBase}/team`,
+          orgName: homeOrgName
+        });
+      })
+      .filter(Boolean),
+    ...latestNews
+      .map(n => {
+        const url = resolvePublicImageUrl(n.coverImage, canonicalBase, { allowDataUrl: false });
+        if (!url) return null;
+        return buildImageObjectSchema({
+          url,
+          alt: buildAutoImageAlt({ type: 'news', customAlt: n.imageAlt, title: n.title, category: n.category }),
+          name: n.title,
+          caption: buildAutoImageCaption({ type: 'news', customAlt: n.imageAlt, title: n.title, category: n.category, summary: n.summary }),
+          pageUrl: `${canonicalBase}/news/${n.slug || n.id}`,
+          orgName: homeOrgName
+        });
+      })
+      .filter(Boolean)
+  ];
+
   useDocumentSEO({
     title: 'NexGen Council — Women Empowerment & Youth Leadership',
     description:
@@ -43,6 +112,7 @@ export const HomePage: React.FC = () => {
     canonicalPath: '/',
     ogType: 'website',
     ogImage: '/banner.png',
+    ogImageAlt: 'NexGen Women Empowerment and Youth Leadership Council Official Banner',
     keywords: [
       'NexGen',
       'NexGen Council',
@@ -58,7 +128,7 @@ export const HomePage: React.FC = () => {
         '@context': 'https://schema.org',
         '@type': 'NGO',
         '@id': `${canonicalBase}/#organization`,
-        name: settings?.organizationName || 'NexGen Women Empowerment & Youth Leadership Council',
+        name: homeOrgName,
         alternateName: [
           'NexGen',
           'NexGen Council',
@@ -103,7 +173,7 @@ export const HomePage: React.FC = () => {
         '@type': 'WebSite',
         '@id': `${canonicalBase}/#website`,
         name: 'NexGen Council',
-        alternateName: ['NexGen', settings?.organizationName || 'NexGen Women Empowerment & Youth Leadership Council'],
+        alternateName: ['NexGen', homeOrgName],
         url: canonicalBase,
         publisher: {
           '@id': `${canonicalBase}/#organization`
@@ -113,6 +183,15 @@ export const HomePage: React.FC = () => {
           target: `${canonicalBase}/programs?q={search_term_string}`,
           'query-input': 'required name=search_term_string'
         }
+      },
+      {
+        '@context': 'https://schema.org',
+        '@type': 'WebPage',
+        '@id': `${canonicalBase}/#webpage`,
+        url: `${canonicalBase}/`,
+        name: 'NexGen Council — Women Empowerment & Youth Leadership',
+        primaryImageOfPage: homeImageObjects[0],
+        associatedMedia: homeImageObjects
       },
       {
         '@context': 'https://schema.org',
@@ -146,14 +225,6 @@ export const HomePage: React.FC = () => {
       }
     ]
   });
-
-  const featuredPrograms = programs.filter(p => p.featured || p.status === 'Published').slice(0, 3);
-  const upcomingEvents = events.filter(e => e.status === 'Upcoming').slice(0, 3);
-  const latestNews = news.filter(n => n.status === 'Published').slice(0, 3);
-  const leadershipPreview = [...team]
-    .filter(t => t.active)
-    .sort((a, b) => (a.displayOrder ?? (a as any).order ?? 999) - (b.displayOrder ?? (b as any).order ?? 999))
-    .slice(0, 4);
 
   return (
     <div className="space-y-20 pb-20">
@@ -236,6 +307,7 @@ export const HomePage: React.FC = () => {
                     width={1920}
                     height={476}
                     alt="NexGen Women Empowerment and Youth Leadership Council official poster showcasing flagship community initiatives"
+                    title="NexGen Council — Empowering Women & Youth Leaders"
                     loading="eager"
                     fetchPriority="high"
                     decoding="async"
@@ -436,7 +508,13 @@ export const HomePage: React.FC = () => {
                 <div className="relative aspect-16/10 overflow-hidden bg-slate-900">
                   <img
                     src={prg.coverImage || '/banner.png'}
-                    alt={prg.title}
+                    alt={buildAutoImageAlt({
+                      type: 'program',
+                      customAlt: prg.imageAlt,
+                      title: prg.title,
+                      category: prg.category
+                    })}
+                    title={`${prg.title} — NexGen Council`}
                     width={640}
                     height={400}
                     loading="lazy"
@@ -535,7 +613,7 @@ export const HomePage: React.FC = () => {
                   {evt.title}
                 </h3>
 
-                <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed whitespace-pre-line">
                   {evt.description}
                 </p>
 
@@ -640,7 +718,14 @@ export const HomePage: React.FC = () => {
               <div className="aspect-square bg-slate-100 overflow-hidden relative shrink-0">
                 <img
                   src={mem.image || '/logo.png'}
-                  alt={mem.name}
+                  alt={buildAutoImageAlt({
+                    type: 'team',
+                    customAlt: mem.imageAlt,
+                    name: mem.name,
+                    role: mem.position,
+                    department: mem.department
+                  })}
+                  title={`${mem.name} — ${mem.position} | NexGen Council`}
                   width={384}
                   height={384}
                   loading="lazy"
@@ -711,36 +796,47 @@ export const HomePage: React.FC = () => {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            {latestNews.map(item => (
+            {latestNews.map(item => {
+              const rawCover = (item.coverImage || '').trim();
+              const coverSrc = rawCover ? (rawCover.startsWith('uploads/') ? `/${rawCover}` : rawCover) : null;
+              return (
               <div
                 key={item.id}
                 className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-lg transition-all flex flex-col justify-between"
               >
                 <div>
-                  <div className="aspect-16/9 overflow-hidden bg-slate-900 relative">
-                    <img
-                      src={item.coverImage || '/banner.png'}
-                      alt={item.title}
-                      width={640}
-                      height={360}
-                      loading="lazy"
-                      decoding="async"
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        const el = e.currentTarget;
-                        if (!el.dataset.fallbackApplied) {
-                          el.dataset.fallbackApplied = '1';
-                          el.src = '/banner.png';
-                        }
-                      }}
-                      className="w-full h-full object-cover"
-                    />
-                    <span className="absolute bottom-3 left-3 px-2.5 py-0.5 rounded-full bg-slate-950/80 text-white text-[11px] font-semibold">
-                      {item.category}
-                    </span>
-                  </div>
+                  {coverSrc && (
+                    <div className="w-full overflow-hidden bg-slate-950 relative flex items-center justify-center">
+                      <img
+                        src={coverSrc}
+                        alt={buildAutoImageAlt({
+                          type: 'news',
+                          customAlt: item.imageAlt,
+                          title: item.title,
+                          category: item.category
+                        })}
+                        title={`${item.title} — NexGen Council Dispatch`}
+                        loading="lazy"
+                        decoding="async"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          const container = e.currentTarget.parentElement;
+                          if (container) container.style.display = 'none';
+                        }}
+                        className="w-full h-auto block object-contain"
+                      />
+                      <span className="absolute bottom-3 left-3 px-2.5 py-0.5 rounded-full bg-slate-950/80 text-white text-[11px] font-semibold">
+                        {item.category}
+                      </span>
+                    </div>
+                  )}
                   <div className="p-6 space-y-2">
-                    <span className="text-[11px] text-slate-600">
+                    {!coverSrc && (
+                      <span className="inline-block px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-900 text-[11px] font-semibold">
+                        {item.category}
+                      </span>
+                    )}
+                    <span className="text-[11px] text-slate-600 block">
                       {new Date(item.publishedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} • By {item.author}
                     </span>
                     <h3 className="font-serif font-bold text-base text-slate-900 leading-snug">
@@ -754,7 +850,7 @@ export const HomePage: React.FC = () => {
                 <div className="px-6 pb-6 pt-2">
                   <button
                     onClick={() => {
-                      setActivePage('news');
+                      setActivePage('news', item.slug || item.id);
                       window.scrollTo({ top: 0, behavior: 'smooth' });
                     }}
                     className="text-xs font-semibold text-indigo-950 hover:underline cursor-pointer"
@@ -763,7 +859,8 @@ export const HomePage: React.FC = () => {
                   </button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </section>
@@ -937,7 +1034,7 @@ export const HomePage: React.FC = () => {
               </div>
             </div>
 
-            <p className="text-sm text-slate-600 leading-relaxed">
+            <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line break-words">
               {selectedEvent.description}
             </p>
 
@@ -997,7 +1094,8 @@ export const HomePage: React.FC = () => {
                   height={476}
                   loading="lazy"
                   decoding="async"
-                  alt="NexGen Council Official Poster - Full"
+                  alt="NexGen Women Empowerment and Youth Leadership Council Official Showcase Poster"
+                  title="NexGen Council Official Poster"
                   className="w-full h-auto max-h-[70vh] object-contain rounded-xl shadow-xs"
                 />
               </picture>

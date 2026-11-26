@@ -82,7 +82,8 @@ export const Navbar: React.FC = () => {
                 <source srcSet="/logo.webp" type="image/webp" />
                 <img
                   src="/logo.png"
-                  alt="NexGen Council Logo"
+                  alt="NexGen Women Empowerment & Youth Leadership Council Official Logo"
+                  title="NexGen Council Official Logo"
                   width={40}
                   height={40}
                   loading="eager"

@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { TeamMember } from '../../types.ts';
 import { X, Mail, Linkedin, Twitter, ShieldCheck } from 'lucide-react';
+import { buildAutoImageAlt } from '../../lib/imageSeo.ts';
 
 interface LeaderProfileModalProps {
   member: TeamMember | null;
@@ -50,7 +51,14 @@ export const LeaderProfileModal: React.FC<LeaderProfileModalProps> = ({ member, 
             <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl overflow-hidden bg-slate-800 border-2 border-amber-400/50 shrink-0 shadow-lg">
               <img
                 src={member.image || '/logo.png'}
-                alt={`${member.name} - ${member.position}`}
+                alt={buildAutoImageAlt({
+                  type: 'team',
+                  customAlt: member.imageAlt,
+                  name: member.name,
+                  role: member.position,
+                  department: member.department
+                })}
+                title={`${member.name} — ${member.position} | NexGen Council`}
                 referrerPolicy="no-referrer"
                 onError={(e) => {
                   const el = e.currentTarget;

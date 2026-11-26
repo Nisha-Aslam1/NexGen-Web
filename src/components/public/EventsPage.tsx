@@ -12,6 +12,12 @@ import {
 } from 'lucide-react';
 import { EventItem } from '../../types.ts';
 import { NotFoundPage } from './NotFoundPage.tsx';
+import {
+  buildAutoImageAlt,
+  buildAutoImageCaption,
+  buildImageObjectSchema,
+  resolvePublicImageUrl
+} from '../../lib/imageSeo.ts';
 
 export const EventsPage: React.FC = () => {
   const { events, setActivePage, addToast, selectedEventSlug, isLoadingPublicData, refreshData } = useApp();
@@ -50,6 +56,22 @@ export const EventsPage: React.FC = () => {
   const isNotFoundSlug = Boolean(selectedEventSlug && !isLoadingPublicData && !matchedEvent);
   const shouldSkipSeo = Boolean(selectedEventSlug && (isLoadingPublicData || !matchedEvent));
 
+  const effectiveEventRawImg = effectiveEvent?.coverImage || effectiveEvent?.image || '/banner.png';
+  const effectiveEventImage =
+    resolvePublicImageUrl(effectiveEventRawImg, window.location.origin, {
+      allowDataUrl: true,
+      fallbackPath: '/banner.png'
+    }) || '/banner.png';
+  const effectiveEventAlt = effectiveEvent
+    ? buildAutoImageAlt({
+        type: 'event',
+        customAlt: effectiveEvent.imageAlt,
+        title: effectiveEvent.title,
+        category: effectiveEvent.category,
+        location: effectiveEvent.location
+      })
+    : 'Upcoming Events, Summits & Workshops — NexGen Council';
+
   useDocumentSEO({
     skip: shouldSkipSeo,
     title: effectiveEvent
@@ -60,7 +82,8 @@ export const EventsPage: React.FC = () => {
       : 'Join NexGen Council for upcoming youth leadership summits, policy debates, and women empowerment community symposiums.',
     canonicalPath: effectiveEvent ? `/events/${effectiveEvent.slug || effectiveEvent.id}` : '/events',
     ogType: 'website',
-    ogImage: effectiveEvent?.coverImage || effectiveEvent?.image || '/banner.png',
+    ogImage: effectiveEventImage,
+    ogImageAlt: effectiveEventAlt,
     jsonLd: effectiveEvent
       ? {
           '@context': 'https://schema.org',
@@ -73,6 +96,23 @@ export const EventsPage: React.FC = () => {
             ? 'https://schema.org/OnlineEventAttendanceMode'
             : 'https://schema.org/OfflineEventAttendanceMode',
           maximumAttendeeCapacity: effectiveEvent.capacity || undefined,
+          image: [
+            buildImageObjectSchema({
+              url: effectiveEventImage,
+              alt: effectiveEventAlt,
+              name: effectiveEvent.title,
+              caption: buildAutoImageCaption({
+                type: 'event',
+                customAlt: effectiveEvent.imageAlt,
+                title: effectiveEvent.title,
+                category: effectiveEvent.category,
+                location: effectiveEvent.location,
+                summary: effectiveEvent.description
+              }),
+              pageUrl: `${window.location.origin}/events/${effectiveEvent.slug || effectiveEvent.id}`,
+              representativeOfPage: true
+            })
+          ],
           location: {
             '@type': 'Place',
             name: effectiveEvent.location,
@@ -95,6 +135,7 @@ export const EventsPage: React.FC = () => {
             '@type': 'ListItem',
             position: idx + 1,
             name: e.title,
+            image: resolvePublicImageUrl(e.coverImage || e.image, window.location.origin, { allowDataUrl: false }) || undefined,
             url: `${window.location.origin}/events/${e.slug || e.id}`
           }))
         }
@@ -275,7 +316,7 @@ export const EventsPage: React.FC = () => {
                       {evt.title}
                     </h3>
 
-                    <p className="text-xs text-slate-600 line-clamp-3 leading-relaxed">
+                    <p className="text-xs text-slate-600 line-clamp-3 leading-relaxed whitespace-pre-line">
                       {evt.description}
                     </p>
 
@@ -360,7 +401,7 @@ export const EventsPage: React.FC = () => {
               )}
             </div>
 
-            <p className="text-sm text-slate-600 leading-relaxed">
+            <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line break-words">
               {selectedEvent.description}
             </p>
 

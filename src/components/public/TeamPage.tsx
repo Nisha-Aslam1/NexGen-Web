@@ -4,6 +4,12 @@ import { useDocumentSEO } from '../../lib/seo.ts';
 import { TeamMember } from '../../types.ts';
 import { LeaderProfileModal } from './LeaderProfileModal.tsx';
 import {
+  buildAutoImageAlt,
+  buildAutoImageCaption,
+  buildImageObjectSchema,
+  resolvePublicImageUrl
+} from '../../lib/imageSeo.ts';
+import {
   Users,
   Mail,
   Linkedin,
@@ -22,32 +28,72 @@ export const TeamPage: React.FC = () => {
   const leadership = activeMembers.filter(m => m.department === 'Executive Board' || m.department === 'Leadership');
   const programLeads = activeMembers.filter(m => m.department !== 'Executive Board' && m.department !== 'Leadership');
 
+  const teamOrgName = settings?.organizationName || 'NexGen Women Empowerment & Youth Leadership Council';
+
   useDocumentSEO({
     title: 'Executive Leadership & Board | NexGen Council',
     description:
       'Meet the founder, board of directors, council executives, and program coordinators leading NexGen Women Empowerment & Youth Leadership Council.',
     canonicalPath: '/team',
     ogType: 'website',
-    ogImage: '/banner.png',
+    ogImage: activeMembers[0]?.image || '/banner.png',
+    ogImageAlt: activeMembers[0]
+      ? buildAutoImageAlt({
+          type: 'team',
+          customAlt: activeMembers[0].imageAlt,
+          name: activeMembers[0].name,
+          role: activeMembers[0].position,
+          department: activeMembers[0].department
+        })
+      : 'NexGen Council Executive Leadership & Advisory Board',
     keywords: ['NexGen leadership', 'NexGen executive board', 'Minahil Imran Awan'],
     jsonLd: [
       {
         '@context': 'https://schema.org',
         '@type': 'ItemList',
         name: 'NexGen Council Leadership & Advisory Board',
-        itemListElement: activeMembers.map((m, idx) => ({
-          '@type': 'ListItem',
-          position: idx + 1,
-          item: {
-            '@type': 'Person',
+        itemListElement: activeMembers.map((m, idx) => {
+          const portraitUrl =
+            resolvePublicImageUrl(m.image, window.location.origin, {
+              allowDataUrl: false,
+              fallbackPath: '/logo.png'
+            }) || `${window.location.origin}/logo.png`;
+          const portraitAlt = buildAutoImageAlt({
+            type: 'team',
+            customAlt: m.imageAlt,
             name: m.name,
-            jobTitle: m.position,
-            worksFor: {
-              '@type': 'NGO',
-              name: 'NexGen Council'
+            role: m.position,
+            department: m.department
+          });
+          return {
+            '@type': 'ListItem',
+            position: idx + 1,
+            item: {
+              '@type': 'Person',
+              name: m.name,
+              jobTitle: m.position,
+              image: buildImageObjectSchema({
+                url: portraitUrl,
+                alt: portraitAlt,
+                name: `${m.name} — ${m.position}`,
+                caption: buildAutoImageCaption({
+                  type: 'team',
+                  customAlt: m.imageAlt,
+                  name: m.name,
+                  role: m.position,
+                  department: m.department,
+                  caption: m.bio
+                }),
+                pageUrl: `${window.location.origin}/team`,
+                orgName: teamOrgName
+              }),
+              worksFor: {
+                '@type': 'NGO',
+                name: 'NexGen Council'
+              }
             }
-          }
-        }))
+          };
+        })
       }
     ]
   });
@@ -92,7 +138,14 @@ export const TeamPage: React.FC = () => {
                 <div className="aspect-square bg-slate-900 overflow-hidden relative shrink-0">
                   <img
                     src={mem.image || '/logo.png'}
-                    alt={`${mem.name} - ${mem.position}`}
+                    alt={buildAutoImageAlt({
+                      type: 'team',
+                      customAlt: mem.imageAlt,
+                      name: mem.name,
+                      role: mem.position,
+                      department: mem.department
+                    })}
+                    title={`${mem.name} — ${mem.position} | NexGen Council`}
                     loading="lazy"
                     decoding="async"
                     referrerPolicy="no-referrer"
@@ -202,7 +255,14 @@ export const TeamPage: React.FC = () => {
                   <div className="aspect-square bg-slate-100 overflow-hidden relative shrink-0">
                     <img
                       src={mem.image || '/logo.png'}
-                      alt={mem.name}
+                      alt={buildAutoImageAlt({
+                        type: 'team',
+                        customAlt: mem.imageAlt,
+                        name: mem.name,
+                        role: mem.position,
+                        department: mem.department
+                      })}
+                      title={`${mem.name} — ${mem.position} | NexGen Council`}
                       loading="lazy"
                       decoding="async"
                       referrerPolicy="no-referrer"
