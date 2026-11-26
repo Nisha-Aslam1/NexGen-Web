@@ -118,6 +118,7 @@ export function useDocumentSEO({
     setMeta('name', 'description', description);
     setMeta('name', 'keywords', mergedKeywords.join(', '));
     setMeta('name', 'application-name', 'NexGen Council');
+    setMeta('name', 'apple-mobile-web-app-title', 'NexGen Council');
     setLink('canonical', fullCanonical);
     setLink('alternate', fullCanonical, { hreflang: 'en' });
     setLink('alternate', fullCanonical, { hreflang: 'x-default' });

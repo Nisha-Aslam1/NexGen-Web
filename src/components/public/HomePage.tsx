@@ -137,7 +137,7 @@ export const HomePage: React.FC = () => {
           'NexGen Empowerment Council',
           'NexGen Pakistan'
         ],
-        url: canonicalBase,
+        url: `${canonicalBase}/`,
         logo: {
           '@type': 'ImageObject',
           url: `${canonicalBase}/logo.png`
@@ -173,8 +173,9 @@ export const HomePage: React.FC = () => {
         '@type': 'WebSite',
         '@id': `${canonicalBase}/#website`,
         name: 'NexGen Council',
-        alternateName: ['NexGen', homeOrgName],
-        url: canonicalBase,
+        alternateName: 'NexGen',
+        url: `${canonicalBase}/`,
+        inLanguage: 'en',
         publisher: {
           '@id': `${canonicalBase}/#organization`
         },
@@ -499,13 +500,13 @@ export const HomePage: React.FC = () => {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
             {featuredPrograms.map(prg => (
               <div
                 key={prg.id}
                 className="bg-white rounded-3xl overflow-hidden border border-slate-200 shadow-sm hover:shadow-xl transition-all duration-300 flex flex-col group"
               >
-                <div className="relative aspect-16/10 overflow-hidden bg-slate-900">
+                <div className="relative w-full overflow-hidden bg-slate-100 flex items-center justify-center">
                   <img
                     src={prg.coverImage || '/banner.png'}
                     alt={buildAutoImageAlt({
@@ -515,8 +516,6 @@ export const HomePage: React.FC = () => {
                       category: prg.category
                     })}
                     title={`${prg.title} — NexGen Council`}
-                    width={640}
-                    height={400}
                     loading="lazy"
                     decoding="async"
                     referrerPolicy="no-referrer"
@@ -527,19 +526,19 @@ export const HomePage: React.FC = () => {
                         el.src = '/banner.png';
                       }
                     }}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    className="w-full h-auto block object-contain group-hover:scale-[1.02] transition-transform duration-500"
                   />
                   <span className="absolute top-4 left-4 px-3 py-1 bg-white/90 backdrop-blur-md rounded-full text-[11px] font-bold text-indigo-950 uppercase tracking-wider shadow-sm">
                     {prg.category}
                   </span>
                 </div>
 
-                <div className="p-6 flex-1 flex flex-col justify-between space-y-4">
+                <div className="p-6 flex flex-col space-y-4">
                   <div className="space-y-2">
                     <h3 className="font-serif font-bold text-lg text-slate-900 group-hover:text-indigo-950 transition-colors">
                       {prg.title}
                     </h3>
-                    <p className="text-xs text-slate-600 line-clamp-3 leading-relaxed">
+                    <p className="text-xs text-slate-600 line-clamp-3 leading-relaxed whitespace-pre-line break-words">
                       {prg.shortDescription}
                     </p>
                   </div>
@@ -592,62 +591,94 @@ export const HomePage: React.FC = () => {
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {upcomingEvents.map(evt => (
-            <div
-              key={evt.id}
-              className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4"
-            >
-              <div className="space-y-3">
-                <div className="flex items-center justify-between text-xs text-slate-500">
-                  <span className="font-semibold text-indigo-950 bg-slate-100 px-2.5 py-1 rounded-md">
-                    {evt.category}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Calendar className="w-3.5 h-3.5 text-amber-600" />
-                    {new Date(evt.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
-                  </span>
-                </div>
-
-                <h3 className="font-serif font-bold text-base text-slate-900 leading-snug">
-                  {evt.title}
-                </h3>
-
-                <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed whitespace-pre-line">
-                  {evt.description}
-                </p>
-
-                <div className="space-y-1.5 text-xs text-slate-500 pt-2 border-t border-slate-100">
-                  <div className="flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-slate-400" />
-                    <span>{evt.time}</span>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
+          {upcomingEvents.map(evt => {
+            const rawEvtImg = (evt.coverImage || evt.image || '').trim();
+            const evtCover = rawEvtImg ? (rawEvtImg.startsWith('uploads/') ? `/${rawEvtImg}` : rawEvtImg) : null;
+            return (
+              <div
+                key={evt.id}
+                className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-all flex flex-col"
+              >
+                {evtCover && (
+                  <div
+                    onClick={() => setSelectedEvent(evt)}
+                    className="w-full overflow-hidden bg-slate-100 relative flex items-center justify-center cursor-pointer group"
+                  >
+                    <img
+                      src={evtCover}
+                      alt={buildAutoImageAlt({
+                        type: 'event',
+                        customAlt: evt.imageAlt,
+                        title: evt.title,
+                        category: evt.category,
+                        location: evt.location
+                      })}
+                      title={`${evt.title} — NexGen Council`}
+                      loading="lazy"
+                      decoding="async"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        const container = e.currentTarget.parentElement;
+                        if (container) container.style.display = 'none';
+                      }}
+                      className="w-full h-auto block object-contain group-hover:scale-[1.02] transition-transform duration-500"
+                    />
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                    <span className="truncate">{evt.location}</span>
+                )}
+                <div className="p-6 flex flex-col space-y-4">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between text-xs text-slate-500">
+                      <span className="font-semibold text-indigo-950 bg-slate-100 px-2.5 py-1 rounded-md">
+                        {evt.category}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Calendar className="w-3.5 h-3.5 text-amber-600" />
+                        {new Date(evt.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </span>
+                    </div>
+
+                    <h3 className="font-serif font-bold text-base text-slate-900 leading-snug">
+                      {evt.title}
+                    </h3>
+
+                    <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed whitespace-pre-line break-words">
+                      {evt.description}
+                    </p>
+
+                    <div className="space-y-1.5 text-xs text-slate-500 pt-2 border-t border-slate-100">
+                      <div className="flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-slate-400" />
+                        <span>{evt.time}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                        <span className="truncate">{evt.location}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 flex items-center justify-between">
+                    <button
+                      onClick={() => setSelectedEvent(evt)}
+                      className="text-xs font-semibold text-indigo-950 hover:underline cursor-pointer"
+                    >
+                      Event Details
+                    </button>
+                    <button
+                      onClick={() => {
+                        setActivePage('volunteer');
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                    >
+                      RSVP / Register
+                    </button>
                   </div>
                 </div>
               </div>
-
-              <div className="pt-2 flex items-center justify-between">
-                <button
-                  onClick={() => setSelectedEvent(evt)}
-                  className="text-xs font-semibold text-indigo-950 hover:underline cursor-pointer"
-                >
-                  Event Details
-                </button>
-                <button
-                  onClick={() => {
-                    setActivePage('volunteer');
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  }}
-                  className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
-                >
-                  RSVP / Register
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </section>
 
@@ -795,18 +826,18 @@ export const HomePage: React.FC = () => {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
             {latestNews.map(item => {
               const rawCover = (item.coverImage || '').trim();
               const coverSrc = rawCover ? (rawCover.startsWith('uploads/') ? `/${rawCover}` : rawCover) : null;
               return (
               <div
                 key={item.id}
-                className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-lg transition-all flex flex-col justify-between"
+                className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-lg transition-all flex flex-col"
               >
                 <div>
                   {coverSrc && (
-                    <div className="w-full overflow-hidden bg-slate-950 relative flex items-center justify-center">
+                    <div className="w-full overflow-hidden bg-slate-100 relative flex items-center justify-center">
                       <img
                         src={coverSrc}
                         alt={buildAutoImageAlt({
@@ -914,76 +945,92 @@ export const HomePage: React.FC = () => {
 
       {/* Program Details Modal */}
       {selectedProgram && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 space-y-6 shadow-2xl relative animate-in fade-in zoom-in-95 my-8">
-            <button
-              onClick={() => setSelectedProgram(null)}
-              className="absolute top-5 right-5 text-slate-600 hover:text-slate-900 p-2 rounded-full cursor-pointer"
-              aria-label="Close program details modal"
-            >
-              ✕
-            </button>
-
-            <div className="aspect-16/9 rounded-2xl overflow-hidden bg-slate-900">
-              <img
-                src={selectedProgram.coverImage || '/banner.png'}
-                alt={selectedProgram.title}
-                width={640}
-                height={360}
-                loading="lazy"
-                decoding="async"
-                referrerPolicy="no-referrer"
-                onError={(e) => {
-                  const el = e.currentTarget;
-                  if (!el.dataset.fallbackApplied) {
-                    el.dataset.fallbackApplied = '1';
-                    el.src = '/banner.png';
-                  }
-                }}
-                className="w-full h-full object-cover"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <span className="px-3 py-1 rounded-full bg-indigo-50 text-indigo-950 text-xs font-semibold">
-                {selectedProgram.category}
-              </span>
-              <h3 className="text-2xl font-serif font-bold text-slate-900">
-                {selectedProgram.title}
-              </h3>
-              <p className="text-xs text-slate-500">
-                Timeline: {selectedProgram.startDate || 'Rolling Cohorts'} to {selectedProgram.endDate || 'Ongoing'}
-              </p>
-            </div>
-
-            <div className="text-sm text-slate-700 leading-relaxed space-y-3">
-              <p>{selectedProgram.fullDescription}</p>
-
-              {selectedProgram.curriculumHighlights && selectedProgram.curriculumHighlights.length > 0 && (
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 mt-4">
-                  <h4 className="font-semibold text-xs text-slate-900 uppercase tracking-wider mb-2">
-                    Curriculum Highlights &amp; Modules
-                  </h4>
-                  <ul className="space-y-1.5 text-xs text-slate-600">
-                    {selectedProgram.curriculumHighlights.map((hl, i) => (
-                      <li key={i} className="flex items-start gap-2">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-indigo-900 shrink-0 mt-0.5" />
-                        <span>{hl}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-
-            <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-hidden"
+          onClick={() => setSelectedProgram(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="home-program-modal-title"
+        >
+          <div
+            className="bg-white rounded-3xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl relative animate-in fade-in zoom-in-95"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Sticky Header */}
+            <div className="px-6 sm:px-8 pt-6 pb-4 border-b border-slate-100 flex items-start justify-between gap-4 shrink-0 bg-white">
+              <div className="space-y-1.5 min-w-0">
+                <span className="inline-block px-3 py-1 rounded-full bg-indigo-50 text-indigo-950 text-xs font-semibold">
+                  {selectedProgram.category}
+                </span>
+                <h3 id="home-program-modal-title" className="text-xl sm:text-2xl font-serif font-bold text-slate-900 leading-snug">
+                  {selectedProgram.title}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Timeline: {selectedProgram.startDate || 'Rolling Cohorts'} to {selectedProgram.endDate || 'Ongoing'}
+                </p>
+              </div>
               <button
+                type="button"
                 onClick={() => setSelectedProgram(null)}
-                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+                className="text-slate-500 hover:text-slate-900 hover:bg-slate-100 p-2 rounded-full cursor-pointer shrink-0 transition-colors"
+                aria-label="Close program details modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Scrollable Body */}
+            <div className="flex-1 overflow-y-auto px-6 sm:px-8 py-5 space-y-5 overscroll-contain">
+              <div className="rounded-2xl overflow-hidden bg-slate-100">
+                <img
+                  src={selectedProgram.coverImage || '/banner.png'}
+                  alt={selectedProgram.title}
+                  loading="lazy"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    const el = e.currentTarget;
+                    if (!el.dataset.fallbackApplied) {
+                      el.dataset.fallbackApplied = '1';
+                      el.src = '/banner.png';
+                    }
+                  }}
+                  className="w-full h-auto block object-contain"
+                />
+              </div>
+
+              <div className="text-sm text-slate-700 leading-relaxed space-y-3">
+                <p className="whitespace-pre-line break-words">{selectedProgram.fullDescription}</p>
+
+                {selectedProgram.curriculumHighlights && selectedProgram.curriculumHighlights.length > 0 && (
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 mt-4">
+                    <h4 className="font-semibold text-xs text-slate-900 uppercase tracking-wider mb-2">
+                      Curriculum Highlights &amp; Modules
+                    </h4>
+                    <ul className="space-y-1.5 text-xs text-slate-600">
+                      {selectedProgram.curriculumHighlights.map((hl, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-indigo-900 shrink-0 mt-0.5" />
+                          <span>{hl}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Sticky Footer */}
+            <div className="px-6 sm:px-8 py-4 border-t border-slate-100 flex items-center justify-end gap-3 shrink-0 bg-slate-50/70">
+              <button
+                type="button"
+                onClick={() => setSelectedProgram(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200/70 rounded-lg cursor-pointer"
               >
                 Close
               </button>
               <button
+                type="button"
                 onClick={() => {
                   setSelectedProgram(null);
                   setActivePage('volunteer');
@@ -1000,52 +1047,99 @@ export const HomePage: React.FC = () => {
 
       {/* Event Details Modal */}
       {selectedEvent && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 space-y-6 shadow-2xl relative animate-in fade-in zoom-in-95 my-8">
-            <button
-              onClick={() => setSelectedEvent(null)}
-              className="absolute top-5 right-5 text-slate-600 hover:text-slate-900 p-2 rounded-full cursor-pointer"
-              aria-label="Close event details modal"
-            >
-              ✕
-            </button>
-
-            <div className="space-y-2">
-              <span className="px-3 py-1 rounded-full bg-amber-50 text-amber-800 text-xs font-semibold">
-                {selectedEvent.category}
-              </span>
-              <h3 className="text-2xl font-serif font-bold text-slate-900 leading-snug">
-                {selectedEvent.title}
-              </h3>
-            </div>
-
-            <div className="space-y-2 text-xs text-slate-600 bg-slate-50 p-4 rounded-2xl border border-slate-200">
-              <div className="flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-indigo-900" />
-                <span>Date: <strong>{selectedEvent.date}</strong></span>
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-hidden"
+          onClick={() => setSelectedEvent(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="home-event-modal-title"
+        >
+          <div
+            className="bg-white rounded-3xl max-w-xl w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl relative animate-in fade-in zoom-in-95"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Sticky Header */}
+            <div className="px-6 sm:px-8 pt-6 pb-4 border-b border-slate-100 flex items-start justify-between gap-4 shrink-0 bg-white">
+              <div className="space-y-1.5 min-w-0">
+                <span className="inline-block px-3 py-1 rounded-full bg-amber-50 text-amber-800 text-xs font-semibold">
+                  {selectedEvent.category} · {selectedEvent.status}
+                </span>
+                <h3 id="home-event-modal-title" className="text-xl sm:text-2xl font-serif font-bold text-slate-900 leading-snug">
+                  {selectedEvent.title}
+                </h3>
               </div>
-              <div className="flex items-center gap-2">
-                <Clock className="w-4 h-4 text-indigo-900" />
-                <span>Time: <strong>{selectedEvent.time}</strong></span>
-              </div>
-              <div className="flex items-center gap-2">
-                <MapPin className="w-4 h-4 text-indigo-900" />
-                <span>Location: <strong>{selectedEvent.location}</strong></span>
-              </div>
-            </div>
-
-            <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line break-words">
-              {selectedEvent.description}
-            </p>
-
-            <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
               <button
+                type="button"
                 onClick={() => setSelectedEvent(null)}
-                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+                className="text-slate-500 hover:text-slate-900 hover:bg-slate-100 p-2 rounded-full cursor-pointer shrink-0 transition-colors"
+                aria-label="Close event details modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Scrollable Body */}
+            <div className="flex-1 overflow-y-auto px-6 sm:px-8 py-5 space-y-5 overscroll-contain">
+              {(() => {
+                const rawModalImg = (selectedEvent.coverImage || selectedEvent.image || '').trim();
+                const modalImg = rawModalImg ? (rawModalImg.startsWith('uploads/') ? `/${rawModalImg}` : rawModalImg) : null;
+                if (!modalImg) return null;
+                return (
+                  <div className="rounded-2xl overflow-hidden bg-slate-100 flex items-center justify-center">
+                    <img
+                      src={modalImg}
+                      alt={buildAutoImageAlt({
+                        type: 'event',
+                        customAlt: selectedEvent.imageAlt,
+                        title: selectedEvent.title,
+                        category: selectedEvent.category,
+                        location: selectedEvent.location
+                      })}
+                      title={`${selectedEvent.title} — NexGen Council`}
+                      loading="lazy"
+                      decoding="async"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        const container = e.currentTarget.parentElement;
+                        if (container) container.style.display = 'none';
+                      }}
+                      className="w-full h-auto block object-contain"
+                    />
+                  </div>
+                );
+              })()}
+
+              <div className="space-y-2 text-xs text-slate-600 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-indigo-900 shrink-0" />
+                  <span>Date: <strong>{selectedEvent.date}</strong></span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-indigo-900 shrink-0" />
+                  <span>Time: <strong>{selectedEvent.time}</strong></span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <MapPin className="w-4 h-4 text-indigo-900 shrink-0" />
+                  <span>Location: <strong>{selectedEvent.location}</strong></span>
+                </div>
+              </div>
+
+              <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line break-words">
+                {selectedEvent.description}
+              </p>
+            </div>
+
+            {/* Sticky Footer */}
+            <div className="px-6 sm:px-8 py-4 border-t border-slate-100 flex items-center justify-end gap-3 shrink-0 bg-slate-50/70">
+              <button
+                type="button"
+                onClick={() => setSelectedEvent(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200/70 rounded-lg cursor-pointer"
               >
                 Close
               </button>
               <button
+                type="button"
                 onClick={() => {
                   setSelectedEvent(null);
                   setActivePage('volunteer');

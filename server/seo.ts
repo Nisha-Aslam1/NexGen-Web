@@ -48,7 +48,16 @@ export interface RouteMetadata {
 }
 
 export function getSiteBaseUrl(req?: Request): string {
-  // 1. Environment variable SITE_URL, APP_URL, or VITE_SITE_URL
+  // 1. Prioritize custom domain host header so live traffic on nexgencouncil.bond always resolves cleanly
+  if (req) {
+    const rawHost = ((req.headers['x-forwarded-host'] as string) || req.headers.host || '').split(',')[0].trim();
+    const hostWithoutPort = rawHost.split(':')[0].toLowerCase();
+    if (hostWithoutPort === 'nexgencouncil.bond' || hostWithoutPort === 'www.nexgencouncil.bond') {
+      return 'https://nexgencouncil.bond';
+    }
+  }
+
+  // 2. Environment variable SITE_URL, APP_URL, or VITE_SITE_URL
   const envUrl = process.env.SITE_URL || process.env.APP_URL || process.env.VITE_SITE_URL;
   if (envUrl && envUrl.trim()) {
     const normalizedEnv = envUrl.trim().replace(/\/+$/, '');
@@ -58,20 +67,16 @@ export function getSiteBaseUrl(req?: Request): string {
     return normalizedEnv;
   }
 
-  // 2. Request host headers (handles proxy forwarding)
+  // 3. Request host headers (handles proxy forwarding)
   if (req) {
     const proto = ((req.headers['x-forwarded-proto'] as string) || (req.secure ? 'https' : 'http')).split(',')[0].trim();
     const rawHost = ((req.headers['x-forwarded-host'] as string) || req.headers.host || '').split(',')[0].trim();
-    const hostWithoutPort = rawHost.split(':')[0].toLowerCase();
-    if (hostWithoutPort === 'nexgencouncil.bond' || hostWithoutPort === 'www.nexgencouncil.bond') {
-      return 'https://nexgencouncil.bond';
-    }
     if (rawHost && !rawHost.includes('localhost') && !rawHost.includes('127.0.0.1')) {
       return `${proto}://${rawHost}`.replace(/\/+$/, '');
     }
   }
 
-  // 3. Cloud Run / Production fallback
+  // 4. Cloud Run / Production fallback
   return 'https://nexgencouncil.bond';
 }
 
@@ -101,7 +106,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       'NexGen Empowerment Council',
       'NexGen Pakistan'
     ],
-    url: siteUrl,
+    url: `${siteUrl}/`,
     logo: {
       '@type': 'ImageObject',
       url: `${siteUrl}/logo.png`
@@ -155,8 +160,8 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
     '@type': 'WebSite',
     '@id': `${siteUrl}/#website`,
     name: 'NexGen Council',
-    alternateName: ['NexGen', orgName],
-    url: siteUrl,
+    alternateName: 'NexGen',
+    url: `${siteUrl}/`,
     description: defaultDescription,
     publisher: {
       '@id': `${siteUrl}/#organization`
@@ -1832,12 +1837,14 @@ export function injectSeoIntoHtml(
   // 2. Build Injected Tags
   const tags: string[] = [
     `<meta name="application-name" content="NexGen Council" />`,
+    `<meta name="apple-mobile-web-app-title" content="NexGen Council" />`,
     `<meta name="theme-color" content="#1e1b4b" />`,
     `<meta name="description" content="${safeDesc}" />`,
     `<meta name="keywords" content="${safeKeywords}" />`,
     `<link rel="canonical" href="${safeCanonical}" />`,
     `<link rel="alternate" hreflang="en" href="${safeCanonical}" />`,
     `<link rel="alternate" hreflang="x-default" href="${safeCanonical}" />`,
+    `<link rel="manifest" href="/site.webmanifest" />`,
     `<link rel="image_src" href="${safeOgImage}" />`,
     `<meta name="image" content="${safeOgImage}" />`,
     `<meta itemprop="image" content="${safeOgImage}" />`,
@@ -1846,6 +1853,7 @@ export function injectSeoIntoHtml(
       ? `<meta name="robots" content="noindex, nofollow" />`
       : `<meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />`,
     `<meta property="og:locale" content="en_US" />`,
+    `<meta property="og:site_name" content="NexGen Council" />`,
     `<meta property="og:title" content="${safeTitle}" />`,
     `<meta property="og:description" content="${safeDesc}" />`,
     `<meta property="og:url" content="${safeCanonical}" />`,
@@ -1853,7 +1861,6 @@ export function injectSeoIntoHtml(
     `<meta property="og:image" content="${safeOgImage}" />`,
     `<meta property="og:image:secure_url" content="${safeOgImage}" />`,
     `<meta property="og:image:alt" content="${safeOgImageAlt}" />`,
-    `<meta property="og:site_name" content="NexGen Council" />`,
     `<meta name="twitter:card" content="summary_large_image" />`,
     `<meta name="twitter:title" content="${safeTitle}" />`,
     `<meta name="twitter:description" content="${safeDesc}" />`,
@@ -1876,10 +1883,10 @@ export function injectSeoIntoHtml(
     tags.push(`<meta name="google-site-verification" content="${escapeHtml(googleVerification.trim())}" />`);
   }
 
-  // Structured Data (JSON-LD)
+  // Structured Data (JSON-LD) marked with data-ssr-jsonld="true" so client hydration replaces cleanly without duplicates
   if (meta.jsonLd && meta.jsonLd.length > 0) {
     meta.jsonLd.forEach(schema => {
-      tags.push(`<script type="application/ld+json">\n${JSON.stringify(schema, null, 2)}\n</script>`);
+      tags.push(`<script type="application/ld+json" data-ssr-jsonld="true">\n${JSON.stringify(schema, null, 2)}\n</script>`);
     });
   }
 
@@ -1899,8 +1906,9 @@ export function injectSeoIntoHtml(
 
   const injectedTagsString = tags.join('\n    ');
 
-  // Strip pre-existing static meta/link tags to prevent duplicates
+  // Strip pre-existing static meta/link/json-ld tags to prevent duplicates
   result = result.replace(/<meta\b[^>]*name=["']?application-name["']?[^>]*>/gi, '');
+  result = result.replace(/<meta\b[^>]*name=["']?apple-mobile-web-app-title["']?[^>]*>/gi, '');
   result = result.replace(/<meta\b[^>]*name=["']?theme-color["']?[^>]*>/gi, '');
   result = result.replace(/<meta\b[^>]*name=["']?description["']?[^>]*>/gi, '');
   result = result.replace(/<meta\b[^>]*name=["']?keywords["']?[^>]*>/gi, '');
@@ -1909,7 +1917,9 @@ export function injectSeoIntoHtml(
   result = result.replace(/<meta\b[^>]*name=["']?twitter:[^>]*>/gi, '');
   result = result.replace(/<link\b[^>]*rel=["']?canonical["']?[^>]*>/gi, '');
   result = result.replace(/<link\b[^>]*rel=["']?alternate["']?[^>]*hreflang=[^>]*>/gi, '');
+  result = result.replace(/<link\b[^>]*rel=["']?manifest["']?[^>]*>/gi, '');
   result = result.replace(/<link\b[^>]*rel=["']?image_src["']?[^>]*>/gi, '');
+  result = result.replace(/<script\b[^>]*type=["']?application\/ld\+json["']?[^>]*>[\s\S]*?<\/script>/gi, '');
   if (googleVerification && googleVerification.trim()) {
     result = result.replace(/<meta\b[^>]*name=["']?google-site-verification["']?[^>]*>/gi, '');
   }

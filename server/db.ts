@@ -1587,6 +1587,19 @@ class Database {
 
   private normalizeEventFields(raw: Partial<EventItem>): Partial<EventItem> {
     const out: Partial<EventItem> = { ...raw };
+    const cleanImg = (val: unknown): string | undefined => {
+      if (typeof val !== 'string') return undefined;
+      const trimmed = val.trim();
+      if (!trimmed) return '';
+      return trimmed.startsWith('uploads/') ? `/${trimmed}` : trimmed;
+    };
+    const cleanedCover = cleanImg(out.coverImage);
+    const cleanedImage = cleanImg(out.image);
+    if (cleanedCover !== undefined || cleanedImage !== undefined) {
+      const resolved = cleanedCover !== undefined && cleanedCover !== '' ? cleanedCover : cleanedImage ?? '';
+      out.coverImage = resolved;
+      out.image = cleanedImage !== undefined && cleanedImage !== '' ? cleanedImage : resolved;
+    }
     if (out.capacity !== undefined) {
       const cap = Number(out.capacity);
       out.capacity = Number.isFinite(cap) && cap > 0 ? Math.min(100000, Math.floor(cap)) : 0;

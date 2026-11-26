@@ -113,14 +113,14 @@ export const AdminPrograms: React.FC = () => {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-start">
         {programs.map(prg => (
           <div
             key={prg.id}
-            className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col justify-between"
+            className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col"
           >
             <div>
-              <div className="aspect-16/9 bg-slate-900 relative overflow-hidden">
+              <div className="w-full bg-slate-100 relative overflow-hidden flex items-center justify-center">
                 <img
                   src={prg.coverImage || '/banner.png'}
                   alt={buildAutoImageAlt({
@@ -137,13 +137,13 @@ export const AdminPrograms: React.FC = () => {
                       el.src = '/banner.png';
                     }
                   }}
-                  className="w-full h-full object-cover"
+                  className="w-full h-auto block object-contain"
                 />
                 <span className="absolute top-3 left-3 px-2.5 py-0.5 rounded-full bg-white/90 text-indigo-950 text-[10px] font-bold uppercase tracking-wider backdrop-blur-xs">
                   {prg.category}
                 </span>
                 {prg.featured && (
-                  <span className="absolute top-3 right-3 px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                  <span className="absolute top-3 right-3 px-2.5 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
                     <Star className="w-3 h-3 fill-slate-950" /> Flagship
                   </span>
                 )}
@@ -153,7 +153,7 @@ export const AdminPrograms: React.FC = () => {
                 <h3 className="font-serif font-bold text-base text-slate-900 leading-snug">
                   {prg.title}
                 </h3>
-                <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed whitespace-pre-line break-words">
                   {prg.shortDescription}
                 </p>
                 <div className="pt-2 text-[11px] text-slate-400 flex items-center gap-1">

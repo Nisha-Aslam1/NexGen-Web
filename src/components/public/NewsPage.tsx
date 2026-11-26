@@ -344,9 +344,9 @@ export const NewsPage: React.FC = () => {
         const featuredCover = resolveNewsCoverImage(featured.coverImage);
         return (
           <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <article className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs grid grid-cols-1 lg:grid-cols-12 items-stretch">
+            <article className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs grid grid-cols-1 lg:grid-cols-12 items-center">
               {featuredCover && (
-                <div className="lg:col-span-7 overflow-hidden bg-slate-950 flex items-center justify-center">
+                <div className="lg:col-span-7 overflow-hidden bg-slate-100 flex items-center justify-center">
                   <img
                     src={featuredCover}
                     alt={buildAutoImageAlt({
@@ -489,7 +489,7 @@ export const NewsPage: React.FC = () => {
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-7">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-7 items-start">
             {filteredNews.map(item => {
               const readMins = getReadMinutes(item);
               const topicList = (item.tags && item.tags.length > 0 ? item.tags : item.seoKeywords || []).slice(0, 3);
@@ -499,11 +499,11 @@ export const NewsPage: React.FC = () => {
                 <article
                   key={item.id}
                   onClick={() => openArticle(item)}
-                  className="group bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-lg transition-all flex flex-col justify-between cursor-pointer"
+                  className="group bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-lg transition-all flex flex-col cursor-pointer"
                 >
                   <div>
                     {itemCover && (
-                      <div className="w-full overflow-hidden bg-slate-950 relative flex items-center justify-center">
+                      <div className="w-full overflow-hidden bg-slate-100 relative flex items-center justify-center">
                         <img
                           src={itemCover}
                           alt={buildAutoImageAlt({

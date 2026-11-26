@@ -30,7 +30,8 @@ export const AdminEvents: React.FC = () => {
       time: '10:00 AM - 4:00 PM',
       location: 'Central Civic Auditorium',
       description: '',
-      image: '/banner.png',
+      image: '',
+      coverImage: '',
       capacity: 150,
       registeredCount: 0,
       showCapacity: true,
@@ -63,12 +64,13 @@ export const AdminEvents: React.FC = () => {
 
     setSaving(true);
     try {
+      const resolvedImg = (editingEvent.image || editingEvent.coverImage || '').trim();
       const payload: Partial<EventItem> = {
         ...editingEvent,
         title: editingEvent.title.trim(),
         location: editingEvent.location.trim(),
-        coverImage: editingEvent.image || editingEvent.coverImage || '/banner.png',
-        image: editingEvent.image || editingEvent.coverImage || '/banner.png',
+        coverImage: resolvedImg,
+        image: resolvedImg,
         capacity: cap,
         registeredCount: reg,
         showCapacity: editingEvent.showCapacity !== false,
@@ -152,18 +154,43 @@ export const AdminEvents: React.FC = () => {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {events.map(evt => {
-          const cap = Number(evt.capacity || 0);
-          const reg = Number(evt.registeredCount || 0);
-          const isFull = cap > 0 && reg >= cap;
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-start">
+          {events.map(evt => {
+            const cap = Number(evt.capacity || 0);
+            const reg = Number(evt.registeredCount || 0);
+            const isFull = cap > 0 && reg >= cap;
+            const rawImg = (evt.coverImage || evt.image || '').trim();
+            const evtImgSrc = rawImg ? (rawImg.startsWith('uploads/') ? `/${rawImg}` : rawImg) : null;
 
-          return (
-            <div
-              key={evt.id}
-              className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs hover:shadow-md transition-all flex flex-col justify-between space-y-4"
-            >
-              <div className="space-y-3">
+            return (
+              <div
+                key={evt.id}
+                className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col"
+              >
+                {evtImgSrc && (
+                  <div className="w-full bg-slate-100 relative overflow-hidden flex items-center justify-center">
+                    <img
+                      src={evtImgSrc}
+                      alt={buildAutoImageAlt({
+                        type: 'event',
+                        customAlt: evt.imageAlt,
+                        title: evt.title,
+                        category: evt.category,
+                        location: evt.location
+                      })}
+                      loading="lazy"
+                      decoding="async"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        const container = e.currentTarget.parentElement;
+                        if (container) container.style.display = 'none';
+                      }}
+                      className="w-full h-auto block object-contain"
+                    />
+                  </div>
+                )}
+                <div className="p-6 flex flex-col justify-between space-y-4">
+                  <div className="space-y-3">
                 <div className="flex items-center justify-between text-xs text-slate-500">
                   <span className="font-semibold text-indigo-950">
                     {evt.category} · {evt.status}
@@ -264,20 +291,21 @@ export const AdminEvents: React.FC = () => {
                   >
                     <Edit2 className="w-4 h-4" />
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(evt.id, evt.title)}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                    title="Delete Event"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(evt.id, evt.title)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                      title="Delete Event"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
                 </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
 
       {/* Modal */}
       {isModalOpen && editingEvent && (

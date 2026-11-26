@@ -1761,13 +1761,20 @@ app.post('/api/events', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINA
       ? Math.max(0, Math.floor(Number(body.registeredCount) || 0))
       : 0;
 
+  const rawEventImg = typeof body.coverImage === 'string' && body.coverImage.trim()
+    ? body.coverImage.trim()
+    : typeof body.image === 'string'
+    ? body.image.trim()
+    : '';
+  const resolvedEventImg = rawEventImg.startsWith('uploads/') ? `/${rawEventImg}` : rawEventImg;
+
   const eventItem = db.createEvent({
     title: String(body.title).trim(),
     slug: body.slug ? String(body.slug).trim() : undefined,
     category: body.category || 'General',
     description: body.description || '',
-    image: body.image || body.coverImage || '/banner.png',
-    coverImage: body.coverImage || body.image || '/banner.png',
+    image: resolvedEventImg,
+    coverImage: resolvedEventImg,
     imageAlt: typeof body.imageAlt === 'string' && body.imageAlt.trim() ? body.imageAlt.trim().slice(0, 220) : undefined,
     date: body.date,
     time: body.time || '10:00 AM',
