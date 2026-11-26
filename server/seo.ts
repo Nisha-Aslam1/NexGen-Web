@@ -243,11 +243,6 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
     const homeImages = dedupeImages([
       {
-        url: '/assets/aistudio/NexGen_Poster_190b79d4.png',
-        alt: 'NexGen Women Empowerment & Youth Leadership Council Official Poster — Leadership & Civic Action',
-        title: 'NexGen Council Official Showcase Poster'
-      },
-      {
         url: '/banner.png',
         alt: 'NexGen Women Empowerment & Youth Leadership Council Official Hero Banner',
         title: 'NexGen Council Official Banner'
@@ -1450,11 +1445,6 @@ export function generateSitemapXml(siteUrl: string): string {
       lastmod: currentDate,
       images: [
         {
-          url: '/assets/aistudio/NexGen_Poster_190b79d4.png',
-          title: 'NexGen Council Official Showcase Poster',
-          caption: 'NexGen Women Empowerment & Youth Leadership Council Official Showcase Poster'
-        },
-        {
           url: '/logo.png',
           title: 'NexGen Council Official Logo',
           caption: 'Official crest and insignia of NexGen Women Empowerment & Youth Leadership Council'
@@ -1764,7 +1754,16 @@ Allow: /*.webp
 Allow: /*.svg
 Allow: /*.gif
 
-# Disallow administrative portals, private meeting rooms, and API surfaces
+Allow: /api/settings
+Allow: /api/programs
+Allow: /api/programs/*
+Allow: /api/events
+Allow: /api/news
+Allow: /api/team
+Allow: /api/gallery
+Allow: /api/faqs
+
+# Disallow administrative portals, private meeting rooms, and protected API surfaces
 Disallow: /admin
 Disallow: /admin/*
 Disallow: /admin-login
@@ -1930,6 +1929,43 @@ export function injectSeoIntoHtml(
   // Insert before </head>
   result = result.replace('</head>', `    ${injectedTagsString}\n  </head>`);
 
+  // Embed sanitized public catalog bootstrap for instant client hydration & Googlebot WRS rendering
+  if (!meta.noindex) {
+    try {
+      const rawSettings = typeof db.getSettings === 'function' ? db.getSettings() : null;
+      const safeSettings = rawSettings
+        ? {
+            ...rawSettings,
+            volunteerWhatsappGroupLink: undefined,
+            volunteerWhatsappGroupLinkMale: undefined,
+            volunteerWhatsappGroupLinkFemale: undefined,
+            googleSiteVerification: undefined,
+            googleAnalyticsId: undefined
+          }
+        : null;
+      const bootstrapPayload = {
+        settings: safeSettings,
+        programs: typeof db.getPrograms === 'function' ? db.getPrograms(true) : [],
+        events: (typeof db.getEvents === 'function' ? db.getEvents() : []).filter(e => e.status !== 'Draft'),
+        news: typeof db.getNews === 'function' ? db.getNews(true) : [],
+        team: typeof db.getTeam === 'function' ? db.getTeam(true) : [],
+        gallery: typeof db.getGallery === 'function' ? db.getGallery() : [],
+        faqs: typeof db.getFaqs === 'function' ? db.getFaqs(true) : []
+      };
+      const serialized = JSON.stringify(bootstrapPayload)
+        .replace(/</g, '\\u003c')
+        .replace(/>/g, '\\u003e')
+        .replace(/\u2028/g, '\\u2028')
+        .replace(/\u2029/g, '\\u2029');
+      result = result.replace(
+        '</head>',
+        `    <script>window.__NEXGEN_PUBLIC_BOOTSTRAP__=${serialized};</script>\n  </head>`
+      );
+    } catch {
+      // Fallback safely to client fetch if serialization fails
+    }
+  }
+
   // Always leave <div id="root"></div> clean for browser hydration and Lighthouse audits.
   // Provide semantic noscript fallback + image figures for Googlebot-Image & non-JS crawlers.
   if (result.includes('<div id="root"></div>')) {
@@ -1944,7 +1980,7 @@ export function injectSeoIntoHtml(
       .join('');
 
     const noscriptSemantic = !meta.noindex
-      ? `\n    <noscript><main style="font-family:system-ui,sans-serif;max-width:960px;margin:0 auto;padding:24px;"><h1>${safeTitle}</h1><p>${safeDesc}</p><nav aria-label="NexGen Council Navigation"><a href="${cleanBase}/">Home</a> | <a href="${cleanBase}/about">About NexGen</a> | <a href="${cleanBase}/programs">Leadership Programs</a> | <a href="${cleanBase}/events">Events</a> | <a href="${cleanBase}/news">News</a> | <a href="${cleanBase}/team">Executive Leadership</a> | <a href="${cleanBase}/gallery">Gallery</a> | <a href="${cleanBase}/donate">Donate</a> | <a href="${cleanBase}/faq">FAQ</a> | <a href="${cleanBase}/volunteer">Volunteer</a> | <a href="${cleanBase}/contact">Contact</a></nav>${noscriptImageHtml ? `<section aria-label="Page Images">${noscriptImageHtml}</section>` : ''}</main></noscript>`
+      ? `\n    <noscript><main style="font-family:system-ui,sans-serif;max-width:960px;margin:0 auto;padding:24px;"><h1>${safeTitle}</h1><p>${safeDesc}</p><nav aria-label="NexGen Council Navigation"><a href="${cleanBase}/">Home</a> | <a href="${cleanBase}/about">About NexGen</a> | <a href="${cleanBase}/programs">Leadership Programs</a> | <a href="${cleanBase}/events">Events</a> | <a href="${cleanBase}/news">News</a> | <a href="${cleanBase}/team">Executive Leadership</a> | <a href="${cleanBase}/gallery">Gallery</a> | <a href="${cleanBase}/donate">Donate</a> | <a href="${cleanBase}/faq">FAQ</a> | <a href="${cleanBase}/volunteer">Volunteer</a> | <a href="${cleanBase}/track">Track Application</a> | <a href="${cleanBase}/contact">Contact</a></nav>${noscriptImageHtml ? `<section aria-label="Page Images">${noscriptImageHtml}</section>` : ''}</main></noscript>`
       : '';
 
     if (noscriptSemantic) {

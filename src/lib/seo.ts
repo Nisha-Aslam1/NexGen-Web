@@ -73,10 +73,21 @@ export function useDocumentSEO({
 
     // 2. Base domain normalized to canonical origin
     const origin = getNormalizedOrigin();
-    const rawPath = canonicalPath || window.location.pathname || '/';
-    const strippedPath = rawPath.split('?')[0].replace(/\/+$/, '') || '/';
-    const cleanPath = strippedPath.startsWith('/') ? strippedPath : `/${strippedPath}`;
-    const fullCanonical = cleanPath === '/' ? `${origin}/` : `${origin}${cleanPath}`;
+    const rawPath = (canonicalPath || window.location.pathname || '/').trim();
+    let fullCanonical: string;
+    if (/^https?:\/\//i.test(rawPath)) {
+      try {
+        const parsed = new URL(rawPath);
+        const normPath = parsed.pathname.replace(/\/+$/, '') || '/';
+        fullCanonical = normPath === '/' ? `${origin}/` : `${origin}${normPath}`;
+      } catch {
+        fullCanonical = `${origin}/`;
+      }
+    } else {
+      const strippedPath = rawPath.split('?')[0].replace(/\/+$/, '') || '/';
+      const cleanPath = strippedPath.startsWith('/') ? strippedPath : `/${strippedPath}`;
+      fullCanonical = cleanPath === '/' ? `${origin}/` : `${origin}${cleanPath}`;
+    }
     const defaultImage = `${origin}/banner.png`;
     const imageToUse = ogImage
       ? (ogImage.startsWith('http') ? ogImage : `${origin}${ogImage.startsWith('/') ? '' : '/'}${ogImage}`)

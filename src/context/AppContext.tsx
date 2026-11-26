@@ -330,14 +330,29 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  const [settings, setSettings] = useState<WebsiteSettings | null>(null);
-  const [programs, setPrograms] = useState<Program[]>([]);
-  const [events, setEvents] = useState<EventItem[]>([]);
-  const [news, setNews] = useState<NewsItem[]>([]);
-  const [team, setTeam] = useState<TeamMember[]>([]);
-  const [gallery, setGallery] = useState<GalleryItem[]>([]);
-  const [faqs, setFaqs] = useState<FaqItem[]>([]);
-  const [isLoadingPublicData, setIsLoadingPublicData] = useState<boolean>(true);
+  const initialBootstrap =
+    typeof window !== 'undefined' ? (window as any).__NEXGEN_PUBLIC_BOOTSTRAP__ || null : null;
+
+  const [settings, setSettings] = useState<WebsiteSettings | null>(initialBootstrap?.settings || null);
+  const [programs, setPrograms] = useState<Program[]>(
+    Array.isArray(initialBootstrap?.programs) ? initialBootstrap.programs : []
+  );
+  const [events, setEvents] = useState<EventItem[]>(
+    Array.isArray(initialBootstrap?.events) ? initialBootstrap.events : []
+  );
+  const [news, setNews] = useState<NewsItem[]>(
+    Array.isArray(initialBootstrap?.news) ? initialBootstrap.news : []
+  );
+  const [team, setTeam] = useState<TeamMember[]>(
+    Array.isArray(initialBootstrap?.team) ? initialBootstrap.team : []
+  );
+  const [gallery, setGallery] = useState<GalleryItem[]>(
+    Array.isArray(initialBootstrap?.gallery) ? initialBootstrap.gallery : []
+  );
+  const [faqs, setFaqs] = useState<FaqItem[]>(
+    Array.isArray(initialBootstrap?.faqs) ? initialBootstrap.faqs : []
+  );
+  const [isLoadingPublicData, setIsLoadingPublicData] = useState<boolean>(!initialBootstrap);
 
   // Real-time Sync State
   const [isSyncing, setIsSyncing] = useState<boolean>(false);

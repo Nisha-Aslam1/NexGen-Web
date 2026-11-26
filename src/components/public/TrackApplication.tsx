@@ -23,11 +23,11 @@ export const TrackApplication: React.FC = () => {
 
   useDocumentSEO({
     title: 'Track Application Status | NexGen Council',
-    description: 'Verify your volunteer enrollment application status using your official reference registration code.',
+    description: 'Check the real-time review status of your NexGen Council volunteer enrollment or fellowship application and download your Member ID card.',
     canonicalPath: '/track',
     ogType: 'website',
     ogImage: '/banner.png',
-    noindex: true
+    ogImageAlt: 'NexGen Council Volunteer Application Tracker'
   });
 
   const lookupCode = useCallback(async (codeToLookup: string) => {
@@ -264,6 +264,30 @@ export const TrackApplication: React.FC = () => {
           onClose={() => setShowIdCard(false)}
         />
       )}
+
+      <div className="mt-10 grid grid-cols-1 sm:grid-cols-3 gap-4 text-left">
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-1.5">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-700">Step 1 • Locate Code</span>
+          <h2 className="text-sm font-serif font-bold text-slate-900">Find Your Reference ID</h2>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            Every volunteer application generates a unique tracking ID (such as NXG-2026-XXXX) displayed at submission and sent to your registered email.
+          </p>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-1.5">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-700">Step 2 • Live Review</span>
+          <h2 className="text-sm font-serif font-bold text-slate-900">Committee Evaluation</h2>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            Applications move from Pending Initial Review to Under Review while regional coordinators match your track preferences and availability.
+          </p>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-1.5">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-700">Step 3 • Member Card</span>
+          <h2 className="text-sm font-serif font-bold text-slate-900">Download Official ID Card</h2>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            Once your status shows Approved, download your official NexGen Council Digital Member ID Card with QR verification directly from this portal.
+          </p>
+        </div>
+      </div>
 
       <div className="text-center mt-8">
         <button

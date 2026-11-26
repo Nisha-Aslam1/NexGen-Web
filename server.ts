@@ -1699,8 +1699,15 @@ app.delete('/api/programs/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_
 
 // 6. Events
 app.get('/api/events', (req, res) => {
+  const session = getSession(req);
+  const isManager =
+    session &&
+    ['SUPER_ADMIN', 'ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR'].includes(normalizeRole(session.role));
   const filter = req.query.filter as 'Upcoming' | 'Past' | 'All' | undefined;
-  const events = db.getEvents(filter);
+  let events = db.getEvents(filter);
+  if (!isManager) {
+    events = events.filter(e => e.status !== 'Draft');
+  }
   res.json(events);
 });
 
@@ -3447,6 +3454,21 @@ async function startServer() {
     res.setHeader('Content-Type', 'application/xml; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.send(generateSitemapXml(siteUrl));
+  });
+
+  // 3. Favicon & Apple Touch Icon fallback (prevents crawler 404s on standard icon probes)
+  app.get(['/favicon.ico', '/apple-touch-icon.png', '/apple-touch-icon-precomposed.png'], (req, res, next) => {
+    const iconCandidates = [
+      path.join(process.cwd(), 'dist', 'logo.png'),
+      path.join(process.cwd(), 'public', 'logo.png')
+    ];
+    for (const candidate of iconCandidates) {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        res.setHeader('Cache-Control', 'public, max-age=604800');
+        return res.sendFile(candidate);
+      }
+    }
+    return next();
   });
 
   const httpServer = http.createServer(app);
