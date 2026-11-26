@@ -20,7 +20,10 @@ import {
   CreditCard,
   Layers,
   Image as ImageIcon,
-  RotateCw
+  RotateCw,
+  Lock,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 import { Volunteer } from '../../types.ts';
 
@@ -42,11 +45,31 @@ export interface MemberIdCardData {
   referenceCode?: string;
 }
 
+export interface IssueOfficialCardPayload {
+  photoDataUrl: string;
+  city: string;
+  phone: string;
+  format: 'pdf' | 'dual' | 'front' | 'print';
+}
+
+export interface IssueOfficialCardResult {
+  ok: boolean;
+  photoUrl?: string;
+  issuedAt?: string;
+  error?: string;
+}
+
 interface VolunteerIdCardModalProps {
   volunteer: Volunteer | MemberIdCardData;
   onClose: () => void;
   onAvatarChange?: (newAvatarUrl: string) => void;
   isAdmin?: boolean;
+  oneTimeIssuance?: boolean;
+  isAlreadyIssued?: boolean;
+  isPhotoLocked?: boolean;
+  issuedAt?: string;
+  onUploadSinglePhoto?: (photoDataUrl: string) => Promise<{ ok: boolean; photoUrl?: string; error?: string }>;
+  onIssueOfficialCard?: (payload: IssueOfficialCardPayload) => Promise<IssueOfficialCardResult>;
 }
 
 type ModalStep = 'photo' | 'preview';
@@ -477,11 +500,17 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
   volunteer,
   onClose,
   onAvatarChange,
-  isAdmin = false
+  isAdmin = false,
+  oneTimeIssuance = false,
+  isAlreadyIssued = false,
+  isPhotoLocked = false,
+  issuedAt,
+  onUploadSinglePhoto,
+  onIssueOfficialCard
 }) => {
-  const [step, setStep] = useState<ModalStep>('photo');
+  const [step, setStep] = useState<ModalStep>(oneTimeIssuance && isAlreadyIssued ? 'preview' : 'photo');
   const [viewMode, setViewMode] = useState<CardViewMode>('dual');
-  const [downloadingType, setDownloadingType] = useState<'pdf' | 'dual' | 'front' | 'back' | null>(null);
+  const [downloadingType, setDownloadingType] = useState<'pdf' | 'dual' | 'front' | 'back' | 'print' | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [customAvatar, setCustomAvatar] = useState<string>(volunteer.avatar || '');
@@ -490,14 +519,26 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
   // Default EVERY card's Designation / Role to "MEMBER NEXGEN COUNCIL"; only Admin side can edit it
   const [customRole, setCustomRole] = useState<string>(DEFAULT_CARD_ROLE);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [localPhotoLocked, setLocalPhotoLocked] = useState<boolean>(false);
+  const [localIssuedDone, setLocalIssuedDone] = useState<boolean>(false);
+  const [localIssuedAt, setLocalIssuedAt] = useState<string | undefined>(issuedAt);
+  const [issueError, setIssueError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const isLockedPublicClaim = oneTimeIssuance && (isAlreadyIssued || localIssuedDone);
+  const isSingleUploadLocked = oneTimeIssuance && (isPhotoLocked || localPhotoLocked || isLockedPublicClaim);
 
   useEffect(() => {
     setCustomAvatar(volunteer.avatar || '');
     setCustomPhone(volunteer.phone || '');
     setCustomCity(volunteer.city || 'Sialkot, Punjab Pakistan');
     setCustomRole(DEFAULT_CARD_ROLE);
-  }, [volunteer]);
+    setLocalIssuedAt(issuedAt);
+    setLocalPhotoLocked(Boolean(isPhotoLocked));
+    if (oneTimeIssuance && isAlreadyIssued) {
+      setStep('preview');
+    }
+  }, [volunteer, oneTimeIssuance, isAlreadyIssued, isPhotoLocked, issuedAt]);
 
   const idCode =
     ('referenceCode' in volunteer && volunteer.referenceCode) ||
@@ -537,10 +578,17 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     };
   }, [verificationUrl]);
 
-  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>): Promise<boolean> => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file) return false;
+    if (oneTimeIssuance && isSingleUploadLocked) {
+      setIssueError('Only a single portrait photograph upload is allowed per member.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return false;
+    }
+
     setUploadingPhoto(true);
+    setIssueError(null);
     try {
       const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -553,10 +601,29 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       const loaded = await loadImage(dataUrl);
       const finalImage = loaded ? drawSquareCenterCropDataUrl(loaded, 0, 680) : dataUrl;
 
+      if (oneTimeIssuance && onUploadSinglePhoto) {
+        const uploadRes = await onUploadSinglePhoto(finalImage);
+        if (!uploadRes.ok) {
+          setIssueError(uploadRes.error || 'Unable to lock uploaded portrait photograph.');
+          return false;
+        }
+        const resolvedUrl = uploadRes.photoUrl || finalImage;
+        setCustomAvatar(resolvedUrl);
+        setLocalPhotoLocked(true);
+        if (onAvatarChange) {
+          onAvatarChange(resolvedUrl);
+        }
+        return true;
+      }
+
       setCustomAvatar(finalImage);
       if (onAvatarChange) {
         onAvatarChange(finalImage);
       }
+      return true;
+    } catch {
+      setIssueError('Unable to read the selected image file. Please try a PNG, JPG, or WEBP photo.');
+      return false;
     } finally {
       setUploadingPhoto(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -564,7 +631,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
   };
 
   const handleRotatePhoto = async () => {
-    if (!displayAvatar) return;
+    if (!displayAvatar || (oneTimeIssuance && isSingleUploadLocked)) return;
     setUploadingPhoto(true);
     try {
       const loaded = await loadImage(displayAvatar);
@@ -912,9 +979,50 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     ]);
   };
 
+  const commitPublicOneTimeClaim = async (
+    format: 'pdf' | 'dual' | 'front' | 'print'
+  ): Promise<boolean> => {
+    if (!oneTimeIssuance) return true;
+    if (isLockedPublicClaim) {
+      setIssueError('Your Official Member ID Card has already been issued and locked. Only one download is permitted per member.');
+      return false;
+    }
+    if (!displayAvatar) {
+      setIssueError('Please upload a portrait photograph before generating and downloading your Official ID Card.');
+      setStep('photo');
+      return false;
+    }
+    if (!onIssueOfficialCard) return true;
+
+    setIssueError(null);
+    const result = await onIssueOfficialCard({
+      photoDataUrl: displayAvatar,
+      city: customCity,
+      phone: customPhone,
+      format
+    });
+
+    if (!result.ok) {
+      setIssueError(result.error || 'Could not record ID card issuance. Please try again.');
+      return false;
+    }
+
+    if (result.photoUrl) {
+      setCustomAvatar(result.photoUrl);
+    }
+    setLocalIssuedDone(true);
+    setLocalIssuedAt(result.issuedAt || new Date().toISOString());
+    return true;
+  };
+
   const handleDownloadPdf = async () => {
+    if (isLockedPublicClaim) return;
     setDownloadingType('pdf');
+    setIssueError(null);
     try {
+      const canProceed = await commitPublicOneTimeClaim('pdf');
+      if (!canProceed) return;
+
       const [logoImg, avatarImg, qrImg] = await renderCardCanvasImages();
       const cardW = 1000;
       const cardH = 1620;
@@ -948,15 +1056,24 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       const safeName = formattedName.replace(/[^a-z0-9]+/gi, '_');
       pdf.save(`${safeName}_Member_NexGen_Card.pdf`);
     } catch {
-      window.print();
+      if (!oneTimeIssuance) {
+        window.print();
+      }
     } finally {
       setDownloadingType(null);
     }
   };
 
   const handleDownloadPng = async (mode: 'dual' | 'front' | 'back') => {
+    if (isLockedPublicClaim) return;
     setDownloadingType(mode);
+    setIssueError(null);
     try {
+      if (mode === 'dual' || mode === 'front') {
+        const canProceed = await commitPublicOneTimeClaim(mode);
+        if (!canProceed) return;
+      }
+
       const [logoImg, avatarImg, qrImg] = await renderCardCanvasImages();
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
@@ -1011,6 +1128,21 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       link.href = canvas.toDataURL('image/png', 1.0);
       link.click();
     } catch {
+      if (!oneTimeIssuance) {
+        window.print();
+      }
+    } finally {
+      setDownloadingType(null);
+    }
+  };
+
+  const handlePrintCard = async () => {
+    if (isLockedPublicClaim) return;
+    setDownloadingType('print');
+    setIssueError(null);
+    try {
+      const canProceed = await commitPublicOneTimeClaim('print');
+      if (!canProceed) return;
       window.print();
     } finally {
       setDownloadingType(null);
@@ -1317,7 +1449,41 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
           </button>
         </div>
 
-        {step === 'photo' ? (
+        {issueError && (
+          <div className="p-3.5 rounded-2xl bg-rose-500/15 border border-rose-400/40 text-rose-200 text-xs flex items-start gap-2.5 print:hidden">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <span>{issueError}</span>
+          </div>
+        )}
+
+        {isLockedPublicClaim && (
+          <div className="p-4 rounded-2xl bg-emerald-500/15 border border-emerald-400/35 text-emerald-100 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 print:hidden">
+            <div className="flex items-start gap-2.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold text-white">
+                  Official ID Card Issued &amp; Saved to Council Records
+                </p>
+                <p className="text-emerald-200/90 mt-0.5">
+                  One-time issuance completed
+                  {localIssuedAt
+                    ? ` on ${new Date(localIssuedAt).toLocaleString(undefined, {
+                        dateStyle: 'medium',
+                        timeStyle: 'short'
+                      })}`
+                    : ''}
+                  . Your uploaded portrait and membership details are permanently archived by the Secretariat.
+                </p>
+              </div>
+            </div>
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-950/60 border border-emerald-400/30 text-emerald-300 font-semibold whitespace-nowrap shrink-0">
+              <Lock className="w-3.5 h-3.5" />
+              <span>Claim Locked</span>
+            </span>
+          </div>
+        )}
+
+        {step === 'photo' && !isLockedPublicClaim ? (
           /* STEP 1: Mandatory Circular Portrait Photo Upload & Details Verification */
           <div className="py-2 space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
@@ -1332,20 +1498,23 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
                         className="w-full h-full object-cover"
                         referrerPolicy="no-referrer"
                       />
-                      <label className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white text-xs font-semibold gap-1.5 cursor-pointer">
-                        <Camera className="w-6 h-6 text-amber-300" />
-                        <span>Replace Photo</span>
-                        <input
-                          ref={fileInputRef}
-                          type="file"
-                          accept="image/png,image/jpeg,image/webp"
-                          onChange={handlePhotoUpload}
-                          disabled={uploadingPhoto}
-                          className="hidden"
-                        />
-                      </label>
+                      {!isSingleUploadLocked && (
+                        <label className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white text-xs font-semibold gap-1.5 cursor-pointer">
+                          <Camera className="w-6 h-6 text-amber-300" />
+                          <span>Replace Photo</span>
+                          <input
+                            ref={fileInputRef}
+                            type="file"
+                            multiple={false}
+                            accept="image/png,image/jpeg,image/webp"
+                            onChange={handlePhotoUpload}
+                            disabled={uploadingPhoto}
+                            className="hidden"
+                          />
+                        </label>
+                      )}
                     </>
-                  ) : (
+                  ) : !isSingleUploadLocked ? (
                     <label className="w-full h-full flex flex-col items-center justify-center p-6 text-center cursor-pointer hover:bg-slate-900/80 transition-colors space-y-2">
                       <div className="w-12 h-12 rounded-full bg-amber-400/15 border border-amber-400/30 text-amber-300 flex items-center justify-center">
                         <Upload className="w-5 h-5" />
@@ -1353,51 +1522,67 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
                       <div className="space-y-1">
                         <p className="text-xs font-bold text-white">Upload Portrait</p>
                         <p className="text-[10.5px] text-slate-400 leading-snug">
-                          Auto-crops cleanly into a circular ID portrait
+                          Single image upload · Auto-crops to circular ID portrait
                         </p>
                       </div>
                       <input
                         ref={fileInputRef}
                         type="file"
+                        multiple={false}
                         accept="image/png,image/jpeg,image/webp"
                         onChange={handlePhotoUpload}
                         disabled={uploadingPhoto}
                         className="hidden"
                       />
                     </label>
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-2">
+                      <Lock className="w-6 h-6 text-emerald-400" />
+                      <p className="text-xs font-semibold text-slate-300">Photo Upload Locked</p>
+                    </div>
                   )}
                 </div>
 
                 <div className="flex flex-wrap items-center justify-center gap-2">
-                  <label className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors">
-                    <Camera className="w-3.5 h-3.5 text-amber-400" />
-                    <span>
-                      {uploadingPhoto
-                        ? 'Cropping...'
-                        : displayAvatar
-                        ? 'Change Photo'
-                        : 'Select Photo'}
+                  {isSingleUploadLocked ? (
+                    <span className="px-3.5 py-2 rounded-xl bg-emerald-500/15 border border-emerald-400/35 text-emerald-300 text-xs font-semibold inline-flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>Single Portrait Uploaded &amp; Locked</span>
                     </span>
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      onChange={handlePhotoUpload}
-                      disabled={uploadingPhoto}
-                      className="hidden"
-                    />
-                  </label>
+                  ) : (
+                    <>
+                      <label className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors">
+                        <Camera className="w-3.5 h-3.5 text-amber-400" />
+                        <span>
+                          {uploadingPhoto
+                            ? 'Uploading...'
+                            : displayAvatar
+                            ? 'Change Photo'
+                            : 'Select Photo'}
+                        </span>
+                        <input
+                          type="file"
+                          multiple={false}
+                          accept="image/png,image/jpeg,image/webp"
+                          onChange={handlePhotoUpload}
+                          disabled={uploadingPhoto}
+                          className="hidden"
+                        />
+                      </label>
 
-                  {displayAvatar && (
-                    <button
-                      type="button"
-                      onClick={handleRotatePhoto}
-                      disabled={uploadingPhoto}
-                      className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50"
-                      title="Rotate portrait 90 degrees"
-                    >
-                      <RotateCw className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Rotate</span>
-                    </button>
+                      {displayAvatar && (
+                        <button
+                          type="button"
+                          onClick={handleRotatePhoto}
+                          disabled={uploadingPhoto}
+                          className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50"
+                          title="Rotate portrait 90 degrees"
+                        >
+                          <RotateCw className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Rotate</span>
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -1418,6 +1603,11 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
                     Any image you upload for <strong className="text-slate-200">{formattedName}</strong> is automatically
                     centered and cropped into a clean circle for the official 2-page PDF card.
                   </p>
+                  {oneTimeIssuance && (
+                    <p className="text-[11px] text-amber-200/90 bg-amber-500/10 border border-amber-400/25 rounded-xl px-3 py-2 leading-relaxed">
+                      <strong>One-Time Single Photo &amp; Issuance:</strong> Only one portrait photograph may be uploaded per member. Once uploaded, your image is immediately locked and your Official ID Card can be downloaded once.
+                    </p>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
@@ -1472,34 +1662,37 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
                       className="px-5 py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs inline-flex items-center gap-2 cursor-pointer shadow-lg transition-colors"
                     >
                       <Sparkles className="w-4 h-4" />
-                      <span>Generate Official ID Card</span>
+                      <span>Preview Official ID Card</span>
                       <ArrowRight className="w-4 h-4" />
                     </button>
-                  ) : (
+                  ) : !isSingleUploadLocked ? (
                     <>
                       <label className="px-5 py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs inline-flex items-center gap-2 cursor-pointer shadow-lg transition-colors">
                         <Upload className="w-4 h-4" />
-                        <span>Upload Photo &amp; Generate Card</span>
+                        <span>{uploadingPhoto ? 'Uploading & Locking...' : 'Upload Photo & Continue'}</span>
                         <input
                           type="file"
+                          multiple={false}
                           accept="image/png,image/jpeg,image/webp"
                           onChange={async e => {
-                            await handlePhotoUpload(e);
-                            setStep('preview');
+                            const ok = await handlePhotoUpload(e);
+                            if (ok) setStep('preview');
                           }}
                           disabled={uploadingPhoto}
                           className="hidden"
                         />
                       </label>
-                      <button
-                        type="button"
-                        onClick={() => setStep('preview')}
-                        className="px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs cursor-pointer transition-colors"
-                      >
-                        Continue without Photo
-                      </button>
+                      {!oneTimeIssuance && (
+                        <button
+                          type="button"
+                          onClick={() => setStep('preview')}
+                          className="px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs cursor-pointer transition-colors"
+                        >
+                          Continue without Photo
+                        </button>
+                      )}
                     </>
-                  )}
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -1541,14 +1734,26 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
                 </button>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setStep('photo')}
-                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap"
-              >
-                <Camera className="w-3.5 h-3.5 text-amber-400" />
-                <span>{displayAvatar ? 'Change Photo / Details' : 'Add Portrait Photo'}</span>
-              </button>
+              {!isLockedPublicClaim && (
+                <button
+                  type="button"
+                  onClick={() => setStep('photo')}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap"
+                >
+                  {isSingleUploadLocked ? (
+                    <MapPin className="w-3.5 h-3.5 text-amber-400" />
+                  ) : (
+                    <Camera className="w-3.5 h-3.5 text-amber-400" />
+                  )}
+                  <span>
+                    {isSingleUploadLocked
+                      ? 'Edit City / Phone'
+                      : displayAvatar
+                      ? 'Change Photo / Details'
+                      : 'Add Portrait Photo'}
+                  </span>
+                </button>
+              )}
             </div>
 
             <div className="py-2 flex flex-col lg:flex-row items-center justify-center gap-6 print:flex-row print:gap-6">
@@ -1560,19 +1765,25 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
               <button
                 type="button"
                 onClick={handleDownloadPdf}
-                disabled={downloadingType !== null}
-                className="py-2.5 px-4 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-lg transition-colors disabled:opacity-50 whitespace-nowrap"
+                disabled={downloadingType !== null || isLockedPublicClaim}
+                className="py-2.5 px-4 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-lg transition-colors disabled:opacity-45 disabled:cursor-not-allowed whitespace-nowrap"
               >
-                <FileDown className="w-4 h-4" />
-                <span>{downloadingType === 'pdf' ? 'Creating PDF...' : 'Download Official PDF'}</span>
+                {isLockedPublicClaim ? <Lock className="w-4 h-4" /> : <FileDown className="w-4 h-4" />}
+                <span>
+                  {isLockedPublicClaim
+                    ? 'Issued Once (Locked)'
+                    : downloadingType === 'pdf'
+                    ? 'Saving & Creating PDF...'
+                    : 'Download Official PDF'}
+                </span>
               </button>
 
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => handleDownloadPng('dual')}
-                  disabled={downloadingType !== null}
-                  className="py-2.5 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs flex items-center justify-center gap-1 cursor-pointer transition-colors disabled:opacity-50 whitespace-nowrap"
+                  disabled={downloadingType !== null || isLockedPublicClaim}
+                  className="py-2.5 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs flex items-center justify-center gap-1 cursor-pointer transition-colors disabled:opacity-45 disabled:cursor-not-allowed whitespace-nowrap"
                 >
                   <Download className="w-3.5 h-3.5 text-amber-300" />
                   <span>{downloadingType === 'dual' ? '...' : 'Dual PNG'}</span>
@@ -1580,8 +1791,8 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleDownloadPng('front')}
-                  disabled={downloadingType !== null}
-                  className="py-2.5 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs flex items-center justify-center gap-1 cursor-pointer transition-colors disabled:opacity-50 whitespace-nowrap"
+                  disabled={downloadingType !== null || isLockedPublicClaim}
+                  className="py-2.5 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs flex items-center justify-center gap-1 cursor-pointer transition-colors disabled:opacity-45 disabled:cursor-not-allowed whitespace-nowrap"
                 >
                   <Download className="w-3.5 h-3.5 text-amber-300" />
                   <span>{downloadingType === 'front' ? '...' : 'Front PNG'}</span>
@@ -1590,11 +1801,12 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
 
               <button
                 type="button"
-                onClick={() => window.print()}
-                className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors whitespace-nowrap"
+                onClick={handlePrintCard}
+                disabled={downloadingType !== null || isLockedPublicClaim}
+                className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors disabled:opacity-45 disabled:cursor-not-allowed whitespace-nowrap"
               >
                 <Printer className="w-4 h-4 text-slate-300" />
-                <span>Print Card</span>
+                <span>{downloadingType === 'print' ? 'Saving...' : 'Print Card'}</span>
               </button>
 
               <button

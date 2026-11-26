@@ -228,14 +228,21 @@ export const AdminVolunteers: React.FC = () => {
                     <td className="py-3.5 px-4">
                       <div className="flex items-center gap-2.5">
                         <div className="w-9 h-9 rounded-xl bg-indigo-950 text-amber-300 font-serif font-bold text-xs flex items-center justify-center overflow-hidden shrink-0 border border-slate-200">
-                          {vol.avatar ? (
-                            <img src={vol.avatar} alt={vol.fullName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          {(vol.idCardPhotoUrl || vol.avatar) ? (
+                            <img src={vol.idCardPhotoUrl || vol.avatar} alt={vol.fullName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                           ) : (
                             vol.fullName.slice(0, 2).toUpperCase()
                           )}
                         </div>
                         <div>
-                          <strong className="text-slate-900 block text-xs">{vol.fullName}</strong>
+                          <div className="flex items-center gap-1.5">
+                            <strong className="text-slate-900 block text-xs">{vol.fullName}</strong>
+                            {vol.idCardIssued && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-[9.5px] font-semibold">
+                                ID Issued
+                              </span>
+                            )}
+                          </div>
                           <span className="text-[11px] text-slate-400 block">{vol.email} • {vol.phone}</span>
                         </div>
                       </div>

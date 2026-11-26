@@ -23,7 +23,8 @@ import {
   EmailLog,
   SupportConversation,
   SupportChatMessage,
-  MeetingCapture
+  MeetingCapture,
+  IdCardRecord
 } from '../src/types.ts';
 import { syncSchemaToMongo, loadOrSeedMongo, mongoUpsert, mongoDelete, mongoClearCollections, isMongoConnected } from './mongo.ts';
 
@@ -148,6 +149,7 @@ export interface DatabaseSchema {
   })[];
   applications: VolunteerApplication[];
   volunteers: Volunteer[];
+  idCardRecords?: IdCardRecord[];
   programs: Program[];
   events: EventItem[];
   news: NewsItem[];
@@ -732,6 +734,7 @@ function getSeedData(): DatabaseSchema {
       }
     ],
     faqs: getDefaultSeedFaqs(),
+    idCardRecords: [],
     contacts: [],
     settings: defaultSettings,
     activityLogs: [],
@@ -754,6 +757,7 @@ class Database {
     if (!this.data.emailLogs) this.data.emailLogs = [];
     if (!this.data.supportConversations) this.data.supportConversations = [];
     if (!this.data.meetingCaptures) this.data.meetingCaptures = [];
+    if (!this.data.idCardRecords) this.data.idCardRecords = [];
     if (!Array.isArray(this.data.faqs)) {
       this.data.faqs = getDefaultSeedFaqs();
     }
@@ -1352,6 +1356,55 @@ class Database {
     return this.data.applications.find(a => a.id === id || a.referenceCode === id) || null;
   }
 
+  private normalizeEmailId(email?: string): string {
+    return (email || '').trim().toLowerCase();
+  }
+
+  private normalizePhoneId(phone?: string): string {
+    const digits = (phone || '').replace(/\D/g, '');
+    if (!digits) return '';
+    return digits.length >= 10 ? digits.slice(-10) : digits;
+  }
+
+  findDuplicateApplicationByIdentity(email?: string, phone?: string): {
+    duplicate: boolean;
+    matchedBy?: 'email' | 'phone' | 'both';
+    existingStatus?: string;
+  } {
+    const normEmail = this.normalizeEmailId(email);
+    const normPhone = this.normalizePhoneId(phone);
+
+    let matchedEmail = false;
+    let matchedPhone = false;
+    let existingStatus: string | undefined;
+
+    for (const a of this.data.applications) {
+      if (a.status === 'Rejected') continue;
+      const eMatch = Boolean(normEmail && this.normalizeEmailId(a.email) === normEmail);
+      const pMatch = Boolean(normPhone && this.normalizePhoneId(a.phone) === normPhone);
+      if (eMatch || pMatch) {
+        if (eMatch) matchedEmail = true;
+        if (pMatch) matchedPhone = true;
+        existingStatus = existingStatus || a.status;
+      }
+    }
+
+    for (const v of this.data.volunteers) {
+      const eMatch = Boolean(normEmail && this.normalizeEmailId(v.email) === normEmail);
+      const pMatch = Boolean(normPhone && this.normalizePhoneId(v.phone) === normPhone);
+      if (eMatch || pMatch) {
+        if (eMatch) matchedEmail = true;
+        if (pMatch) matchedPhone = true;
+        existingStatus = existingStatus || 'Approved';
+      }
+    }
+
+    if (matchedEmail && matchedPhone) return { duplicate: true, matchedBy: 'both', existingStatus };
+    if (matchedEmail) return { duplicate: true, matchedBy: 'email', existingStatus };
+    if (matchedPhone) return { duplicate: true, matchedBy: 'phone', existingStatus };
+    return { duplicate: false };
+  }
+
   createApplication(payload: Omit<VolunteerApplication, 'id' | 'referenceCode' | 'status' | 'createdAt' | 'updatedAt'>) {
     const year = new Date().getFullYear();
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
@@ -1493,6 +1546,457 @@ class Database {
     this.save();
     mongoDelete('volunteers', id).catch(() => {});
     return this.data.volunteers.length < initialLen;
+  }
+
+  // --- Official ID Card Records (Single-Upload & One-Time Cross-ID Submission Lock) ---
+  resolveHolderByRefCode(refCode: string) {
+    const clean = (refCode || '').trim();
+    const normalized = clean.toUpperCase();
+    let appItem =
+      this.data.applications.find(
+        a => a.referenceCode.toUpperCase() === normalized || a.id.toUpperCase() === normalized
+      ) || null;
+
+    let volMatch =
+      (appItem
+        ? this.data.volunteers.find(
+            v =>
+              v.applicationId === appItem!.id ||
+              (this.normalizeEmailId(v.email) &&
+                this.normalizeEmailId(v.email) === this.normalizeEmailId(appItem!.email))
+          )
+        : null) || null;
+
+    if (!volMatch) {
+      volMatch =
+        this.data.volunteers.find(v => {
+          const volCode = `NG-VOL-${v.id.slice(-6).toUpperCase()}`;
+          return v.id.toUpperCase() === normalized || volCode === normalized;
+        }) || null;
+    }
+
+    // Reverse resolve appItem if lookup started from a volunteer code (NG-VOL-...)
+    if (volMatch && !appItem) {
+      appItem =
+        this.data.applications.find(
+          a =>
+            a.id === volMatch!.applicationId ||
+            (this.normalizeEmailId(a.email) &&
+              this.normalizeEmailId(a.email) === this.normalizeEmailId(volMatch!.email))
+        ) || null;
+    }
+
+    const canonicalCode = appItem
+      ? appItem.referenceCode
+      : volMatch
+      ? `NG-VOL-${volMatch.id.slice(-6).toUpperCase()}`
+      : normalized;
+
+    const resolvedEmail = this.normalizeEmailId(volMatch?.email || appItem?.email);
+    const resolvedPhone = this.normalizePhoneId(volMatch?.phone || appItem?.phone);
+
+    return { appItem, volMatch, canonicalCode, resolvedEmail, resolvedPhone };
+  }
+
+  getIdCardRecords(search?: string): IdCardRecord[] {
+    this.ensureMeetingArrays();
+    let list = [...(this.data.idCardRecords || [])];
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase();
+      list = list.filter(
+        r =>
+          r.fullName.toLowerCase().includes(q) ||
+          r.referenceCode.toLowerCase().includes(q) ||
+          (r.email && r.email.toLowerCase().includes(q)) ||
+          (r.phone && r.phone.toLowerCase().includes(q)) ||
+          (r.city && r.city.toLowerCase().includes(q)) ||
+          (r.assignedRole && r.assignedRole.toLowerCase().includes(q))
+      );
+    }
+    return list.sort((a, b) => new Date(b.issuedAt).getTime() - new Date(a.issuedAt).getTime());
+  }
+
+  getIdCardRecordByCode(refCode: string, extraPhone?: string): IdCardRecord | null {
+    this.ensureMeetingArrays();
+    const clean = (refCode || '').trim().toUpperCase();
+    if (!clean) return null;
+    const { appItem, volMatch, canonicalCode, resolvedEmail, resolvedPhone } = this.resolveHolderByRefCode(refCode);
+    const volCode = volMatch ? `NG-VOL-${volMatch.id.slice(-6).toUpperCase()}` : '';
+    const extraNormPhone = this.normalizePhoneId(extraPhone);
+
+    // Prefer locked match if multiple exist for same identity
+    const matches = (this.data.idCardRecords || []).filter(r => {
+      const rCode = r.referenceCode.toUpperCase();
+      const codeMatch =
+        rCode === clean ||
+        rCode === canonicalCode.toUpperCase() ||
+        (volCode && rCode === volCode);
+      const idMatch =
+        Boolean(appItem && r.applicationId === appItem.id) ||
+        Boolean(volMatch && r.volunteerId === volMatch.id);
+      const emailMatch = Boolean(resolvedEmail && this.normalizeEmailId(r.email) === resolvedEmail);
+      const rPhoneNorm = this.normalizePhoneId(r.phone);
+      const phoneMatch = Boolean(
+        rPhoneNorm &&
+          ((resolvedPhone && rPhoneNorm === resolvedPhone) || (extraNormPhone && rPhoneNorm === extraNormPhone))
+      );
+      return codeMatch || idMatch || emailMatch || phoneMatch;
+    });
+
+    if (matches.length === 0) return null;
+    return matches.find(m => m.locked) || matches[0];
+  }
+
+  getIdCardRecordById(id: string): IdCardRecord | null {
+    this.ensureMeetingArrays();
+    return (this.data.idCardRecords || []).find(r => r.id === id) || null;
+  }
+
+  canUploadMemberIdPhoto(refCode: string): {
+    allowed: boolean;
+    reason?: 'not_found' | 'not_approved' | 'already_issued' | 'photo_already_uploaded';
+    existingRecord?: IdCardRecord | null;
+    existingPhotoUrl?: string;
+    canonicalCode?: string;
+  } {
+    const { appItem, volMatch, canonicalCode } = this.resolveHolderByRefCode(refCode);
+    if (!appItem && !volMatch) {
+      return { allowed: false, reason: 'not_found' };
+    }
+    if (appItem && appItem.status !== 'Approved') {
+      return { allowed: false, reason: 'not_approved' };
+    }
+
+    const existing = this.getIdCardRecordByCode(canonicalCode);
+    if (existing && existing.locked) {
+      return {
+        allowed: false,
+        reason: 'already_issued',
+        existingRecord: existing,
+        existingPhotoUrl: existing.photoUrl,
+        canonicalCode
+      };
+    }
+
+    const photoLocked = Boolean(
+      existing?.photoLocked || appItem?.idCardPhotoLocked || volMatch?.idCardPhotoLocked
+    );
+    const existingPhotoUrl =
+      existing?.photoUrl || volMatch?.idCardPhotoUrl || appItem?.idCardPhotoUrl || volMatch?.avatar || appItem?.avatar;
+
+    if (photoLocked && existingPhotoUrl) {
+      return {
+        allowed: false,
+        reason: 'photo_already_uploaded',
+        existingRecord: existing,
+        existingPhotoUrl,
+        canonicalCode
+      };
+    }
+
+    return { allowed: true, existingRecord: existing, canonicalCode };
+  }
+
+  lockMemberIdCardPhoto(params: { refCode: string; photoUrl: string }): {
+    ok: boolean;
+    reason?: 'not_found' | 'not_approved' | 'already_issued' | 'photo_already_uploaded';
+    photoUrl?: string;
+  } {
+    this.ensureMeetingArrays();
+    const eligibility = this.canUploadMemberIdPhoto(params.refCode);
+    if (!eligibility.allowed) {
+      return {
+        ok: false,
+        reason: eligibility.reason,
+        photoUrl: eligibility.existingPhotoUrl
+      };
+    }
+
+    const { appItem, volMatch, resolvedEmail, resolvedPhone } = this.resolveHolderByRefCode(params.refCode);
+    const nowIso = new Date().toISOString();
+
+    if (appItem) {
+      appItem.avatar = params.photoUrl;
+      appItem.idCardPhotoUrl = params.photoUrl;
+      appItem.idCardPhotoLocked = true;
+      appItem.updatedAt = nowIso;
+      mongoUpsert('applications', appItem.id, appItem).catch(() => {});
+    }
+
+    if (volMatch) {
+      volMatch.avatar = params.photoUrl;
+      volMatch.idCardPhotoUrl = params.photoUrl;
+      volMatch.idCardPhotoLocked = true;
+      mongoUpsert('volunteers', volMatch.id, volMatch).catch(() => {});
+    }
+
+    // Lock photo on any existing unlocked re-issue record sharing identity
+    if (eligibility.existingRecord && !eligibility.existingRecord.locked) {
+      eligibility.existingRecord.photoUrl = params.photoUrl;
+      eligibility.existingRecord.photoLocked = true;
+      eligibility.existingRecord.updatedAt = nowIso;
+      mongoUpsert('idCardRecords', eligibility.existingRecord.id, eligibility.existingRecord).catch(() => {});
+    }
+
+    // Also mark sibling application/volunteer sharing identical email/phone so user cannot upload again via secondary code
+    for (const a of this.data.applications) {
+      if (a.id === appItem?.id) continue;
+      const sameEmail = Boolean(resolvedEmail && this.normalizeEmailId(a.email) === resolvedEmail);
+      const samePhone = Boolean(resolvedPhone && this.normalizePhoneId(a.phone) === resolvedPhone);
+      if (sameEmail || samePhone) {
+        a.idCardPhotoUrl = params.photoUrl;
+        a.idCardPhotoLocked = true;
+        a.updatedAt = nowIso;
+        mongoUpsert('applications', a.id, a).catch(() => {});
+      }
+    }
+
+    this.save();
+    return { ok: true, photoUrl: params.photoUrl };
+  }
+
+  canIssueMemberIdCard(refCode: string, extraPhone?: string): {
+    allowed: boolean;
+    reason?: 'not_found' | 'not_approved' | 'already_issued';
+    existingRecord?: IdCardRecord | null;
+    canonicalCode?: string;
+    lockedPhotoUrl?: string;
+    isPhotoLocked?: boolean;
+  } {
+    const { appItem, volMatch, canonicalCode } = this.resolveHolderByRefCode(refCode);
+    if (!appItem && !volMatch) {
+      return { allowed: false, reason: 'not_found' };
+    }
+    if (appItem && appItem.status !== 'Approved') {
+      return { allowed: false, reason: 'not_approved' };
+    }
+    const existing = this.getIdCardRecordByCode(canonicalCode, extraPhone);
+    if (existing && existing.locked) {
+      return { allowed: false, reason: 'already_issued', existingRecord: existing, canonicalCode };
+    }
+
+    const isPhotoLocked = Boolean(
+      existing?.photoLocked || appItem?.idCardPhotoLocked || volMatch?.idCardPhotoLocked
+    );
+    const lockedPhotoUrl = isPhotoLocked
+      ? existing?.photoUrl || volMatch?.idCardPhotoUrl || appItem?.idCardPhotoUrl
+      : undefined;
+
+    return {
+      allowed: true,
+      existingRecord: existing,
+      canonicalCode,
+      lockedPhotoUrl,
+      isPhotoLocked
+    };
+  }
+
+  issueMemberIdCard(params: {
+    refCode: string;
+    photoUrl: string;
+    city?: string;
+    phone?: string;
+    format?: 'pdf' | 'dual' | 'front' | 'print';
+  }): {
+    ok: boolean;
+    reason?: 'not_found' | 'not_approved' | 'already_issued';
+    record?: IdCardRecord;
+  } {
+    this.ensureMeetingArrays();
+    const { appItem, volMatch, canonicalCode, resolvedEmail, resolvedPhone: holderNormPhone } =
+      this.resolveHolderByRefCode(params.refCode);
+    if (!appItem && !volMatch) {
+      return { ok: false, reason: 'not_found' };
+    }
+    if (appItem && appItem.status !== 'Approved') {
+      return { ok: false, reason: 'not_approved' };
+    }
+
+    const existing = this.getIdCardRecordByCode(canonicalCode, params.phone);
+    if (existing && existing.locked) {
+      return { ok: false, reason: 'already_issued', record: existing };
+    }
+
+    const nowIso = new Date().toISOString();
+    const resolvedCity = (params.city && params.city.trim()) || volMatch?.city || appItem?.city || 'National Chapter';
+    const resolvedPhone = (params.phone && params.phone.trim()) || volMatch?.phone || appItem?.phone || '';
+    const resolvedName = volMatch?.fullName || appItem?.fullName || 'Council Member';
+    const recordEmail = volMatch?.email || appItem?.email || '';
+    const resolvedRole = volMatch?.assignedRole || appItem?.preferredRole || 'MEMBER NEXGEN COUNCIL';
+
+    // If a single portrait photo was already locked on first upload, preserve it strictly
+    const finalPhotoUrl =
+      existing?.photoLocked && existing.photoUrl
+        ? existing.photoUrl
+        : appItem?.idCardPhotoLocked && appItem.idCardPhotoUrl
+        ? appItem.idCardPhotoUrl
+        : volMatch?.idCardPhotoLocked && volMatch.idCardPhotoUrl
+        ? volMatch.idCardPhotoUrl
+        : params.photoUrl;
+
+    if (appItem) {
+      appItem.avatar = finalPhotoUrl;
+      appItem.idCardPhotoUrl = finalPhotoUrl;
+      appItem.idCardPhotoLocked = true;
+      appItem.idCardIssued = true;
+      appItem.idCardIssuedAt = nowIso;
+      appItem.city = resolvedCity;
+      if (resolvedPhone) appItem.phone = resolvedPhone;
+      appItem.updatedAt = nowIso;
+      mongoUpsert('applications', appItem.id, appItem).catch(() => {});
+    }
+
+    if (volMatch) {
+      volMatch.avatar = finalPhotoUrl;
+      volMatch.idCardPhotoUrl = finalPhotoUrl;
+      volMatch.idCardPhotoLocked = true;
+      volMatch.idCardIssued = true;
+      volMatch.idCardIssuedAt = nowIso;
+      volMatch.city = resolvedCity;
+      if (resolvedPhone) volMatch.phone = resolvedPhone;
+      mongoUpsert('volunteers', volMatch.id, volMatch).catch(() => {});
+    }
+
+    // Also lock any matching email/phone sibling applications or volunteers
+    const submittedNormPhone = this.normalizePhoneId(resolvedPhone);
+    for (const a of this.data.applications) {
+      if (a.id === appItem?.id) continue;
+      const sameEmail = Boolean(resolvedEmail && this.normalizeEmailId(a.email) === resolvedEmail);
+      const aPhone = this.normalizePhoneId(a.phone);
+      const samePhone = Boolean(
+        aPhone && ((holderNormPhone && aPhone === holderNormPhone) || (submittedNormPhone && aPhone === submittedNormPhone))
+      );
+      if (sameEmail || samePhone) {
+        a.idCardIssued = true;
+        a.idCardIssuedAt = nowIso;
+        a.idCardPhotoUrl = finalPhotoUrl;
+        a.idCardPhotoLocked = true;
+        a.updatedAt = nowIso;
+        mongoUpsert('applications', a.id, a).catch(() => {});
+      }
+    }
+
+    const record: IdCardRecord = {
+      id: existing?.id || `idc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      referenceCode: canonicalCode,
+      applicationId: appItem?.id || existing?.applicationId,
+      volunteerId: volMatch?.id || existing?.volunteerId,
+      fullName: resolvedName,
+      email: recordEmail,
+      phone: resolvedPhone,
+      city: resolvedCity,
+      assignedRole: resolvedRole,
+      assignedProgram: volMatch?.assignedProgram || existing?.assignedProgram,
+      membershipTier: volMatch?.membershipTier || existing?.membershipTier || 'Active Volunteer Scholar',
+      photoUrl: finalPhotoUrl,
+      photoLocked: true,
+      issuedAt: nowIso,
+      issuedFormat: params.format || 'pdf',
+      downloadCount: (existing?.downloadCount || 0) + 1,
+      locked: true,
+      resetByAdminAt: existing?.resetByAdminAt,
+      resetByAdminName: existing?.resetByAdminName,
+      updatedAt: nowIso
+    };
+
+    if (existing) {
+      this.data.idCardRecords = (this.data.idCardRecords || []).map(r => (r.id === existing.id ? record : r));
+    } else {
+      this.data.idCardRecords!.unshift(record);
+    }
+
+    this.save();
+    mongoUpsert('idCardRecords', record.id, record).catch(() => {});
+    return { ok: true, record };
+  }
+
+  resetIdCardLock(id: string, adminName: string): IdCardRecord | null {
+    this.ensureMeetingArrays();
+    const record = (this.data.idCardRecords || []).find(
+      r => r.id === id || r.referenceCode.toUpperCase() === id.trim().toUpperCase()
+    );
+    if (!record) return null;
+
+    const nowIso = new Date().toISOString();
+    record.locked = false;
+    record.photoLocked = false;
+    record.resetByAdminAt = nowIso;
+    record.resetByAdminName = adminName;
+    record.updatedAt = nowIso;
+
+    const recEmail = this.normalizeEmailId(record.email);
+    const recPhone = this.normalizePhoneId(record.phone);
+
+    for (const appItem of this.data.applications) {
+      const match =
+        appItem.id === record.applicationId ||
+        (recEmail && this.normalizeEmailId(appItem.email) === recEmail) ||
+        (recPhone && this.normalizePhoneId(appItem.phone) === recPhone);
+      if (match) {
+        appItem.idCardIssued = false;
+        appItem.idCardPhotoLocked = false;
+        appItem.updatedAt = nowIso;
+        mongoUpsert('applications', appItem.id, appItem).catch(() => {});
+      }
+    }
+
+    for (const vol of this.data.volunteers) {
+      const match =
+        vol.id === record.volunteerId ||
+        (recEmail && this.normalizeEmailId(vol.email) === recEmail) ||
+        (recPhone && this.normalizePhoneId(vol.phone) === recPhone);
+      if (match) {
+        vol.idCardIssued = false;
+        vol.idCardPhotoLocked = false;
+        mongoUpsert('volunteers', vol.id, vol).catch(() => {});
+      }
+    }
+
+    this.save();
+    mongoUpsert('idCardRecords', record.id, record).catch(() => {});
+    return record;
+  }
+
+  deleteIdCardRecord(id: string): boolean {
+    this.ensureMeetingArrays();
+    const record = (this.data.idCardRecords || []).find(r => r.id === id);
+    if (!record) return false;
+
+    this.data.idCardRecords = (this.data.idCardRecords || []).filter(r => r.id !== id);
+    const nowIso = new Date().toISOString();
+    const recEmail = this.normalizeEmailId(record.email);
+    const recPhone = this.normalizePhoneId(record.phone);
+
+    for (const appItem of this.data.applications) {
+      const match =
+        appItem.id === record.applicationId ||
+        (recEmail && this.normalizeEmailId(appItem.email) === recEmail) ||
+        (recPhone && this.normalizePhoneId(appItem.phone) === recPhone);
+      if (match) {
+        appItem.idCardIssued = false;
+        appItem.idCardIssuedAt = undefined;
+        appItem.idCardPhotoLocked = false;
+        appItem.updatedAt = nowIso;
+        mongoUpsert('applications', appItem.id, appItem).catch(() => {});
+      }
+    }
+
+    for (const vol of this.data.volunteers) {
+      const match =
+        vol.id === record.volunteerId ||
+        (recEmail && this.normalizeEmailId(vol.email) === recEmail) ||
+        (recPhone && this.normalizePhoneId(vol.phone) === recPhone);
+      if (match) {
+        vol.idCardIssued = false;
+        vol.idCardIssuedAt = undefined;
+        vol.idCardPhotoLocked = false;
+        mongoUpsert('volunteers', vol.id, vol).catch(() => {});
+      }
+    }
+
+    this.save();
+    mongoDelete('idCardRecords', id).catch(() => {});
+    return true;
   }
 
   // --- Programs ---

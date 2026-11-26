@@ -284,9 +284,27 @@ export const AdminApplications: React.FC = () => {
                     </td>
 
                     <td className="py-3.5 px-4">
-                      <strong className="text-slate-900 block text-xs">{app.fullName}</strong>
-                      <span className="text-[11px] text-slate-500 block">{app.email}</span>
-                      <span className="text-[10px] text-slate-400 block">{app.phone} • {app.city}</span>
+                      <div className="flex items-center gap-2.5">
+                        {(app.idCardPhotoUrl || app.avatar) && (
+                          <img
+                            src={app.idCardPhotoUrl || app.avatar}
+                            alt={app.fullName}
+                            className="w-9 h-9 rounded-full object-cover border border-slate-200 shrink-0"
+                          />
+                        )}
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <strong className="text-slate-900 block text-xs">{app.fullName}</strong>
+                            {app.idCardIssued && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-[9.5px] font-semibold">
+                                ID Issued
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[11px] text-slate-500 block">{app.email}</span>
+                          <span className="text-[10px] text-slate-400 block">{app.phone} • {app.city}</span>
+                        </div>
+                      </div>
                     </td>
 
                     <td className="py-3.5 px-4">
@@ -393,16 +411,28 @@ export const AdminApplications: React.FC = () => {
             {/* Modal Header */}
             <div className="border-b border-slate-200 pb-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <span className="font-mono text-xs font-bold text-indigo-900 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 uppercase">
-                    {selectedApp.referenceCode}
-                  </span>
-                  <h3 className="text-2xl font-serif font-bold text-slate-900 mt-1">
-                    {selectedApp.fullName}
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Submitted on {new Date(selectedApp.submittedAt || selectedApp.createdAt).toLocaleString()}
-                  </p>
+                <div className="flex items-center gap-3.5">
+                  {(selectedApp.idCardPhotoUrl || selectedApp.avatar) && (
+                    <img
+                      src={selectedApp.idCardPhotoUrl || selectedApp.avatar}
+                      alt={selectedApp.fullName}
+                      className="w-14 h-14 rounded-full object-cover border-2 border-indigo-950/20 shrink-0"
+                    />
+                  )}
+                  <div>
+                    <span className="font-mono text-xs font-bold text-indigo-900 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 uppercase">
+                      {selectedApp.referenceCode}
+                    </span>
+                    <h3 className="text-2xl font-serif font-bold text-slate-900 mt-1">
+                      {selectedApp.fullName}
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Submitted on {new Date(selectedApp.submittedAt || selectedApp.createdAt).toLocaleString()}
+                      {selectedApp.idCardIssued && selectedApp.idCardIssuedAt
+                        ? ` • ID Card Issued ${new Date(selectedApp.idCardIssuedAt).toLocaleDateString()}`
+                        : ''}
+                    </p>
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <span

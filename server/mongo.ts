@@ -139,6 +139,9 @@ export async function initMongo(targetUri?: string): Promise<boolean> {
       await dbInstance.collection('applications').createIndex({ status: 1 });
       await dbInstance.collection('applications').createIndex({ createdAt: -1 });
       await dbInstance.collection('volunteers').createIndex({ id: 1 }, { unique: true });
+      await dbInstance.collection('idCardRecords').createIndex({ id: 1 }, { unique: true });
+      await dbInstance.collection('idCardRecords').createIndex({ referenceCode: 1 });
+      await dbInstance.collection('idCardRecords').createIndex({ issuedAt: -1 });
       await dbInstance.collection('contacts').createIndex({ id: 1 }, { unique: true });
       await dbInstance.collection('contacts').createIndex({ createdAt: -1 });
       await dbInstance.collection('activityLogs').createIndex({ timestamp: -1 });
@@ -268,6 +271,7 @@ export async function loadOrSeedMongo(fallbackData: DatabaseSchema): Promise<Dat
     const users = await dbInstance.collection('users').find({}).toArray();
     const applications = await dbInstance.collection('applications').find({}).sort({ createdAt: -1 }).toArray();
     const volunteers = await dbInstance.collection('volunteers').find({}).toArray();
+    const idCardRecords = await dbInstance.collection('idCardRecords').find({}).sort({ issuedAt: -1 }).toArray();
     const programs = await dbInstance.collection('programs').find({}).toArray();
     const events = await dbInstance.collection('events').find({}).toArray();
     const news = await dbInstance.collection('news').find({}).toArray();
@@ -326,6 +330,7 @@ export async function loadOrSeedMongo(fallbackData: DatabaseSchema): Promise<Dat
       users: users.length > 0 ? (stripMongoId(users) as any) : fallbackData.users,
       applications: stripMongoId(applications) as any,
       volunteers: stripMongoId(volunteers) as any,
+      idCardRecords: stripMongoId(idCardRecords) as any,
       programs: stripMongoId(programs) as any,
       events: stripMongoId(events) as any,
       news: stripMongoId(news) as any,
@@ -496,6 +501,7 @@ export async function syncSchemaToMongo(schema: DatabaseSchema) {
       users: schema.users,
       applications: schema.applications,
       volunteers: schema.volunteers,
+      idCardRecords: schema.idCardRecords || [],
       programs: schema.programs,
       events: schema.events,
       news: schema.news,

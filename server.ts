@@ -1248,6 +1248,17 @@ app.post('/api/applications', (req, res) => {
     return res.status(400).json({ error: 'Please confirm that the submitted information is accurate.' });
   }
 
+  // Prevent multiple application submissions for the same user identification (email or phone)
+  const dupCheck = db.findDuplicateApplicationByIdentity(body.email, body.phone);
+  if (dupCheck.duplicate) {
+    return res.status(409).json({
+      error:
+        'An application with this email address or phone number has already been submitted. Multiple submissions for the same identification are not permitted. Please use Track Application (/track) to check your review status.',
+      duplicate: true,
+      matchedBy: dupCheck.matchedBy
+    });
+  }
+
   const application = db.createApplication({
     fullName: body.fullName.trim(),
     email: body.email.trim().toLowerCase(),
@@ -1292,44 +1303,118 @@ app.post('/api/applications', (req, res) => {
   });
 });
 
+// Rate limiter & in-flight concurrency lock for public ID card upload/issuance
+const publicIdCardRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+const inFlightIdCardOps = new Set<string>();
+
+function checkPublicIdCardRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = publicIdCardRateLimitMap.get(ip);
+  if (!entry || entry.resetAt < now) {
+    publicIdCardRateLimitMap.set(ip, { count: 1, resetAt: now + 15 * 60 * 1000 });
+    return true;
+  }
+  if (entry.count >= 15) return false;
+  entry.count++;
+  return true;
+}
+
+function saveIdCardRasterImage(
+  photoDataUrl: string,
+  canonicalCode: string
+): { ok: true; photoUrl: string } | { ok: false; status: number; error: string } {
+  const matches = photoDataUrl.match(
+    /^data:image\/(png|jpeg|jpg|webp)(?:;[^;,=]+=[^;,]+)*;base64,([\s\S]+)$/i
+  );
+  if (!matches) {
+    return { ok: false, status: 400, error: 'Only PNG, JPG, and WEBP portrait photos are permitted.' };
+  }
+  const rawExt = matches[1].toLowerCase();
+  const ext = rawExt === 'jpeg' ? 'jpg' : rawExt;
+  const mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+  const base64Data = matches[2].replace(/\s+/g, '');
+  const buffer = Buffer.from(base64Data, 'base64');
+
+  if (buffer.length > 5 * 1024 * 1024) {
+    return { ok: false, status: 413, error: 'Portrait image exceeds the 5MB maximum size limit.' };
+  }
+
+  const publicUploadsDir = path.join(process.cwd(), 'public', 'uploads');
+  const persistentUploadsDir = path.join(process.cwd(), 'data', 'uploads');
+  if (!fs.existsSync(publicUploadsDir)) fs.mkdirSync(publicUploadsDir, { recursive: true });
+  if (!fs.existsSync(persistentUploadsDir)) fs.mkdirSync(persistentUploadsDir, { recursive: true });
+
+  const safeCode = canonicalCode.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const finalName = `idcard_${Date.now()}_${safeCode}.${ext}`;
+  fs.writeFileSync(path.join(publicUploadsDir, finalName), buffer);
+  try {
+    fs.writeFileSync(path.join(persistentUploadsDir, finalName), buffer);
+  } catch (err) {
+    console.warn('[Storage] Could not write ID card photo to data/uploads:', err);
+  }
+
+  mongoSaveMedia(finalName, photoDataUrl, mimeType, buffer.length).catch(mErr => {
+    console.warn('[MongoDB] Background ID card photo persistence notice:', mErr?.message);
+  });
+
+  return { ok: true, photoUrl: `/uploads/${finalName}` };
+}
+
 // Applicant & Credential public status lookup
 app.get('/api/applications/verify/:refCode', (req, res) => {
   const refCode = req.params.refCode.trim();
-  const normalizedCode = refCode.toUpperCase();
-  const appItem = db.getApplicationById(refCode);
+  const { appItem, volMatch, canonicalCode } = db.resolveHolderByRefCode(refCode);
+  const idRecord = db.getIdCardRecordByCode(refCode);
 
   if (appItem) {
-    const matchedVol = db.getVolunteers().find(
-      v => v.applicationId === appItem.id || (v.email && appItem.email && v.email.toLowerCase() === appItem.email.toLowerCase())
+    const resolvedAvatar =
+      idRecord?.photoUrl ||
+      volMatch?.idCardPhotoUrl ||
+      appItem.idCardPhotoUrl ||
+      volMatch?.avatar ||
+      appItem.avatar;
+    const isIssuedLocked = Boolean(
+      idRecord ? idRecord.locked : volMatch?.idCardIssued || appItem.idCardIssued
+    );
+    const isPhotoLocked = Boolean(
+      isIssuedLocked ||
+        idRecord?.photoLocked ||
+        volMatch?.idCardPhotoLocked ||
+        appItem.idCardPhotoLocked
     );
     return res.json({
+      id: appItem.id,
       referenceCode: appItem.referenceCode,
-      fullName: matchedVol?.fullName || appItem.fullName,
-      city: matchedVol?.city || appItem.city,
-      phone: matchedVol?.phone || appItem.phone,
+      fullName: volMatch?.fullName || appItem.fullName,
+      city: idRecord?.city || volMatch?.city || appItem.city,
+      phone: idRecord?.phone || volMatch?.phone || appItem.phone,
       status: appItem.status,
+      volunteerStatus: volMatch?.status,
       submittedAt: appItem.createdAt,
       preferredRole: appItem.preferredRole,
-      assignedRole: matchedVol?.assignedRole || appItem.preferredRole,
-      assignedProgram: matchedVol?.assignedProgram,
-      membershipTier: matchedVol?.membershipTier,
-      hoursContributed: matchedVol?.hoursContributed ?? matchedVol?.hoursLogged ?? 0,
-      avatar: matchedVol?.avatar || appItem.avatar
+      assignedRole: volMatch?.assignedRole || appItem.preferredRole,
+      assignedProgram: volMatch?.assignedProgram,
+      membershipTier: volMatch?.membershipTier,
+      hoursContributed: volMatch?.hoursContributed ?? volMatch?.hoursLogged ?? 0,
+      avatar: resolvedAvatar,
+      idCardIssued: isIssuedLocked,
+      idCardIssuedAt: idRecord?.issuedAt || volMatch?.idCardIssuedAt || appItem.idCardIssuedAt,
+      idCardPhotoUrl: idRecord?.photoUrl || volMatch?.idCardPhotoUrl || appItem.idCardPhotoUrl || resolvedAvatar,
+      idCardPhotoLocked: isPhotoLocked
     });
   }
 
-  // Also check active volunteer credential codes (e.g. NG-VOL-XXXXXX)
-  const volMatch = db.getVolunteers().find(v => {
-    const volCode = `NG-VOL-${v.id.slice(-6).toUpperCase()}`;
-    return v.id.toUpperCase() === normalizedCode || volCode === normalizedCode;
-  });
-
   if (volMatch) {
+    const volRecord = idRecord || db.getIdCardRecordByCode(canonicalCode);
+    const resolvedAvatar = volRecord?.photoUrl || volMatch.idCardPhotoUrl || volMatch.avatar;
+    const isIssuedLocked = Boolean(volRecord ? volRecord.locked : volMatch.idCardIssued);
+    const isPhotoLocked = Boolean(isIssuedLocked || volRecord?.photoLocked || volMatch.idCardPhotoLocked);
     return res.json({
-      referenceCode: `NG-VOL-${volMatch.id.slice(-6).toUpperCase()}`,
+      id: volMatch.id,
+      referenceCode: canonicalCode,
       fullName: volMatch.fullName,
-      city: volMatch.city,
-      phone: volMatch.phone,
+      city: volRecord?.city || volMatch.city,
+      phone: volRecord?.phone || volMatch.phone,
       status: 'Approved',
       volunteerStatus: volMatch.status,
       submittedAt: volMatch.joinedDate,
@@ -1338,11 +1423,289 @@ app.get('/api/applications/verify/:refCode', (req, res) => {
       assignedProgram: volMatch.assignedProgram,
       membershipTier: volMatch.membershipTier,
       hoursContributed: volMatch.hoursContributed ?? volMatch.hoursLogged ?? 0,
-      avatar: volMatch.avatar
+      avatar: resolvedAvatar,
+      idCardIssued: isIssuedLocked,
+      idCardIssuedAt: volRecord?.issuedAt || volMatch.idCardIssuedAt,
+      idCardPhotoUrl: volRecord?.photoUrl || volMatch.idCardPhotoUrl || resolvedAvatar,
+      idCardPhotoLocked: isPhotoLocked
     });
   }
 
   return res.status(404).json({ error: 'Application or credential reference code not found.' });
+});
+
+// Public Single-Portrait Upload Lock (restricts user to exactly 1 uploaded photo)
+app.post('/api/applications/verify/:refCode/upload-photo', async (req, res) => {
+  const clientIp = getClientIp(req);
+  if (!checkPublicIdCardRateLimit(clientIp)) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a few minutes and try again.' });
+  }
+
+  const refCode = req.params.refCode.trim();
+  const { photoDataUrl } = req.body || {};
+
+  const eligibility = db.canUploadMemberIdPhoto(refCode);
+  if (!eligibility.allowed) {
+    if (eligibility.reason === 'not_found') {
+      return res.status(404).json({ error: 'Application or credential reference code not found.' });
+    }
+    if (eligibility.reason === 'not_approved') {
+      return res.status(403).json({ error: 'Portrait upload is only available for Approved applications.' });
+    }
+    if (eligibility.reason === 'already_issued') {
+      return res.status(409).json({
+        error: 'Your Official Member ID Card has already been issued. Photo uploads are locked.',
+        idCardIssued: true,
+        photoLocked: true,
+        photoUrl: eligibility.existingPhotoUrl
+      });
+    }
+    if (eligibility.reason === 'photo_already_uploaded') {
+      return res.status(409).json({
+        error: 'Only one portrait photo upload is permitted per member. Your uploaded portrait is already locked.',
+        photoLocked: true,
+        photoUrl: eligibility.existingPhotoUrl
+      });
+    }
+  }
+
+  if (!photoDataUrl || typeof photoDataUrl !== 'string' || !photoDataUrl.startsWith('data:image/')) {
+    return res.status(400).json({ error: 'Please select a valid PNG, JPG, or WEBP portrait image.' });
+  }
+
+  const lockKey = `photo:${(eligibility.canonicalCode || refCode).toUpperCase()}`;
+  if (inFlightIdCardOps.has(lockKey)) {
+    return res.status(409).json({ error: 'Your portrait upload is already being processed. Please wait.' });
+  }
+  inFlightIdCardOps.add(lockKey);
+
+  try {
+    const saved = saveIdCardRasterImage(photoDataUrl, eligibility.canonicalCode || refCode);
+    if ('error' in saved) {
+      return res.status(saved.status).json({ error: saved.error });
+    }
+
+    const result = db.lockMemberIdCardPhoto({ refCode, photoUrl: saved.photoUrl });
+    if (!result.ok) {
+      return res.status(409).json({
+        error: 'Only one portrait photo upload is permitted per member.',
+        photoLocked: true,
+        photoUrl: result.photoUrl
+      });
+    }
+
+    db.logActivity({
+      userId: 'public_member',
+      userName: eligibility.canonicalCode || refCode,
+      userRole: 'MEMBER',
+      action: 'ID_CARD_PHOTO_UPLOADED',
+      entityType: 'IdCardPhoto',
+      entityId: eligibility.canonicalCode || refCode,
+      details: `Single ID card portrait uploaded and locked for ${eligibility.canonicalCode || refCode}: ${saved.photoUrl}.`,
+      ipAddress: clientIp
+    });
+
+    return res.json({
+      ok: true,
+      photoLocked: true,
+      photoUrl: saved.photoUrl
+    });
+  } catch (err) {
+    console.error('Error locking single portrait upload:', err);
+    return res.status(500).json({ error: 'Failed to save uploaded portrait photograph.' });
+  } finally {
+    inFlightIdCardOps.delete(lockKey);
+  }
+});
+
+// Public One-Time ID Card Issuance (saves uploaded portrait & locks record in official registry)
+app.post('/api/applications/verify/:refCode/issue-id-card', async (req, res) => {
+  const clientIp = getClientIp(req);
+  if (!checkPublicIdCardRateLimit(clientIp)) {
+    return res.status(429).json({ error: 'Too many ID card requests. Please wait a few minutes and try again.' });
+  }
+
+  const refCode = req.params.refCode.trim();
+  const { photoDataUrl, city, phone, format } = req.body || {};
+
+  const eligibility = db.canIssueMemberIdCard(refCode, typeof phone === 'string' ? phone : undefined);
+  if (!eligibility.allowed) {
+    if (eligibility.reason === 'not_found') {
+      return res.status(404).json({ error: 'Application or credential reference code not found.' });
+    }
+    if (eligibility.reason === 'not_approved') {
+      return res.status(403).json({ error: 'Official ID Card issuance is only available for Approved applications.' });
+    }
+    if (eligibility.reason === 'already_issued') {
+      return res.status(409).json({
+        error: 'An Official NexGen Member ID Card has already been submitted and issued for this identification. Multiple submissions are not permitted.',
+        idCardIssued: true,
+        photoLocked: true,
+        issuedAt: eligibility.existingRecord?.issuedAt,
+        photoUrl: eligibility.existingRecord?.photoUrl
+      });
+    }
+  }
+
+  const lockKey = `issue:${(eligibility.canonicalCode || refCode).toUpperCase()}`;
+  if (inFlightIdCardOps.has(lockKey)) {
+    return res.status(409).json({ error: 'Your ID card submission is already being recorded. Please wait.' });
+  }
+  inFlightIdCardOps.add(lockKey);
+
+  try {
+    let savedPhotoUrl = '';
+
+    // If user already uploaded and locked their single image, strictly reuse that locked photo
+    if (eligibility.isPhotoLocked && eligibility.lockedPhotoUrl) {
+      savedPhotoUrl = eligibility.lockedPhotoUrl;
+    } else {
+      if (!photoDataUrl || typeof photoDataUrl !== 'string') {
+        return res.status(400).json({ error: 'A portrait photograph is required before issuing your Official ID Card.' });
+      }
+      if (photoDataUrl.startsWith('data:image/')) {
+        const saved = saveIdCardRasterImage(photoDataUrl, eligibility.canonicalCode || refCode);
+        if ('error' in saved) {
+          return res.status(saved.status).json({ error: saved.error });
+        }
+        savedPhotoUrl = saved.photoUrl;
+      } else if (
+        photoDataUrl.startsWith('/uploads/') &&
+        eligibility.existingRecord?.photoUrl === photoDataUrl
+      ) {
+        savedPhotoUrl = photoDataUrl;
+      } else {
+        return res.status(400).json({ error: 'Please upload a valid portrait photo file (PNG, JPG, or WEBP).' });
+      }
+    }
+
+    const allowedFormat = ['pdf', 'dual', 'front', 'print'].includes(format) ? format : 'pdf';
+    const result = db.issueMemberIdCard({
+      refCode,
+      photoUrl: savedPhotoUrl,
+      city: typeof city === 'string' ? city.slice(0, 120) : undefined,
+      phone: typeof phone === 'string' ? phone.slice(0, 40) : undefined,
+      format: allowedFormat
+    });
+
+    if (!result.ok || !result.record) {
+      if (result.reason === 'already_issued') {
+        return res.status(409).json({
+          error: 'An Official ID Card has already been issued for this user identification.',
+          idCardIssued: true,
+          photoLocked: true
+        });
+      }
+      return res.status(400).json({ error: 'Unable to complete ID card issuance.' });
+    }
+
+    db.logActivity({
+      userId: 'public_member',
+      userName: result.record.fullName,
+      userRole: 'MEMBER',
+      action: 'ID_CARD_ISSUED_PUBLIC',
+      entityType: 'IdCardRecord',
+      entityId: result.record.id,
+      details: `Official Member ID Card issued once for ${result.record.fullName} (${result.record.referenceCode}) via ${allowedFormat.toUpperCase()} with saved portrait ${savedPhotoUrl}.`,
+      ipAddress: clientIp
+    });
+
+    return res.json({
+      ok: true,
+      idCardIssued: true,
+      photoLocked: true,
+      issuedAt: result.record.issuedAt,
+      photoUrl: result.record.photoUrl,
+      record: result.record
+    });
+  } catch (err) {
+    console.error('Error processing ID card issuance:', err);
+    return res.status(500).json({ error: 'Failed to process ID card issuance.' });
+  } finally {
+    inFlightIdCardOps.delete(lockKey);
+  }
+});
+
+// Admin Official ID Card Registry Endpoints
+app.get('/api/id-card-records', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'VIEWER']), (req, res) => {
+  const { search } = req.query as Record<string, string>;
+  res.json(db.getIdCardRecords(search));
+});
+
+app.get('/api/id-card-records/export/csv', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), (req, res) => {
+  const records = db.getIdCardRecords();
+  const headers = [
+    'Reference Code',
+    'Full Name',
+    'Email',
+    'Phone',
+    'City',
+    'Assigned Role',
+    'Membership Tier',
+    'Issued At',
+    'Format',
+    'Downloads',
+    'Claim Lock',
+    'Photo URL'
+  ];
+  const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const rows = records.map(r => [
+    esc(r.referenceCode),
+    esc(r.fullName),
+    esc(r.email || ''),
+    esc(r.phone),
+    esc(r.city),
+    esc(r.assignedRole),
+    esc(r.membershipTier || ''),
+    esc(r.issuedAt),
+    esc((r.issuedFormat || 'pdf').toUpperCase()),
+    esc(r.downloadCount),
+    esc(r.locked ? 'Locked (Issued)' : 'Unlocked for Re-issue'),
+    esc(r.photoUrl)
+  ]);
+  const csv = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="nexgen-official-id-card-records.csv"');
+  res.send(csv);
+});
+
+app.post('/api/id-card-records/:id/reset-lock', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), (req, res) => {
+  const user = (req as any).user;
+  const updated = db.resetIdCardLock(req.params.id, user.name || 'Admin');
+  if (!updated) {
+    return res.status(404).json({ error: 'ID Card record not found.' });
+  }
+  db.logActivity({
+    userId: user.userId,
+    userName: user.name,
+    userRole: user.role,
+    action: 'ID_CARD_REISSUE_UNLOCKED',
+    entityType: 'IdCardRecord',
+    entityId: updated.id,
+    details: `Secretariat unlocked one-time ID Card re-issuance for ${updated.fullName} (${updated.referenceCode}).`,
+    ipAddress: getClientIp(req)
+  });
+  res.json(updated);
+});
+
+app.delete('/api/id-card-records/:id', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), (req, res) => {
+  const existing = db.getIdCardRecordById(req.params.id);
+  const ok = db.deleteIdCardRecord(req.params.id);
+  if (!ok) {
+    return res.status(404).json({ error: 'ID Card record not found.' });
+  }
+  const user = (req as any).user;
+  db.logActivity({
+    userId: user.userId,
+    userName: user.name,
+    userRole: user.role,
+    action: 'ID_CARD_RECORD_DELETED',
+    entityType: 'IdCardRecord',
+    entityId: req.params.id,
+    details: `Deleted official ID Card record for ${existing?.fullName || req.params.id} (${existing?.referenceCode || ''}).`,
+    ipAddress: getClientIp(req)
+  });
+  res.json({ ok: true });
 });
 
 // Admin Applications endpoints

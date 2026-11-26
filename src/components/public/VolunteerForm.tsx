@@ -17,7 +17,8 @@ import {
   Clock,
   Sparkles,
   ShieldCheck,
-  Send
+  Send,
+  AlertCircle
 } from 'lucide-react';
 
 interface FormData {
@@ -118,6 +119,7 @@ export const VolunteerForm: React.FC = () => {
   const [formData, setFormData] = useState<FormData>(initialFormData);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [submitError, setSubmitError] = useState<{ message: string; isDuplicate?: boolean } | null>(null);
   const [submissionResult, setSubmissionResult] = useState<{
     referenceCode: string;
     applicationId: string;
@@ -145,6 +147,9 @@ export const VolunteerForm: React.FC = () => {
 
   const updateField = (field: keyof FormData, value: any) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+    if (submitError) {
+      setSubmitError(null);
+    }
     if (errors[field]) {
       setErrors(prev => {
         const next = { ...prev };
@@ -219,6 +224,7 @@ export const VolunteerForm: React.FC = () => {
   };
 
   const handleNext = () => {
+    setSubmitError(null);
     if (validateStep(step)) {
       setStep(prev => Math.min(prev + 1, 4));
       window.scrollTo({ top: 300, behavior: 'smooth' });
@@ -226,12 +232,14 @@ export const VolunteerForm: React.FC = () => {
   };
 
   const handlePrev = () => {
+    setSubmitError(null);
     setStep(prev => Math.max(prev - 1, 1));
     window.scrollTo({ top: 300, behavior: 'smooth' });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSubmitError(null);
     if (!validateStep(4)) return;
 
     setIsSubmitting(true);
@@ -276,7 +284,13 @@ export const VolunteerForm: React.FC = () => {
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to submit application.');
+        const errMessage = data.error || 'Failed to submit application.';
+        setSubmitError({
+          message: errMessage,
+          isDuplicate: res.status === 409 || Boolean(data.duplicate)
+        });
+        addToast(errMessage, 'error');
+        return;
       }
 
       setSubmissionResult({
@@ -286,7 +300,9 @@ export const VolunteerForm: React.FC = () => {
       addToast('Application submitted successfully!', 'success');
       window.scrollTo({ top: 150, behavior: 'smooth' });
     } catch (err: any) {
-      addToast(err.message || 'Submission error. Please check your network.', 'error');
+      const msg = err.message || 'Submission error. Please check your network.';
+      setSubmitError({ message: msg });
+      addToast(msg, 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -940,6 +956,29 @@ export const VolunteerForm: React.FC = () => {
                 </label>
                 {errors.confirmedAccurate && <p className="text-rose-600 text-xs pl-8">{errors.confirmedAccurate}</p>}
               </div>
+            </div>
+          )}
+
+          {submitError && (
+            <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold text-rose-950">
+                    {submitError.isDuplicate ? 'Duplicate Identification Detected' : 'Unable to Submit Application'}
+                  </p>
+                  <p className="text-xs text-rose-800 mt-0.5 leading-relaxed">{submitError.message}</p>
+                </div>
+              </div>
+              {submitError.isDuplicate && (
+                <button
+                  type="button"
+                  onClick={() => setActivePage('track')}
+                  className="px-4 py-2 rounded-xl bg-rose-900 hover:bg-rose-800 text-white text-xs font-semibold shrink-0 cursor-pointer transition-colors"
+                >
+                  Go to Track Application
+                </button>
+              )}
             </div>
           )}
 

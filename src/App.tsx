@@ -1,4 +1,4 @@
-import React, { useEffect, Suspense, lazy } from 'react';
+import React, { useEffect, useState, Suspense, lazy } from 'react';
 import { AppProvider, useApp, canAccessAdminTab } from './context/AppContext.tsx';
 import { ToastContainer } from './components/ToastContainer.tsx';
 import { ShieldAlert } from 'lucide-react';
@@ -6,6 +6,7 @@ import { Navbar } from './components/Navbar.tsx';
 import { Footer } from './components/Footer.tsx';
 import { HomePage } from './components/public/HomePage.tsx';
 import { SupportWidget } from './components/public/SupportWidget.tsx';
+import { WhatsAppChannelModal } from './components/public/WhatsAppChannelModal.tsx';
 import { initAnalyticsHeartbeat, trackPageView } from './lib/analytics.ts';
 
 // Lazy-loaded Public pages
@@ -42,10 +43,17 @@ const AdminDatabase = lazy(() => import('./components/admin/AdminDatabase.tsx').
 const AdminAnalytics = lazy(() => import('./components/admin/AdminAnalytics.tsx').then(m => ({ default: m.AdminAnalytics })));
 const AdminMeetings = lazy(() => import('./components/admin/AdminMeetings.tsx').then(m => ({ default: m.AdminMeetings })));
 const AdminEmailComposer = lazy(() => import('./components/admin/AdminEmailComposer.tsx').then(m => ({ default: m.AdminEmailComposer })));
+const AdminIdCards = lazy(() => import('./components/admin/AdminIdCards.tsx').then(m => ({ default: m.AdminIdCards })));
 const MeetingRoomWrapper = lazy(() => import('./components/meetings/MeetingRoomWrapper.tsx').then(m => ({ default: m.MeetingRoomWrapper })));
 
 const AppContent: React.FC = () => {
   const { activePage, setActivePage, currentUser, adminTab, setAdminTab } = useApp();
+  const isPrivateRoute =
+    activePage === 'admin' ||
+    activePage === 'admin-login' ||
+    activePage === 'room' ||
+    activePage === 'meetings';
+  const [showWhatsappDialog, setShowWhatsappDialog] = useState<boolean>(() => !isPrivateRoute);
 
   // Initialize analytics heartbeat
   useEffect(() => {
@@ -128,6 +136,7 @@ const AppContent: React.FC = () => {
               {adminTab === 'analytics' && <AdminAnalytics />}
               {adminTab === 'applications' && <AdminApplications />}
               {adminTab === 'volunteers' && <AdminVolunteers />}
+              {adminTab === 'id-cards' && <AdminIdCards />}
               {adminTab === 'programs' && <AdminPrograms />}
               {adminTab === 'events' && <AdminEvents />}
               {adminTab === 'news' && <AdminNews />}
@@ -174,6 +183,12 @@ const AppContent: React.FC = () => {
 
       {/* Floating Customer Support Widget (Bottom Right) */}
       <SupportWidget />
+
+      {/* Startup Official WhatsApp Channel Announcements Dialog */}
+      <WhatsAppChannelModal
+        open={showWhatsappDialog}
+        onClose={() => setShowWhatsappDialog(false)}
+      />
 
       {/* Floating Developer Watermark across public pages (Bottom Left) */}
       <div

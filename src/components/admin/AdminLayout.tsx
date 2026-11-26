@@ -33,7 +33,8 @@ import {
   Eye,
   EyeOff,
   CheckCircle2,
-  HelpCircle
+  HelpCircle,
+  CreditCard
 } from 'lucide-react';
 
 export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -102,6 +103,7 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
     { tab: 'analytics', label: 'Live Analytics', icon: Radio },
     { tab: 'applications', label: 'Applications', icon: FileCheck2, badge: pendingApplicationsCount },
     { tab: 'volunteers', label: 'Volunteers', icon: Users },
+    { tab: 'id-cards', label: 'ID Card Records', icon: CreditCard },
     { tab: 'programs', label: 'Programs', icon: Award },
     { tab: 'events', label: 'Events', icon: Calendar },
     { tab: 'news', label: 'News & CMS', icon: Newspaper }

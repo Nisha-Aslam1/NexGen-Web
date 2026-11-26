@@ -9,9 +9,10 @@ import {
   AlertCircle,
   ArrowRight,
   Award,
-  Sparkles
+  Sparkles,
+  Lock
 } from 'lucide-react';
-import { VolunteerIdCardModal } from '../admin/VolunteerIdCardModal.tsx';
+import { VolunteerIdCardModal, IssueOfficialCardPayload, IssueOfficialCardResult } from '../admin/VolunteerIdCardModal.tsx';
 
 export const TrackApplication: React.FC = () => {
   const { setActivePage } = useApp();
@@ -65,6 +66,115 @@ export const TrackApplication: React.FC = () => {
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     await lookupCode(refCode);
+  };
+
+  const handleUploadSinglePhoto = async (
+    photoDataUrl: string
+  ): Promise<{ ok: boolean; photoUrl?: string; error?: string }> => {
+    if (!applicationData?.referenceCode) {
+      return { ok: false, error: 'Missing application reference code.' };
+    }
+    try {
+      const res = await fetch(
+        `/api/applications/verify/${encodeURIComponent(applicationData.referenceCode)}/upload-photo`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ photoDataUrl })
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 409) {
+          setApplicationData((prev: any) =>
+            prev
+              ? {
+                  ...prev,
+                  idCardPhotoLocked: true,
+                  idCardIssued: Boolean(data.idCardIssued ?? prev.idCardIssued),
+                  idCardPhotoUrl: data.photoUrl || prev.idCardPhotoUrl,
+                  avatar: data.photoUrl || prev.avatar
+                }
+              : prev
+          );
+        }
+        return { ok: false, error: data.error || 'Only one portrait image upload is permitted.' };
+      }
+
+      setApplicationData((prev: any) =>
+        prev
+          ? {
+              ...prev,
+              avatar: data.photoUrl || prev.avatar,
+              idCardPhotoUrl: data.photoUrl || prev.idCardPhotoUrl,
+              idCardPhotoLocked: true
+            }
+          : prev
+      );
+
+      return { ok: true, photoUrl: data.photoUrl };
+    } catch {
+      return { ok: false, error: 'Network error while saving portrait photograph.' };
+    }
+  };
+
+  const handleIssueOfficialCard = async (
+    payload: IssueOfficialCardPayload
+  ): Promise<IssueOfficialCardResult> => {
+    if (!applicationData?.referenceCode) {
+      return { ok: false, error: 'Missing application reference code.' };
+    }
+    try {
+      const res = await fetch(
+        `/api/applications/verify/${encodeURIComponent(applicationData.referenceCode)}/issue-id-card`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 409) {
+          setApplicationData((prev: any) =>
+            prev
+              ? {
+                  ...prev,
+                  idCardIssued: true,
+                  idCardPhotoLocked: true,
+                  idCardIssuedAt: data.issuedAt || prev.idCardIssuedAt,
+                  idCardPhotoUrl: data.photoUrl || prev.idCardPhotoUrl,
+                  avatar: data.photoUrl || prev.avatar
+                }
+              : prev
+          );
+        }
+        return { ok: false, error: data.error || 'Unable to issue Official ID Card.' };
+      }
+
+      setApplicationData((prev: any) =>
+        prev
+          ? {
+              ...prev,
+              city: payload.city || prev.city,
+              phone: payload.phone || prev.phone,
+              avatar: data.photoUrl || prev.avatar,
+              idCardPhotoUrl: data.photoUrl || prev.idCardPhotoUrl,
+              idCardPhotoLocked: true,
+              idCardIssued: true,
+              idCardIssuedAt: data.issuedAt
+            }
+          : prev
+      );
+
+      return {
+        ok: true,
+        photoUrl: data.photoUrl,
+        issuedAt: data.issuedAt
+      };
+    } catch {
+      return { ok: false, error: 'Network error while saving your Official ID Card record.' };
+    }
   };
 
   const getStatusBadge = (status: string) => {
@@ -209,25 +319,86 @@ export const TrackApplication: React.FC = () => {
                   <p className="text-emerald-800 font-medium">
                     Congratulations! Your volunteer enrollment has been officially approved and endorsed by the Council Secretariat.
                   </p>
-                  <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-yellow-400/10 to-amber-500/15 border border-amber-300 flex flex-col sm:flex-row items-center justify-between gap-3">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-10 h-10 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center shrink-0 shadow-sm">
-                        <Award className="w-5 h-5" />
+                  {applicationData.idCardIssued ? (
+                    <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-full bg-white border-2 border-emerald-500 overflow-hidden flex items-center justify-center shrink-0 shadow-xs">
+                          {(applicationData.idCardPhotoUrl || applicationData.avatar) ? (
+                            <img
+                              src={applicationData.idCardPhotoUrl || applicationData.avatar}
+                              alt={applicationData.fullName}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                          )}
+                        </div>
+                        <div>
+                          <h4 className="font-serif font-bold text-sm text-slate-900 flex items-center gap-1.5">
+                            <span>Official Digital Member ID Card Issued</span>
+                            <Lock className="w-3.5 h-3.5 text-emerald-700" />
+                          </h4>
+                          <p className="text-[11px] text-slate-600">
+                            Recorded on{' '}
+                            {applicationData.idCardIssuedAt
+                              ? new Date(applicationData.idCardIssuedAt).toLocaleDateString(undefined, {
+                                  year: 'numeric',
+                                  month: 'short',
+                                  day: 'numeric'
+                                })
+                              : 'file'}{' '}
+                            · One-time public issuance already completed
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <h4 className="font-serif font-bold text-sm text-slate-900">Official Digital Member ID Card</h4>
-                        <p className="text-[11px] text-slate-600">Issued with verified credentials, hologram seal &amp; QR verification</p>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowIdCard(true)}
+                        className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-white hover:bg-slate-100 text-slate-900 border border-emerald-300 font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all shrink-0"
+                      >
+                        <Award className="w-3.5 h-3.5 text-emerald-700" />
+                        <span>View Issued Record</span>
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowIdCard(true)}
-                      className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-indigo-950 hover:bg-indigo-900 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md cursor-pointer transition-all shrink-0"
-                    >
-                      <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                      <span>View &amp; Download ID Card</span>
-                    </button>
-                  </div>
+                  ) : (
+                    <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-yellow-400/10 to-amber-500/15 border border-amber-300 flex flex-col sm:flex-row items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5">
+                        {applicationData.idCardPhotoLocked && (applicationData.idCardPhotoUrl || applicationData.avatar) ? (
+                          <div className="w-11 h-11 rounded-full bg-white border-2 border-amber-500 overflow-hidden shrink-0 shadow-sm">
+                            <img
+                              src={applicationData.idCardPhotoUrl || applicationData.avatar}
+                              alt={applicationData.fullName}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                        ) : (
+                          <div className="w-10 h-10 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center shrink-0 shadow-sm">
+                            <Award className="w-5 h-5" />
+                          </div>
+                        )}
+                        <div>
+                          <h4 className="font-serif font-bold text-sm text-slate-900">Official Digital Member ID Card</h4>
+                          <p className="text-[11px] text-slate-600">
+                            {applicationData.idCardPhotoLocked
+                              ? 'Single portrait photo uploaded & locked — ready to download Official ID Card once'
+                              : 'Upload your single portrait photo once to issue and save your verified ID card (one-time download)'}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowIdCard(true)}
+                        className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-indigo-950 hover:bg-indigo-900 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md cursor-pointer transition-all shrink-0"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                        <span>
+                          {applicationData.idCardPhotoLocked
+                            ? 'Continue & Claim ID Card'
+                            : 'Upload Photo & Claim ID Card'}
+                        </span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
               {applicationData.status === 'Under Review' && (
@@ -258,9 +429,15 @@ export const TrackApplication: React.FC = () => {
             joinedDate: applicationData.submittedAt || new Date().toISOString(),
             status: applicationData.volunteerStatus || 'Active',
             membershipTier: applicationData.membershipTier || 'Active Volunteer Scholar',
-            avatar: applicationData.avatar,
+            avatar: applicationData.idCardPhotoUrl || applicationData.avatar,
             hoursContributed: applicationData.hoursContributed || 0
           }}
+          oneTimeIssuance={true}
+          isAlreadyIssued={Boolean(applicationData.idCardIssued)}
+          isPhotoLocked={Boolean(applicationData.idCardPhotoLocked)}
+          issuedAt={applicationData.idCardIssuedAt}
+          onUploadSinglePhoto={handleUploadSinglePhoto}
+          onIssueOfficialCard={handleIssueOfficialCard}
           onClose={() => setShowIdCard(false)}
         />
       )}

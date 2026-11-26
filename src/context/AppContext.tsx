@@ -42,6 +42,7 @@ export type AdminTab =
   | 'analytics'
   | 'applications'
   | 'volunteers'
+  | 'id-cards'
   | 'programs'
   | 'events'
   | 'news'
@@ -89,7 +90,7 @@ export function canAccessAdminTab(tab: AdminTab, role?: string): boolean {
     return tab !== 'users' && tab !== 'database';
   }
   if (norm === 'VOLUNTEER_MANAGER') {
-    return ['dashboard', 'meetings', 'analytics', 'applications', 'volunteers', 'contacts', 'email', 'activity'].includes(tab);
+    return ['dashboard', 'meetings', 'analytics', 'applications', 'volunteers', 'id-cards', 'contacts', 'email', 'activity'].includes(tab);
   }
   if (norm === 'CONTENT_MANAGER') {
     return ['dashboard', 'meetings', 'analytics', 'programs', 'events', 'news', 'team', 'gallery', 'faqs', 'contacts', 'email', 'settings', 'activity'].includes(tab);
@@ -104,7 +105,7 @@ export function canAccessAdminTab(tab: AdminTab, role?: string): boolean {
     return ['dashboard', 'meetings', 'analytics', 'activity'].includes(tab);
   }
   if (norm === 'VIEWER') {
-    return ['dashboard', 'analytics', 'activity'].includes(tab);
+    return ['dashboard', 'analytics', 'id-cards', 'activity'].includes(tab);
   }
   return false;
 }
@@ -152,6 +153,7 @@ export function parsePathname(pathname: string, hash?: string): {
   if (clean === '/faq' || clean === '/faqs' || clean === '/help') return { page: 'faq' };
   if (clean === '/admin-login' || clean === '/login') return { page: 'admin-login' };
   if (clean === '/admin/meetings') return { page: 'admin', adminTab: 'meetings' };
+  if (clean === '/admin/id-cards') return { page: 'admin', adminTab: 'id-cards' };
   if (clean === '/admin' || clean.startsWith('/admin/')) return { page: 'admin' };
   if (clean === '/meetings' || clean === '/meeting' || clean === '/meet') return { page: 'meetings' };
   if (clean.startsWith('/meeting/')) {

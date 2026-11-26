@@ -54,6 +54,10 @@ export interface VolunteerApplication {
   emergencyContactPhone?: string;
   additionalMessage?: string;
   avatar?: string;
+  idCardIssued?: boolean;
+  idCardIssuedAt?: string;
+  idCardPhotoUrl?: string;
+  idCardPhotoLocked?: boolean;
   agreedToTerms: boolean;
   confirmedAccurate: boolean;
   
@@ -83,7 +87,34 @@ export interface Volunteer {
   status: 'Active' | 'On Leave' | 'Alumni';
   emergencyContact?: string;
   avatar?: string;
+  idCardIssued?: boolean;
+  idCardIssuedAt?: string;
+  idCardPhotoUrl?: string;
+  idCardPhotoLocked?: boolean;
   membershipTier?: 'Executive Member' | 'Distinguished Fellow' | 'Active Volunteer Scholar' | 'Senior Coordinator';
+}
+
+export interface IdCardRecord {
+  id: string;
+  referenceCode: string;
+  applicationId?: string;
+  volunteerId?: string;
+  fullName: string;
+  email?: string;
+  phone: string;
+  city: string;
+  assignedRole: string;
+  assignedProgram?: string;
+  membershipTier?: string;
+  photoUrl: string;
+  photoLocked?: boolean;
+  issuedAt: string;
+  issuedFormat?: 'pdf' | 'dual' | 'front' | 'print';
+  downloadCount: number;
+  locked: boolean;
+  resetByAdminAt?: string;
+  resetByAdminName?: string;
+  updatedAt?: string;
 }
 
 export interface Program {
