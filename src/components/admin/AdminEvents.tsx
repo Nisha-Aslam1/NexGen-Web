@@ -15,6 +15,7 @@ import {
 import { EventItem } from '../../types.ts';
 import { ImageUploader } from '../common/ImageUploader.tsx';
 import { buildAutoImageAlt } from '../../lib/imageSeo.ts';
+import { MasonryGrid } from '../common/MasonryGrid.tsx';
 
 export const AdminEvents: React.FC = () => {
   const { events, refreshData, addToast } = useApp();
@@ -154,8 +155,12 @@ export const AdminEvents: React.FC = () => {
         </button>
       </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-start">
-          {events.map(evt => {
+        <MasonryGrid
+          items={events}
+          getKey={evt => evt.id}
+          gapClass="gap-6"
+          estimateWeight={evt => ((evt.coverImage || evt.image || '').trim() ? 2.1 : 1)}
+          renderItem={evt => {
             const cap = Number(evt.capacity || 0);
             const reg = Number(evt.registeredCount || 0);
             const isFull = cap > 0 && reg >= cap;
@@ -163,10 +168,7 @@ export const AdminEvents: React.FC = () => {
             const evtImgSrc = rawImg ? (rawImg.startsWith('uploads/') ? `/${rawImg}` : rawImg) : null;
 
             return (
-              <div
-                key={evt.id}
-                className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col"
-              >
+              <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col">
                 {evtImgSrc && (
                   <div className="w-full bg-slate-100 relative overflow-hidden flex items-center justify-center">
                     <img
@@ -304,8 +306,8 @@ export const AdminEvents: React.FC = () => {
                 </div>
               </div>
             );
-          })}
-        </div>
+          }}
+        />
 
       {/* Modal */}
       {isModalOpen && editingEvent && (

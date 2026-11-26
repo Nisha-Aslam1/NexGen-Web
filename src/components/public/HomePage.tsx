@@ -29,6 +29,7 @@ import {
   resolvePublicImageUrl
 } from '../../lib/imageSeo.ts';
 import { LeaderProfileModal } from './LeaderProfileModal.tsx';
+import { MasonryGrid } from '../common/MasonryGrid.tsx';
 
 export const HomePage: React.FC = () => {
   const { setActivePage, settings, programs, events, news, team } = useApp();
@@ -500,12 +501,12 @@ export const HomePage: React.FC = () => {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
-            {featuredPrograms.map(prg => (
-              <div
-                key={prg.id}
-                className="bg-white rounded-3xl overflow-hidden border border-slate-200 shadow-sm hover:shadow-xl transition-all duration-300 flex flex-col group"
-              >
+          <MasonryGrid
+            items={featuredPrograms}
+            getKey={prg => prg.id}
+            gapClass="gap-8"
+            renderItem={prg => (
+              <div className="bg-white rounded-3xl overflow-hidden border border-slate-200 shadow-sm hover:shadow-xl transition-all duration-300 flex flex-col group">
                 <div className="relative w-full overflow-hidden bg-slate-100 flex items-center justify-center">
                   <img
                     src={prg.coverImage || '/banner.png'}
@@ -562,8 +563,8 @@ export const HomePage: React.FC = () => {
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
+            )}
+          />
         </div>
       </section>
 
@@ -591,15 +592,15 @@ export const HomePage: React.FC = () => {
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
-          {upcomingEvents.map(evt => {
+        <MasonryGrid
+          items={upcomingEvents}
+          getKey={evt => evt.id}
+          gapClass="gap-6"
+          renderItem={evt => {
             const rawEvtImg = (evt.coverImage || evt.image || '').trim();
             const evtCover = rawEvtImg ? (rawEvtImg.startsWith('uploads/') ? `/${rawEvtImg}` : rawEvtImg) : null;
             return (
-              <div
-                key={evt.id}
-                className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-all flex flex-col"
-              >
+              <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-all flex flex-col">
                 {evtCover && (
                   <div
                     onClick={() => setSelectedEvent(evt)}
@@ -678,8 +679,8 @@ export const HomePage: React.FC = () => {
                 </div>
               </div>
             );
-          })}
-        </div>
+          }}
+        />
       </section>
 
       {/* 7. ORGANIZATION IMPACT / STATISTICS */}
@@ -826,15 +827,15 @@ export const HomePage: React.FC = () => {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
-            {latestNews.map(item => {
+          <MasonryGrid
+            items={latestNews}
+            getKey={item => item.id}
+            gapClass="gap-8"
+            renderItem={item => {
               const rawCover = (item.coverImage || '').trim();
               const coverSrc = rawCover ? (rawCover.startsWith('uploads/') ? `/${rawCover}` : rawCover) : null;
               return (
-              <div
-                key={item.id}
-                className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-lg transition-all flex flex-col"
-              >
+              <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-lg transition-all flex flex-col">
                 <div>
                   {coverSrc && (
                     <div className="w-full overflow-hidden bg-slate-100 relative flex items-center justify-center">
@@ -891,8 +892,8 @@ export const HomePage: React.FC = () => {
                 </div>
               </div>
               );
-            })}
-          </div>
+            }}
+          />
         </div>
       </section>
 

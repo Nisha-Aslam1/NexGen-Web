@@ -18,6 +18,7 @@ import {
 import { NewsItem } from '../../types.ts';
 import { ImageUploader } from '../common/ImageUploader.tsx';
 import { buildAutoImageAlt } from '../../lib/imageSeo.ts';
+import { MasonryGrid } from '../common/MasonryGrid.tsx';
 
 const SUGGESTED_SEO_KEYWORDS = [
   'NexGen Council',
@@ -443,20 +444,21 @@ export const AdminNews: React.FC = () => {
       </div>
 
       {/* Stories Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {filteredNews.map(item => {
+      <MasonryGrid
+        items={filteredNews}
+        getKey={item => item.id}
+        gapClass="gap-6"
+        estimateWeight={item => (item.coverImage?.trim() ? 2.1 : 1)}
+        renderItem={item => {
           const kwCount = (item.seoKeywords?.length || 0) + (item.tags?.length || 0);
           const hasCustomSeo = Boolean(item.seoTitle || item.seoDescription || kwCount > 0);
           const readMins = computeReadTime(item.content, item.readTimeMinutes);
 
           return (
-            <div
-              key={item.id}
-              className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col justify-between"
-            >
+            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col">
               <div>
                 {item.coverImage?.trim() && (
-                  <div className="w-full bg-slate-950 relative overflow-hidden flex items-center justify-center">
+                  <div className="w-full bg-slate-100 relative overflow-hidden flex items-center justify-center">
                     <img
                       src={item.coverImage.trim().startsWith('uploads/') ? `/${item.coverImage.trim()}` : item.coverImage.trim()}
                       alt={buildAutoImageAlt({
@@ -533,8 +535,8 @@ export const AdminNews: React.FC = () => {
               </div>
             </div>
           );
-        })}
-      </div>
+        }}
+      />
 
       {/* Article & SEO Modal */}
       {isModalOpen && editingNews && (

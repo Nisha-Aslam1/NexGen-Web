@@ -19,6 +19,7 @@ import {
   buildImageObjectSchema,
   resolvePublicImageUrl
 } from '../../lib/imageSeo.ts';
+import { MasonryGrid } from '../common/MasonryGrid.tsx';
 
 function getReadMinutes(item: NewsItem): number {
   if (item.readTimeMinutes && item.readTimeMinutes > 0) return item.readTimeMinutes;
@@ -489,15 +490,18 @@ export const NewsPage: React.FC = () => {
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-7 items-start">
-            {filteredNews.map(item => {
+          <MasonryGrid
+            items={filteredNews}
+            getKey={item => item.id}
+            gapClass="gap-7"
+            estimateWeight={item => (resolveNewsCoverImage(item.coverImage) ? 2.1 : 1)}
+            renderItem={item => {
               const readMins = getReadMinutes(item);
               const topicList = (item.tags && item.tags.length > 0 ? item.tags : item.seoKeywords || []).slice(0, 3);
               const itemCover = resolveNewsCoverImage(item.coverImage);
 
               return (
                 <article
-                  key={item.id}
                   onClick={() => openArticle(item)}
                   className="group bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-lg transition-all flex flex-col cursor-pointer"
                 >
@@ -565,8 +569,8 @@ export const NewsPage: React.FC = () => {
                   </div>
                 </article>
               );
-            })}
-          </div>
+            }}
+          />
         )}
       </section>
 

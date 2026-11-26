@@ -14,6 +14,7 @@ import {
 import { Program } from '../../types.ts';
 import { ImageUploader } from '../common/ImageUploader.tsx';
 import { buildAutoImageAlt } from '../../lib/imageSeo.ts';
+import { MasonryGrid } from '../common/MasonryGrid.tsx';
 
 export const AdminPrograms: React.FC = () => {
   const { programs, refreshData, addToast } = useApp();
@@ -113,12 +114,13 @@ export const AdminPrograms: React.FC = () => {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-start">
-        {programs.map(prg => (
-          <div
-            key={prg.id}
-            className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col"
-          >
+      <MasonryGrid
+        items={programs}
+        getKey={prg => prg.id}
+        gapClass="gap-6"
+        estimateWeight={prg => (prg.coverImage ? 2.1 : 1)}
+        renderItem={prg => (
+          <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col">
             <div>
               <div className="w-full bg-slate-100 relative overflow-hidden flex items-center justify-center">
                 <img
@@ -185,8 +187,8 @@ export const AdminPrograms: React.FC = () => {
               </div>
             </div>
           </div>
-        ))}
-      </div>
+        )}
+      />
 
       {/* Program Create/Edit Modal */}
       {isModalOpen && editingProgram && (

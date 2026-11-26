@@ -18,6 +18,7 @@ import {
   buildImageObjectSchema,
   resolvePublicImageUrl
 } from '../../lib/imageSeo.ts';
+import { MasonryGrid } from '../common/MasonryGrid.tsx';
 
 export const EventsPage: React.FC = () => {
   const { events, setActivePage, addToast, selectedEventSlug, isLoadingPublicData, refreshData } = useApp();
@@ -290,8 +291,12 @@ export const EventsPage: React.FC = () => {
             <p className="text-xs text-slate-500 mt-1">Check back soon for new announcements.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-start">
-            {filteredEvents.map(evt => {
+          <MasonryGrid
+            items={filteredEvents}
+            getKey={evt => evt.id}
+            gapClass="gap-6"
+            estimateWeight={evt => ((evt.coverImage || evt.image || '').trim() ? 2.1 : 1)}
+            renderItem={evt => {
               const cap = Number(evt.capacity || 0);
               const reg = Number(evt.registeredCount || 0);
               const isFull = cap > 0 && reg >= cap;
@@ -299,10 +304,7 @@ export const EventsPage: React.FC = () => {
               const evtCover = rawImg ? (rawImg.startsWith('uploads/') ? `/${rawImg}` : rawImg) : null;
 
               return (
-                <div
-                  key={evt.id}
-                  className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-lg transition-all flex flex-col"
-                >
+                <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-lg transition-all flex flex-col">
                   {evtCover && (
                     <div
                       onClick={() => openEventModal(evt)}
@@ -342,51 +344,51 @@ export const EventsPage: React.FC = () => {
                         </span>
                       </div>
 
-                    <h3 className="font-serif font-bold text-lg text-slate-900 leading-snug">
-                      {evt.title}
-                    </h3>
+                      <h3 className="font-serif font-bold text-lg text-slate-900 leading-snug">
+                        {evt.title}
+                      </h3>
 
-                    <p className="text-xs text-slate-600 line-clamp-3 leading-relaxed whitespace-pre-line">
-                      {evt.description}
-                    </p>
+                      <p className="text-xs text-slate-600 line-clamp-3 leading-relaxed whitespace-pre-line">
+                        {evt.description}
+                      </p>
 
-                    <div className="space-y-2 text-xs text-slate-500 pt-3 border-t border-slate-100">
-                      <div className="flex items-center gap-2">
-                        <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        <span>{evt.time}</span>
+                      <div className="space-y-2 text-xs text-slate-500 pt-3 border-t border-slate-100">
+                        <div className="flex items-center gap-2">
+                          <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span>{evt.time}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span className="truncate">{evt.location}</span>
+                        </div>
+                        {renderCapacityBlock(evt)}
                       </div>
-                      <div className="flex items-center gap-2">
-                        <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        <span className="truncate">{evt.location}</span>
-                      </div>
-                      {renderCapacityBlock(evt)}
                     </div>
-                  </div>
 
-                  <div className="pt-2 flex items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={() => openEventModal(evt)}
-                      className="text-xs font-semibold text-indigo-950 hover:underline cursor-pointer"
-                    >
-                      Details &amp; Agenda →
-                    </button>
-
-                    {tab === 'Upcoming' && (
+                    <div className="pt-2 flex items-center justify-between">
                       <button
                         type="button"
                         onClick={() => openEventModal(evt)}
-                        className="px-3.5 py-2 bg-indigo-950 text-white rounded-xl text-xs font-semibold hover:bg-indigo-900 transition-colors cursor-pointer shadow-xs"
+                        className="text-xs font-semibold text-indigo-950 hover:underline cursor-pointer"
                       >
-                        {isFull ? (evt.waitlistEnabled ? 'Join Waitlist' : 'View Status') : 'RSVP / Register'}
+                        Details &amp; Agenda →
                       </button>
-                    )}
+
+                      {tab === 'Upcoming' && (
+                        <button
+                          type="button"
+                          onClick={() => openEventModal(evt)}
+                          className="px-3.5 py-2 bg-indigo-950 text-white rounded-xl text-xs font-semibold hover:bg-indigo-900 transition-colors cursor-pointer shadow-xs"
+                        >
+                          {isFull ? (evt.waitlistEnabled ? 'Join Waitlist' : 'View Status') : 'RSVP / Register'}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
               );
-            })}
-          </div>
+            }}
+          />
         )}
       </section>
 

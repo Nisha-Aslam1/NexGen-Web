@@ -20,6 +20,7 @@ import {
   buildImageObjectSchema,
   resolvePublicImageUrl
 } from '../../lib/imageSeo.ts';
+import { MasonryGrid } from '../common/MasonryGrid.tsx';
 
 export const ProgramsPage: React.FC = () => {
   const { programs, setActivePage, selectedProgramSlug, isLoadingPublicData } = useApp();
@@ -193,12 +194,13 @@ export const ProgramsPage: React.FC = () => {
             <p className="text-xs text-slate-500 mt-1">Try selecting a different category or adjusting search keywords.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 items-start">
-            {filteredPrograms.map(prg => (
-              <div
-                key={prg.id}
-                className="bg-white rounded-3xl overflow-hidden border border-slate-200 shadow-xs hover:shadow-xl transition-all duration-300 flex flex-col group"
-              >
+          <MasonryGrid
+            items={filteredPrograms}
+            getKey={prg => prg.id}
+            gapClass="gap-8"
+            estimateWeight={prg => (prg.coverImage ? 2.1 : 1)}
+            renderItem={prg => (
+              <div className="bg-white rounded-3xl overflow-hidden border border-slate-200 shadow-xs hover:shadow-xl transition-all duration-300 flex flex-col group">
                 <div className="relative w-full overflow-hidden bg-slate-100 flex items-center justify-center">
                   <img
                     src={prg.coverImage || '/banner.png'}
@@ -270,8 +272,8 @@ export const ProgramsPage: React.FC = () => {
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
+            )}
+          />
         )}
       </section>
 
