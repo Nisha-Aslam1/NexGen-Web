@@ -24,6 +24,7 @@
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.3",
     "jspdf": "^4.2.1",
+    "jsqr": "^1.4.0",
     "konva": "^10.10.0",
     "lucide-react": "^0.546.0",
     "mongodb": "^7.6.0",

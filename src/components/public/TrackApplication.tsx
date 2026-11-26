@@ -10,9 +10,12 @@ import {
   ArrowRight,
   Award,
   Sparkles,
-  Lock
+  Lock,
+  QrCode,
+  Camera
 } from 'lucide-react';
 import { VolunteerIdCardModal, IssueOfficialCardPayload, IssueOfficialCardResult } from '../admin/VolunteerIdCardModal.tsx';
+import { CardScannerModal } from './CardScannerModal.tsx';
 
 export const TrackApplication: React.FC = () => {
   const { setActivePage } = useApp();
@@ -21,6 +24,7 @@ export const TrackApplication: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [applicationData, setApplicationData] = useState<any | null>(null);
   const [showIdCard, setShowIdCard] = useState<boolean>(false);
+  const [showScanner, setShowScanner] = useState<boolean>(false);
 
   useDocumentSEO({
     title: 'Track Application Status | NexGen Council',
@@ -218,6 +222,29 @@ export const TrackApplication: React.FC = () => {
         <p className="text-slate-600 max-w-lg mx-auto text-sm sm:text-base">
           Enter the unique reference code provided during your submission (e.g., <code className="bg-slate-100 px-2 py-0.5 rounded text-indigo-900 font-mono text-xs">NXG-2026-8812</code>).
         </p>
+      </div>
+
+      {/* QR Code Scanner & Verification Banner */}
+      <div className="bg-gradient-to-r from-indigo-950 via-slate-900 to-indigo-900 text-white rounded-3xl p-6 sm:p-7 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4 mb-8">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center shrink-0 shadow-md">
+            <QrCode className="w-6 h-6" />
+          </div>
+          <div>
+            <h3 className="font-serif font-bold text-base text-white">Scan ID Card QR Code or Verify PDF</h3>
+            <p className="text-xs text-slate-300 mt-0.5">
+              Use live camera scanner or upload card image / PDF for instant official council verification
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowScanner(true)}
+          className="w-full sm:w-auto px-5 py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-lg transition-all shrink-0 whitespace-nowrap"
+        >
+          <Camera className="w-4 h-4" />
+          <span>Open QR Scanner / Verifier</span>
+        </button>
       </div>
 
       {/* Lookup Form */}
@@ -439,6 +466,12 @@ export const TrackApplication: React.FC = () => {
           onUploadSinglePhoto={handleUploadSinglePhoto}
           onIssueOfficialCard={handleIssueOfficialCard}
           onClose={() => setShowIdCard(false)}
+        />
+      )}
+
+      {showScanner && (
+        <CardScannerModal
+          onClose={() => setShowScanner(false)}
         />
       )}
 

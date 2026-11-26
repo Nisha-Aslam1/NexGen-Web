@@ -4092,6 +4092,15 @@ async function startServer() {
     }
   });
 
+  httpServer.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.warn(`[Server] Port ${PORT} is already in use. Existing process will handle requests.`);
+      process.exit(0);
+    } else {
+      console.error('[Server] Uncaught error event:', err);
+    }
+  });
+
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`NexGen Council Server + WebSocket Support running on http://0.0.0.0:${PORT}`);
   });
