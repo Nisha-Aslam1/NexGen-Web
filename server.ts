@@ -2005,6 +2005,42 @@ app.get(
   }
 );
 
+app.delete(
+  '/api/admin/signatories/:id/asset/:kind',
+  requireAuth(['ADMIN']),
+  (req, res) => {
+    const user = (req as any).user as AuthSession;
+    const { id, kind } = req.params;
+    if (!['signature', 'stamp'].includes(kind)) {
+      return res.status(400).json({ error: 'Invalid asset type.' });
+    }
+    const sig = db.getSignatoryById(id);
+    if (!sig) {
+      return res.status(404).json({ error: 'Signatory not found.' });
+    }
+
+    const filename = kind === 'signature' ? sig.signatureAssetFilename : sig.stampAssetFilename;
+    if (filename) {
+      const protectedPath = path.join(process.cwd(), 'data', 'protected_assets', path.basename(filename));
+      try {
+        if (fs.existsSync(protectedPath)) fs.unlinkSync(protectedPath);
+      } catch {}
+    }
+
+    const patch: any = {};
+    if (kind === 'signature') {
+      patch.signatureAssetFilename = undefined;
+      patch.hasSignatureImage = false;
+    } else {
+      patch.stampAssetFilename = undefined;
+      patch.hasStampImage = false;
+    }
+
+    const updated = db.updateSignatory(id, patch, user.name);
+    res.json({ ok: true, signatory: updated });
+  }
+);
+
 app.get(
   '/api/admin/appointment-letters/eligible',
   requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'VIEWER']),

@@ -416,6 +416,30 @@ export const AdminAppointmentLetters: React.FC = () => {
     }
   };
 
+  const handleDeleteSignatoryAsset = async (kind: 'signature' | 'stamp') => {
+    if (!editingSignatory) {
+      setSigForm(prev => (kind === 'signature' ? { ...prev, signatureAssetFilename: '' } : { ...prev, stampAssetFilename: '' }));
+      addToast(`Cleared ${kind} asset.`, 'info');
+      return;
+    }
+    try {
+      const res = await authFetch(`/api/admin/signatories/${encodeURIComponent(editingSignatory.id)}/asset/${kind}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to remove asset');
+      setSigForm(prev => (kind === 'signature' ? { ...prev, signatureAssetFilename: '' } : { ...prev, stampAssetFilename: '' }));
+      if (data.signatory) {
+        setSignatories(prev => prev.map(s => (s.id === data.signatory.id ? data.signatory : s)));
+        setEditingSignatory(data.signatory);
+      }
+      addToast(`Removed ${kind} asset successfully.`, 'success');
+      loadAllData();
+    } catch (err: any) {
+      addToast(err.message || `Could not remove ${kind}`, 'error');
+    }
+  };
+
   const handleSaveSignatory = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!sigForm.name.trim() || !sigForm.title.trim()) {
@@ -1196,9 +1220,18 @@ export const AdminAppointmentLetters: React.FC = () => {
                     />
                   </label>
                   {sigForm.signatureAssetFilename && (
-                    <span className="text-[10px] text-emerald-700 font-semibold block truncate">
-                      ✓ {sigForm.signatureAssetFilename}
-                    </span>
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-[10px] text-emerald-700 font-semibold truncate">
+                        ✓ {sigForm.signatureAssetFilename}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSignatoryAsset('signature')}
+                        className="text-[10px] text-rose-600 hover:text-rose-800 font-bold underline cursor-pointer shrink-0"
+                      >
+                        Delete Signature
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -1219,9 +1252,18 @@ export const AdminAppointmentLetters: React.FC = () => {
                     />
                   </label>
                   {sigForm.stampAssetFilename && (
-                    <span className="text-[10px] text-emerald-700 font-semibold block truncate">
-                      ✓ {sigForm.stampAssetFilename}
-                    </span>
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-[10px] text-emerald-700 font-semibold truncate">
+                        ✓ {sigForm.stampAssetFilename}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSignatoryAsset('stamp')}
+                        className="text-[10px] text-rose-600 hover:text-rose-800 font-bold underline cursor-pointer shrink-0"
+                      >
+                        Delete Stamp
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
