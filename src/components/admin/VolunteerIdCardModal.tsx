@@ -193,6 +193,66 @@ function drawContainImage(
   ctx.drawImage(img, dx, dy, dw, dh);
 }
 
+/**
+ * Generates a high-contrast NexGen-branded QR code with Level-H (30%) error correction
+ * and the official circular NexGen emblem cleanly framed in the center.
+ */
+async function generateBrandedQrDataUrl(data: string, size = 560): Promise<string> {
+  const qrCanvas = document.createElement('canvas');
+  qrCanvas.width = size;
+  qrCanvas.height = size;
+
+  await QRCode.toCanvas(qrCanvas, data, {
+    width: size,
+    margin: 2,
+    errorCorrectionLevel: 'H',
+    color: {
+      dark: NAVY,
+      light: '#FFFFFF'
+    }
+  });
+
+  const ctx = qrCanvas.getContext('2d');
+  const logoImg = await loadImage('/logo.png');
+
+  if (ctx && logoImg) {
+    const cx = size / 2;
+    const cy = size / 2;
+    // ~23% diameter stays safely inside Level-H 30% recovery budget without touching finder patterns
+    const badgeRadius = size * 0.115;
+
+    ctx.save();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(cx, cy, badgeRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Subtle crisp outer navy ring around white center shield
+    ctx.strokeStyle = NAVY;
+    ctx.lineWidth = Math.max(2, size * 0.0075);
+    ctx.beginPath();
+    ctx.arc(cx, cy, badgeRadius - ctx.lineWidth * 0.5, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Inner logo fit cleanly inside circular shield
+    const innerRadius = badgeRadius * 0.84;
+    ctx.beginPath();
+    ctx.arc(cx, cy, innerRadius, 0, Math.PI * 2);
+    ctx.clip();
+    drawContainImage(
+      ctx,
+      logoImg,
+      cx - innerRadius,
+      cy - innerRadius,
+      innerRadius * 2,
+      innerRadius * 2
+    );
+    ctx.restore();
+  }
+
+  return qrCanvas.toDataURL('image/png', 1.0);
+}
+
 function drawDirectorSignature(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -543,7 +603,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
   const idCode =
     ('referenceCode' in volunteer && volunteer.referenceCode) ||
     (volunteer.id?.startsWith('vol_')
-      ? `NXG-${new Date().getFullYear()}-${volunteer.id.slice(-4).toUpperCase()}`
+      ? `NG-VOL-${volunteer.id.slice(-6).toUpperCase()}`
       : `NXG-${new Date().getFullYear()}-${(volunteer.id || '3104').slice(-4).toUpperCase()}`);
 
   const formattedName = toTitleCaseName(volunteer.fullName);
@@ -560,19 +620,22 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
 
   useEffect(() => {
     let active = true;
-    QRCode.toDataURL(verificationUrl, {
-      width: 280,
-      margin: 1,
-      errorCorrectionLevel: 'M',
-      color: {
-        dark: NAVY,
-        light: '#FFFFFF'
-      }
-    })
+    generateBrandedQrDataUrl(verificationUrl, 560)
       .then(url => {
         if (active) setQrDataUrl(url);
       })
-      .catch(() => {});
+      .catch(() => {
+        QRCode.toDataURL(verificationUrl, {
+          width: 560,
+          margin: 2,
+          errorCorrectionLevel: 'H',
+          color: { dark: NAVY, light: '#FFFFFF' }
+        })
+          .then(fallbackUrl => {
+            if (active) setQrDataUrl(fallbackUrl);
+          })
+          .catch(() => {});
+      });
     return () => {
       active = false;
     };
@@ -846,19 +909,19 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
 
     // Centered FULL Uncropped Logo at Top
     if (logoImg) {
-      drawContainImage(ctx, logoImg, cw / 2 - 195 * s, 52 * s, 390 * s, 360 * s);
+      drawContainImage(ctx, logoImg, cw / 2 - 178 * s, 40 * s, 356 * s, 330 * s);
     }
 
     // Organization Full Name Centered Under Logo
     ctx.textAlign = 'center';
     ctx.fillStyle = NAVY;
     ctx.font = `700 ${31 * s}px "Plus Jakarta Sans", sans-serif`;
-    ctx.fillText('NexGen Women Empowerment', cw / 2, 444 * s);
-    ctx.fillText('And Youth Leadership Council', cw / 2, 482 * s);
+    ctx.fillText('NexGen Women Empowerment', cw / 2, 400 * s);
+    ctx.fillText('And Youth Leadership Council', cw / 2, 438 * s);
 
     // Short Centered Navy Divider Bar
     ctx.fillStyle = NAVY;
-    ctx.fillRect(cw / 2 - 64 * s, 608 * s, 128 * s, 10 * s);
+    ctx.fillRect(cw / 2 - 64 * s, 480 * s, 128 * s, 10 * s);
 
     // Social Media Channels List
     const socialItems: Array<{ type: 'tiktok' | 'facebook' | 'instagram' | 'email'; text: string[] }> = [
@@ -868,27 +931,27 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       { type: 'email', text: ['nexgenwomenempowermentand', 'youth@gmail.com'] }
     ];
 
-    const socialIconX = 204 * s;
-    const socialTextX = 264 * s;
+    const socialIconX = 198 * s;
+    const socialTextX = 258 * s;
     socialItems.forEach((item, idx) => {
-      const y = 682 * s + idx * 70 * s;
-      drawSocialIconOnCanvas(ctx, item.type, socialIconX, y, 42 * s);
+      const y = 546 * s + idx * 66 * s;
+      drawSocialIconOnCanvas(ctx, item.type, socialIconX, y, 40 * s);
       ctx.textAlign = 'left';
       ctx.fillStyle = '#1E293B';
-      ctx.font = `400 ${26 * s}px "Plus Jakarta Sans", sans-serif`;
+      ctx.font = `400 ${25 * s}px "Plus Jakarta Sans", sans-serif`;
       if (item.text.length === 1) {
         ctx.fillText(item.text[0], socialTextX, y + 8 * s);
       } else {
         ctx.fillText(item.text[0], socialTextX, y - 6 * s);
-        ctx.fillText(item.text[1], socialTextX, y + 26 * s);
+        ctx.fillText(item.text[1], socialTextX, y + 24 * s);
       }
     });
 
     // Horizontal Grey Divider with Centered Navy Accent Bar
     ctx.fillStyle = '#B8B2A6';
-    ctx.fillRect(102 * s, 974 * s, cw - 204 * s, 5 * s);
+    ctx.fillRect(102 * s, 824 * s, cw - 204 * s, 5 * s);
     ctx.fillStyle = NAVY;
-    ctx.fillRect(cw / 2 - 78 * s, 970 * s, 156 * s, 13 * s);
+    ctx.fillRect(cw / 2 - 78 * s, 820 * s, 156 * s, 13 * s);
 
     // Contact Details with Navy Rounded-Square Icon Tiles
     const contacts: Array<{ type: 'pin' | 'globe' | 'phone'; label: string; value: string; bold?: boolean }> = [
@@ -898,38 +961,71 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     ];
 
     contacts.forEach((c, idx) => {
-      const y = 1040 * s + idx * 92 * s;
-      drawNavyContactTile(ctx, c.type, 158 * s, y, 62 * s);
+      const y = 876 * s + idx * 82 * s;
+      drawNavyContactTile(ctx, c.type, 146 * s, y, 58 * s);
 
       ctx.textAlign = 'left';
       ctx.fillStyle = NAVY;
-      ctx.font = `700 ${26 * s}px "Plus Jakarta Sans", sans-serif`;
-      ctx.fillText(c.label, 256 * s, y + 40 * s);
+      ctx.font = `700 ${25 * s}px "Plus Jakarta Sans", sans-serif`;
+      ctx.fillText(c.label, 240 * s, y + 38 * s);
 
       ctx.fillStyle = '#1E293B';
       ctx.font = c.bold
-        ? `700 ${26 * s}px "Plus Jakarta Sans", sans-serif`
-        : `400 ${26 * s}px "Plus Jakarta Sans", sans-serif`;
-      ctx.fillText(c.value, 444 * s, y + 40 * s);
+        ? `700 ${25 * s}px "Plus Jakarta Sans", sans-serif`
+        : `400 ${25 * s}px "Plus Jakarta Sans", sans-serif`;
+      ctx.fillText(c.value, 424 * s, y + 38 * s);
     });
 
-    // Clean Unboxed Signature & Verification QR
+    // Enlarged High-Contrast Verification QR Badge with NexGen Logo + Director Signature
     if (qrImg) {
-      drawContainImage(ctx, qrImg, 158 * s, 1316 * s, 68 * s, 68 * s);
-      ctx.textAlign = 'left';
-      ctx.fillStyle = '#64748B';
-      ctx.font = `600 ${14 * s}px monospace`;
-      ctx.fillText(idCode, 236 * s, 1356 * s);
+      const qrBoxX = 104 * s;
+      const qrBoxY = 1128 * s;
+      const qrBoxW = 224 * s;
+      const qrBoxH = 250 * s;
+
+      ctx.save();
+      ctx.shadowColor = 'rgba(22, 42, 77, 0.08)';
+      ctx.shadowBlur = 14 * s;
+      ctx.shadowOffsetY = 4 * s;
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.roundRect(qrBoxX, qrBoxY, qrBoxW, qrBoxH, 18 * s);
+      ctx.fill();
+      ctx.restore();
+
+      ctx.strokeStyle = '#CBD5E1';
+      ctx.lineWidth = 2.5 * s;
+      ctx.beginPath();
+      ctx.roundRect(qrBoxX, qrBoxY, qrBoxW, qrBoxH, 18 * s);
+      ctx.stroke();
+
+      drawContainImage(ctx, qrImg, qrBoxX + 15 * s, qrBoxY + 12 * s, 194 * s, 194 * s);
+
+      ctx.textAlign = 'center';
+      ctx.fillStyle = NAVY;
+      ctx.font = `800 ${14.5 * s}px "Plus Jakarta Sans", sans-serif`;
+      ctx.fillText('SCAN TO VERIFY', qrBoxX + qrBoxW / 2, qrBoxY + 230 * s);
     }
 
-    drawDirectorSignature(ctx, 566 * s, 1298 * s, 1.05 * s, 0.9 * s);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#64748B';
+    ctx.font = `700 ${14 * s}px "Plus Jakarta Sans", sans-serif`;
+    ctx.fillText('OFFICIAL CREDENTIAL ID', 896 * s, 1148 * s);
+    ctx.fillStyle = NAVY;
+    ctx.font = `700 ${23 * s}px monospace`;
+    ctx.fillText(idCode, 896 * s, 1178 * s);
+    ctx.fillStyle = '#64748B';
+    ctx.font = `500 ${14.5 * s}px "Plus Jakarta Sans", sans-serif`;
+    ctx.fillText('Verify at nexgencouncil.bond/track', 896 * s, 1202 * s);
+
+    drawDirectorSignature(ctx, 646 * s, 1226 * s, 1.18 * s, 0.96 * s);
     ctx.textAlign = 'right';
     ctx.fillStyle = NAVY;
-    ctx.font = `700 ${19 * s}px "Plus Jakarta Sans", sans-serif`;
-    ctx.fillText('Minahil Imran Awan', 842 * s, 1356 * s);
+    ctx.font = `700 ${21 * s}px "Plus Jakarta Sans", sans-serif`;
+    ctx.fillText('Minahil Imran Awan', 896 * s, 1316 * s);
     ctx.fillStyle = '#64748B';
-    ctx.font = `500 ${14 * s}px "Plus Jakarta Sans", sans-serif`;
-    ctx.fillText('Founder & Director, NexGen Women Empowerment', 842 * s, 1376 * s);
+    ctx.font = `500 ${15 * s}px "Plus Jakarta Sans", sans-serif`;
+    ctx.fillText('Founder & Director, NexGen Women Empowerment', 896 * s, 1340 * s);
 
     // Bottom Angled Deep Navy Footer Banner ("SHAPING TODAY LEADING TOMORROW")
     ctx.fillStyle = NAVY;
@@ -963,14 +1059,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
   };
 
   const renderCardCanvasImages = async () => {
-    const freshQrDataUrl =
-      qrDataUrl ||
-      (await QRCode.toDataURL(verificationUrl, {
-        width: 280,
-        margin: 1,
-        errorCorrectionLevel: 'M',
-        color: { dark: NAVY, light: '#FFFFFF' }
-      }));
+    const freshQrDataUrl = await generateBrandedQrDataUrl(verificationUrl, 560);
 
     return Promise.all([
       loadImage('/logo.png'),
@@ -1047,6 +1136,13 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
         orientation: 'portrait',
         unit: 'mm',
         format: [100, 162]
+      });
+
+      pdf.setProperties({
+        title: `${formattedName} - NexGen Official ID Card`,
+        subject: idCode,
+        creator: 'NexGen Council Official Issuance System',
+        keywords: `NexGen Council, ${idCode}, ${verificationUrl}`
       });
 
       pdf.addImage(frontCanvas.toDataURL('image/png', 1.0), 'PNG', 0, 0, 100, 162, undefined, 'FAST');
@@ -1272,26 +1368,26 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       style={{ aspectRatio: '1000 / 1620' }}
     >
       {/* Top Center FULL Uncropped Logo & Title */}
-      <div className="pt-4 px-5 flex flex-col items-center text-center">
+      <div className="pt-3 px-5 flex flex-col items-center text-center">
         <img
           src="/logo.png"
           alt="NexGen Council"
-          className="w-28 h-28 object-contain"
+          className="w-24 h-24 object-contain"
           referrerPolicy="no-referrer"
         />
-        <h4 className="font-bold text-[11.5px] text-[#162A4D] leading-tight mt-1">
+        <h4 className="font-bold text-[11.5px] text-[#162A4D] leading-tight mt-0.5">
           NexGen Women Empowerment
           <br />
           And Youth Leadership Council
         </h4>
-        <div className="w-12 h-1 bg-[#162A4D] mt-5" />
+        <div className="w-12 h-1 bg-[#162A4D] mt-2.5" />
       </div>
 
       {/* Social Media Channels */}
-      <div className="px-9 space-y-2.5 text-[10px] text-slate-800">
-        <div className="flex items-center gap-3">
+      <div className="px-8 space-y-2 text-[9.5px] text-slate-800">
+        <div className="flex items-center gap-2.5">
           {/* Official TikTok Badge */}
-          <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-label="TikTok">
+          <svg viewBox="0 0 24 24" className="w-4.5 h-4.5 shrink-0" aria-label="TikTok">
             <circle cx="12" cy="12" r="12" fill="#010101" />
             <path
               d="M14.1 6.2h2.2c.25 1.8 1.4 3 3.1 3.2v2.2c-1.4 0-2.7-.5-3.6-1.3v4.4c0 2.5-1.9 4.3-4.3 4.3-2.4 0-4.3-1.9-4.3-4.3 0-2.5 2-4.4 4.6-4.3v2.3c-1.2-.1-2.2.8-2.2 2s1 2 2.1 2c1.2 0 2-.8 2-2.1V6.2z"
@@ -1311,9 +1407,9 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
           <span className="truncate">@nextgen.womenempowerment</span>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           {/* Official Facebook Badge */}
-          <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-label="Facebook">
+          <svg viewBox="0 0 24 24" className="w-4.5 h-4.5 shrink-0" aria-label="Facebook">
             <circle cx="12" cy="12" r="12" fill="#1877F2" />
             <path
               d="M15.8 15.1l.55-3.5h-3.35V9.3c0-.96.47-1.9 1.98-1.9h1.53V4.42S15.12 4.18 13.8 4.18c-2.77 0-4.58 1.68-4.58 4.72v2.7H6.15v3.5h3.07V24h3.78v-8.9h2.8z"
@@ -1323,9 +1419,9 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
           <span className="truncate">Nex Gen Council</span>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           {/* Official Instagram Badge */}
-          <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-label="Instagram">
+          <svg viewBox="0 0 24 24" className="w-4.5 h-4.5 shrink-0" aria-label="Instagram">
             <defs>
               <radialGradient id="igGradCard" cx="30%" cy="107%" r="150%">
                 <stop offset="0%" stopColor="#FDF497" />
@@ -1343,16 +1439,16 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
           <span className="truncate">nexgen.womenleadership.council</span>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           {/* Official Gmail Badge */}
-          <svg viewBox="0 0 24 18" className="w-5 h-4 shrink-0" aria-label="Gmail">
+          <svg viewBox="0 0 24 18" className="w-4.5 h-3.5 shrink-0" aria-label="Gmail">
             <path d="M0 5.5V16.5C0 17.33.67 18 1.5 18H5.5V9.2L0 5.5z" fill="#4285F4" />
             <path d="M24 5.5V16.5C24 17.33 23.33 18 22.5 18H18.5V9.2L24 5.5z" fill="#34A853" />
             <path d="M0 3V6.2L5.5 10V4.4L3.2 2.5C1.8 1.3 0 2.1 0 3z" fill="#C5221F" />
             <path d="M24 3V6.2L18.5 10V4.4L20.8 2.5C22.2 1.3 24 2.1 24 3z" fill="#FBBC04" />
             <path d="M5.5 4.4L12 8.9L18.5 4.4V10L12 14.3L5.5 10V4.4z" fill="#EA4335" />
           </svg>
-          <span className="leading-tight break-all text-[9.5px]">nexgenwomenempowermentandyouth@gmail.com</span>
+          <span className="leading-tight break-all text-[9px]">nexgenwomenempowermentandyouth@gmail.com</span>
         </div>
       </div>
 
@@ -1363,44 +1459,52 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       </div>
 
       {/* Contact Block */}
-      <div className="px-8 space-y-2.5 text-[10px] text-slate-800">
-        <div className="flex items-center gap-3">
-          <span className="w-6 h-6 rounded-md bg-[#162A4D] text-white flex items-center justify-center shrink-0">
-            <MapPin className="w-3.5 h-3.5" />
+      <div className="px-7 space-y-2 text-[9.5px] text-slate-800">
+        <div className="flex items-center gap-2.5">
+          <span className="w-5.5 h-5.5 rounded-md bg-[#162A4D] text-white flex items-center justify-center shrink-0">
+            <MapPin className="w-3 h-3" />
           </span>
-          <div className="grid grid-cols-[58px_1fr] flex-1 items-center">
+          <div className="grid grid-cols-[54px_1fr] flex-1 items-center">
             <strong className="text-[#162A4D]">Address</strong>
             <span>Sialkot,Punjab Pakistan</span>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="w-6 h-6 rounded-md bg-[#162A4D] text-white flex items-center justify-center shrink-0">
-            <Globe className="w-3.5 h-3.5" />
+        <div className="flex items-center gap-2.5">
+          <span className="w-5.5 h-5.5 rounded-md bg-[#162A4D] text-white flex items-center justify-center shrink-0">
+            <Globe className="w-3 h-3" />
           </span>
-          <div className="grid grid-cols-[58px_1fr] flex-1 items-center">
+          <div className="grid grid-cols-[54px_1fr] flex-1 items-center">
             <strong className="text-[#162A4D]">Website</strong>
             <strong className="text-slate-900">Nexgencouncil.bond</strong>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="w-6 h-6 rounded-md bg-[#162A4D] text-white flex items-center justify-center shrink-0">
-            <Phone className="w-3.5 h-3.5" />
+        <div className="flex items-center gap-2.5">
+          <span className="w-5.5 h-5.5 rounded-md bg-[#162A4D] text-white flex items-center justify-center shrink-0">
+            <Phone className="w-3 h-3" />
           </span>
-          <div className="grid grid-cols-[58px_1fr] flex-1 items-center">
+          <div className="grid grid-cols-[54px_1fr] flex-1 items-center">
             <strong className="text-[#162A4D]">Phone</strong>
             <strong className="text-slate-900">+923454001714</strong>
           </div>
         </div>
       </div>
 
-      {/* Clean Unboxed Signature & Compact Verification QR */}
-      <div className="px-8 flex items-end justify-between gap-2 pt-1">
-        <div className="flex items-center gap-1.5 shrink-0">
-          {qrDataUrl && <img src={qrDataUrl} alt="QR" className="w-8 h-8 object-contain" />}
-          <span className="text-[7px] font-mono text-slate-500">{idCode}</span>
+      {/* Enlarged Branded Verification QR Card & Director Signature */}
+      <div className="px-6 flex items-end justify-between gap-2 pt-1">
+        <div className="flex flex-col items-center p-1.5 rounded-lg bg-white border border-slate-300 shadow-xs shrink-0">
+          {qrDataUrl && <img src={qrDataUrl} alt="Credential Verification QR" className="w-[70px] h-[70px] object-contain" />}
+          <span className="text-[6.5px] font-extrabold tracking-wider text-[#162A4D] mt-0.5 uppercase">
+            Scan to Verify
+          </span>
         </div>
-        <div className="text-right min-w-0">
-          <CalligraphicSignatureSvg className="w-28 h-6 ml-auto" />
+        <div className="text-right min-w-0 flex-1">
+          <p className="text-[6.5px] font-bold tracking-wider text-slate-400 uppercase leading-none">
+            Credential ID
+          </p>
+          <p className="text-[9px] font-mono font-bold text-[#162A4D] truncate mt-0.5">
+            {idCode}
+          </p>
+          <CalligraphicSignatureSvg className="w-28 h-6 ml-auto mt-1" />
           <p className="font-bold text-[8.5px] text-[#162A4D] leading-tight">Minahil Imran Awan</p>
           <p className="text-[7px] text-slate-500 leading-tight">Founder &amp; Director, NexGen</p>
         </div>

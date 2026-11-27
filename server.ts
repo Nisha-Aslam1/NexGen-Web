@@ -1431,6 +1431,28 @@ app.get('/api/applications/verify/:refCode', (req, res) => {
     });
   }
 
+  if (idRecord) {
+    return res.json({
+      id: idRecord.id,
+      referenceCode: idRecord.referenceCode,
+      fullName: idRecord.fullName,
+      city: idRecord.city,
+      phone: idRecord.phone,
+      status: 'Approved',
+      volunteerStatus: 'Active',
+      submittedAt: idRecord.issuedAt,
+      preferredRole: idRecord.assignedRole,
+      assignedRole: idRecord.assignedRole,
+      membershipTier: 'Active Volunteer Scholar',
+      hoursContributed: 0,
+      avatar: idRecord.photoUrl,
+      idCardIssued: Boolean(idRecord.locked),
+      idCardIssuedAt: idRecord.issuedAt,
+      idCardPhotoUrl: idRecord.photoUrl,
+      idCardPhotoLocked: Boolean(idRecord.photoLocked || idRecord.locked)
+    });
+  }
+
   return res.status(404).json({ error: 'Application or credential reference code not found.' });
 });
 

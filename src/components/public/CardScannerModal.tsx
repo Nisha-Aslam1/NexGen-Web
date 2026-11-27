@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import jsQR from 'jsqr';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import {
   X,
   Camera,
@@ -8,12 +10,12 @@ import {
   CheckCircle2,
   AlertCircle,
   Award,
-  Search,
-  ShieldCheck,
   RefreshCw,
   FileText
 } from 'lucide-react';
 import { VolunteerIdCardModal } from '../admin/VolunteerIdCardModal.tsx';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 interface CardScannerModalProps {
   onClose: () => void;
@@ -22,13 +24,234 @@ interface CardScannerModalProps {
 
 type ScanMode = 'camera' | 'upload';
 
+interface NativeBarcodeDetector {
+  detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
+}
+
+function getNativeQrDetector(): NativeBarcodeDetector | null {
+  try {
+    const DetectorCtor = (
+      window as unknown as {
+        BarcodeDetector?: new (opts: { formats: string[] }) => NativeBarcodeDetector;
+      }
+    ).BarcodeDetector;
+    if (typeof DetectorCtor === 'function') {
+      return new DetectorCtor({ formats: ['qr_code'] });
+    }
+  } catch {
+    // Fallback to jsQR
+  }
+  return null;
+}
+
+function extractVerificationCode(rawInput: string): string {
+  const trimmed = (rawInput || '').trim();
+  if (!trimmed) return '';
+
+  // 1. Standard URL with ?code=...
+  try {
+    if (/^https?:\/\//i.test(trimmed)) {
+      const parsed = new URL(trimmed);
+      const codeParam = parsed.searchParams.get('code');
+      if (codeParam && codeParam.trim()) {
+        return codeParam.trim().toUpperCase();
+      }
+    }
+  } catch {
+    // Not a strict URL, continue regex extraction
+  }
+
+  // 2. Query fragment like track?code=NXG-2026-1234
+  const queryMatch = trimmed.match(/[?&]code=([^&\s#]+)/i);
+  if (queryMatch && queryMatch[1]) {
+    try {
+      return decodeURIComponent(queryMatch[1]).trim().toUpperCase();
+    } catch {
+      return queryMatch[1].trim().toUpperCase();
+    }
+  }
+
+  // 3. Recognized NexGen credential code formats
+  const patternMatch = trimmed.match(/(?:NXG-[A-Z0-9]{4}-[A-Z0-9]{4,8}|NG-VOL-[A-Z0-9]+)/i);
+  if (patternMatch && patternMatch[0]) {
+    return patternMatch[0].trim().toUpperCase();
+  }
+
+  return trimmed.toUpperCase();
+}
+
+function tryJsQr(canvas: HTMLCanvasElement, enhanceContrast = false): string | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx || canvas.width < 16 || canvas.height < 16) return null;
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+  if (!enhanceContrast) {
+    const res = jsQR(imageData.data, imageData.width, imageData.height, {
+      inversionAttempts: 'attemptBoth'
+    });
+    return res?.data || null;
+  }
+
+  // High-contrast grayscale + adaptive normalization helps compressed screenshots / photos
+  // and dark-navy (#162A4D) QR modules with centered NexGen emblem
+  const data = new Uint8ClampedArray(imageData.data);
+  let minLum = 255;
+  let maxLum = 0;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    if (lum < minLum) minLum = lum;
+    if (lum > maxLum) maxLum = lum;
+  }
+
+  const range = Math.max(1, maxLum - minLum);
+  const threshold = minLum + range * 0.52;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    const val = lum < threshold ? 0 : 255;
+    data[i] = val;
+    data[i + 1] = val;
+    data[i + 2] = val;
+    data[i + 3] = 255;
+  }
+
+  const res = jsQR(data, imageData.width, imageData.height, {
+    inversionAttempts: 'attemptBoth'
+  });
+  return res?.data || null;
+}
+
+function renderRegionToWhiteCanvas(
+  source: HTMLCanvasElement,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  targetMaxDim: number
+): HTMLCanvasElement {
+  const scale = targetMaxDim / Math.max(sw, sh, 1);
+  const outW = Math.max(1, Math.round(sw * scale));
+  const outH = Math.max(1, Math.round(sh * scale));
+
+  const out = document.createElement('canvas');
+  out.width = outW;
+  out.height = outH;
+  const ctx = out.getContext('2d', { willReadFrequently: true });
+  if (ctx) {
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, outW, outH);
+    ctx.imageSmoothingEnabled = scale < 1;
+    ctx.drawImage(source, sx, sy, sw, sh, 0, 0, outW, outH);
+  }
+  return out;
+}
+
+async function decodeQrFromCanvas(sourceCanvas: HTMLCanvasElement): Promise<string | null> {
+  const w = sourceCanvas.width;
+  const h = sourceCanvas.height;
+  if (!w || !h) return null;
+
+  // Ensure opaque white backdrop so transparent PNGs never create zero-alpha artifacts
+  const maxInitial = 2400;
+  const initDim = Math.min(Math.max(w, h), maxInitial);
+  const baseCanvas = renderRegionToWhiteCanvas(sourceCanvas, 0, 0, w, h, initDim);
+
+  // 1. Native hardware/browser BarcodeDetector (fastest & handles small/tilted/logo QRs effortlessly)
+  const detector = getNativeQrDetector();
+  if (detector) {
+    try {
+      const detected = await detector.detect(baseCanvas);
+      const match = detected.find(d => Boolean(d.rawValue));
+      if (match?.rawValue) return match.rawValue;
+    } catch {
+      // Continue to jsQR pipeline
+    }
+  }
+
+  // 2. Full-frame jsQR across multiple scales (original + downscaled/upscaled)
+  const fullDims = Array.from(new Set([Math.max(baseCanvas.width, baseCanvas.height), 1200, 900, 1600]));
+  for (const dim of fullDims) {
+    const candidate =
+      dim === Math.max(baseCanvas.width, baseCanvas.height)
+        ? baseCanvas
+        : renderRegionToWhiteCanvas(baseCanvas, 0, 0, baseCanvas.width, baseCanvas.height, dim);
+    const direct = tryJsQr(candidate, false);
+    if (direct) return direct;
+  }
+
+  // Full-frame contrast-enhanced fallback
+  const fullContrast = tryJsQr(
+    renderRegionToWhiteCanvas(baseCanvas, 0, 0, baseCanvas.width, baseCanvas.height, 1400),
+    true
+  );
+  if (fullContrast) return fullContrast;
+
+  // 3. Targeted NexGen Card QR zones (Back card portrait bottom-left, Dual PNG right-card bottom-left, plus lower halves)
+  const bw = baseCanvas.width;
+  const bh = baseCanvas.height;
+  const targetedRegions: Array<[number, number, number, number]> = [
+    // Portrait Back Card QR corner
+    [0.02, 0.6, 0.52, 0.36],
+    // Dual PNG Back Card (right card bottom-left QR zone)
+    [0.48, 0.62, 0.4, 0.36],
+    // Lower-left & lower-right quadrants
+    [0.0, 0.5, 0.55, 0.5],
+    [0.45, 0.5, 0.55, 0.5],
+    // Lower band
+    [0.0, 0.58, 1.0, 0.42]
+  ];
+
+  // Add overlapping 3x3 grid tiles so arbitrary screenshots / mobile camera photos decode cleanly
+  const steps = [0, 0.27, 0.54];
+  for (const ry of steps) {
+    for (const rx of steps) {
+      targetedRegions.push([rx, ry, 0.46, 0.46]);
+    }
+  }
+
+  for (let i = 0; i < targetedRegions.length; i++) {
+    const [rx, ry, rw, rh] = targetedRegions[i];
+    const sx = Math.floor(bw * rx);
+    const sy = Math.floor(bh * ry);
+    const sw = Math.max(24, Math.floor(bw * rw));
+    const sh = Math.max(24, Math.floor(bh * rh));
+
+    const cropCanvas = renderRegionToWhiteCanvas(baseCanvas, sx, sy, sw, sh, 760);
+
+    if (detector) {
+      try {
+        const cropDetected = await detector.detect(cropCanvas);
+        const match = cropDetected.find(d => Boolean(d.rawValue));
+        if (match?.rawValue) return match.rawValue;
+      } catch {
+        // Ignore crop detector failure
+      }
+    }
+
+    const normalHit = tryJsQr(cropCanvas, false);
+    if (normalHit) return normalHit;
+
+    const contrastHit = tryJsQr(cropCanvas, true);
+    if (contrastHit) return contrastHit;
+
+    // Yield periodically to keep spinner smooth
+    if (i % 4 === 3) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
+
+  return null;
+}
+
 export const CardScannerModal: React.FC<CardScannerModalProps> = ({ onClose, onVerifiedOpen }) => {
   const [mode, setMode] = useState<ScanMode>('camera');
-  const [scanning, setScanning] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [successCode, setSuccessCode] = useState<string | null>(null);
   const [verifiedData, setVerifiedData] = useState<any | null>(null);
   const [loadingVerify, setLoadingVerify] = useState<boolean>(false);
+  const [statusMessage, setStatusMessage] = useState<string>('Verifying Scanned Credential...');
   const [showIdCardModal, setShowIdCardModal] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -36,65 +259,130 @@ export const CardScannerModal: React.FC<CardScannerModalProps> = ({ onClose, onV
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
+  const scanningRef = useRef<boolean>(true);
+  const verifyingRef = useRef<boolean>(false);
 
-  const verifyCode = useCallback(async (code: string) => {
-    const clean = code.trim().toUpperCase();
-    if (!clean) return;
-
-    setLoadingVerify(true);
-    setError(null);
-
-    try {
-      // Extract code if URL was scanned e.g. https://nexgencouncil.bond/track?code=NXG-2026-8812
-      let lookupCode = clean;
-      if (clean.includes('CODE=')) {
-        const parts = clean.split('CODE=');
-        if (parts[1]) {
-          lookupCode = parts[1].split('&')[0].trim();
-        }
-      } else if (clean.includes('TRACK?CODE=')) {
-        const parts = clean.split('TRACK?CODE=');
-        if (parts[1]) {
-          lookupCode = parts[1].split('&')[0].trim();
-        }
-      }
-
-      const res = await fetch(`/api/applications/verify/${encodeURIComponent(lookupCode)}`);
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Verification record not found.');
-      }
-
-      setVerifiedData(data);
-      setSuccessCode(lookupCode);
-      setScanning(false);
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(t => t.stop());
-      }
-    } catch (err: any) {
-      setError(err.message || 'Could not verify scanned credential code.');
-    } finally {
-      setLoadingVerify(false);
+  const stopCamera = useCallback(() => {
+    scanningRef.current = false;
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
     }
   }, []);
+
+  const verifyCode = useCallback(
+    async (rawCode: string): Promise<boolean> => {
+      const lookupCode = extractVerificationCode(rawCode);
+      if (!lookupCode) {
+        setError('Scanned QR code does not contain a valid NexGen credential code.');
+        return false;
+      }
+
+      verifyingRef.current = true;
+      setLoadingVerify(true);
+      setStatusMessage(`Checking official record for ${lookupCode}...`);
+      setError(null);
+
+      try {
+        const res = await fetch(`/api/applications/verify/${encodeURIComponent(lookupCode)}`);
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || 'Verification record not found.');
+        }
+
+        stopCamera();
+        setVerifiedData(data);
+        setSuccessCode(data.referenceCode || lookupCode);
+        if (onVerifiedOpen) {
+          onVerifiedOpen(data.referenceCode || lookupCode);
+        }
+        return true;
+      } catch (err: any) {
+        setError(err.message || 'Could not verify scanned credential code.');
+        return false;
+      } finally {
+        verifyingRef.current = false;
+        setLoadingVerify(false);
+      }
+    },
+    [onVerifiedOpen, stopCamera]
+  );
 
   // Stop camera stream on unmount
   useEffect(() => {
     return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(t => t.stop());
-      }
-      if (animFrameRef.current) {
-        cancelAnimationFrame(animFrameRef.current);
-      }
+      stopCamera();
     };
-  }, []);
+  }, [stopCamera]);
 
   // Start Webcam stream when in camera mode
   useEffect(() => {
-    if (mode !== 'camera' || successCode) return;
+    if (mode !== 'camera' || successCode) {
+      stopCamera();
+      return;
+    }
 
     let active = true;
+    scanningRef.current = true;
+    const detector = getNativeQrDetector();
+
+    const startScanLoop = () => {
+      let lastDetectAt = 0;
+
+      const scanTick = async () => {
+        if (!active || !scanningRef.current) return;
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+
+        if (video && canvas && video.readyState === video.HAVE_ENOUGH_DATA && !verifyingRef.current) {
+          const now = performance.now();
+          if (now - lastDetectAt >= 120) {
+            lastDetectAt = now;
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+            if (ctx) {
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+              let detectedRaw: string | null = null;
+              if (detector) {
+                try {
+                  const res = await detector.detect(canvas);
+                  detectedRaw = res.find(r => Boolean(r.rawValue))?.rawValue || null;
+                } catch {
+                  detectedRaw = null;
+                }
+              }
+
+              if (!detectedRaw) {
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const qr = jsQR(imageData.data, imageData.width, imageData.height, {
+                  inversionAttempts: 'attemptBoth'
+                });
+                detectedRaw = qr?.data || null;
+              }
+
+              if (detectedRaw && active) {
+                await verifyCode(detectedRaw);
+                if (!active || !scanningRef.current) return;
+              }
+            }
+          }
+        }
+
+        if (active && scanningRef.current) {
+          animFrameRef.current = requestAnimationFrame(scanTick);
+        }
+      };
+
+      animFrameRef.current = requestAnimationFrame(scanTick);
+    };
+
     navigator.mediaDevices
       ?.getUserMedia({ video: { facingMode: 'environment' } })
       .then(stream => {
@@ -118,41 +406,9 @@ export const CardScannerModal: React.FC<CardScannerModalProps> = ({ onClose, onV
 
     return () => {
       active = false;
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(t => t.stop());
-      }
-      if (animFrameRef.current) {
-        cancelAnimationFrame(animFrameRef.current);
-      }
+      stopCamera();
     };
-  }, [mode, successCode, verifyCode]);
-
-  const startScanLoop = () => {
-    const scanTick = () => {
-      if (!videoRef.current || !canvasRef.current || !scanning) return;
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const code = jsQR(imageData.data, imageData.width, imageData.height, {
-            inversionAttempts: 'attemptBoth'
-          });
-
-          if (code && code.data) {
-            verifyCode(code.data);
-            return;
-          }
-        }
-      }
-      animFrameRef.current = requestAnimationFrame(scanTick);
-    };
-    animFrameRef.current = requestAnimationFrame(scanTick);
-  };
+  }, [mode, successCode, verifyCode, stopCamera]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -160,69 +416,144 @@ export const CardScannerModal: React.FC<CardScannerModalProps> = ({ onClose, onV
 
     setError(null);
     setLoadingVerify(true);
+    setStatusMessage('Analyzing uploaded card file...');
 
     try {
-      // If it's a PDF file, try reading as text or converting to image
-      if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        const reader = new FileReader();
-        reader.onload = async event => {
-          const text = event.target?.result as string;
-          // Search for reference code pattern NXG-YYYY-XXXX in PDF text
-          const match = text.match(/NXG-\d{4}-\d{4}/i);
-          if (match && match[0]) {
-            await verifyCode(match[0]);
-          } else {
-            setError('Could not automatically read QR code from PDF. Please upload a screenshot or image of the ID card.');
-            setLoadingVerify(false);
+      const isPdf =
+        file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+      if (isPdf) {
+        setStatusMessage('Rendering PDF pages & scanning QR code...');
+        const arrayBuffer = await file.arrayBuffer();
+        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+        const pdfDoc = await loadingTask.promise;
+
+        const totalPages = Math.min(pdfDoc.numPages || 1, 6);
+        // Official ID card Back (with QR) is Page 2, so inspect Page 2 first!
+        const pageOrder: number[] = [];
+        if (totalPages >= 2) pageOrder.push(2);
+        for (let p = 1; p <= totalPages; p++) {
+          if (p !== 2) pageOrder.push(p);
+        }
+
+        let foundRaw: string | null = null;
+
+        for (const pageNum of pageOrder) {
+          setStatusMessage(`Scanning PDF page ${pageNum} of ${pdfDoc.numPages}...`);
+          const page = await pdfDoc.getPage(pageNum);
+          const baseViewport = page.getViewport({ scale: 1 });
+          const renderScale = Math.min(
+            3.5,
+            Math.max(2.4, 2000 / Math.max(baseViewport.width, baseViewport.height, 1))
+          );
+          const viewport = page.getViewport({ scale: renderScale });
+
+          const pageCanvas = document.createElement('canvas');
+          pageCanvas.width = Math.round(viewport.width);
+          pageCanvas.height = Math.round(viewport.height);
+          const pctx = pageCanvas.getContext('2d', { willReadFrequently: true });
+
+          if (pctx) {
+            pctx.fillStyle = '#FFFFFF';
+            pctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+            await page.render({ canvasContext: pctx, viewport, canvas: pageCanvas }).promise;
+
+            foundRaw = await decodeQrFromCanvas(pageCanvas);
+            if (foundRaw) break;
           }
-        };
-        reader.onerror = () => {
-          setError('Failed to read PDF file.');
+
+          // Text content fallback for text-based PDFs
+          try {
+            const textContent = await page.getTextContent();
+            const combinedText = textContent.items
+              .map(item => ('str' in item ? item.str : ''))
+              .join(' ');
+            const codeMatch = combinedText.match(
+              /(?:NXG-[A-Z0-9]{4}-[A-Z0-9]{4,8}|NG-VOL-[A-Z0-9]+)/i
+            );
+            if (codeMatch?.[0]) {
+              foundRaw = codeMatch[0];
+              break;
+            }
+          } catch {
+            // Ignore text extraction error
+          }
+        }
+
+        // PDF Metadata fallback
+        if (!foundRaw) {
+          try {
+            const meta = await pdfDoc.getMetadata();
+            const metaStr = JSON.stringify(meta?.info || {});
+            const metaMatch = metaStr.match(
+              /(?:NXG-[A-Z0-9]{4}-[A-Z0-9]{4,8}|NG-VOL-[A-Z0-9]+)/i
+            );
+            if (metaMatch?.[0]) {
+              foundRaw = metaMatch[0];
+            }
+          } catch {
+            // Ignore metadata fallback error
+          }
+        }
+
+        if (foundRaw) {
+          await verifyCode(foundRaw);
+        } else {
+          setError(
+            'Could not detect a valid NexGen QR code in this PDF. Please upload the official 2-page PDF or Back Card image showing the QR code.'
+          );
           setLoadingVerify(false);
-        };
-        reader.readAsText(file);
+        }
         return;
       }
 
-      // Otherwise read as image for QR scanning
-      const reader = new FileReader();
-      reader.onload = event => {
-        const dataUrl = event.target?.result as string;
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          canvas.width = img.naturalWidth || img.width;
-          canvas.height = img.naturalHeight || img.height;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) {
-            setError('Canvas rendering error.');
-            setLoadingVerify(false);
-            return;
-          }
-          ctx.drawImage(img, 0, 0);
-          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const qrCode = jsQR(imageData.data, imageData.width, imageData.height, {
-            inversionAttempts: 'attemptBoth'
-          });
+      // Image upload flow (Dual PNG, Back Card PNG, screenshot, or camera photo)
+      setStatusMessage('Scanning uploaded card image for QR code...');
+      const objectUrl = URL.createObjectURL(file);
+      try {
+        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const el = new Image();
+          el.onload = () => resolve(el);
+          el.onerror = () => reject(new Error('Failed to decode uploaded image'));
+          el.src = objectUrl;
+        });
 
-          if (qrCode && qrCode.data) {
-            verifyCode(qrCode.data);
-          } else {
-            // Fallback: check filename or try parsing text if possible, or report not found
-            setError('No QR code detected in the uploaded image. Please ensure the card photo clearly shows the QR code.');
-            setLoadingVerify(false);
-          }
-        };
-        img.onerror = () => {
-          setError('Failed to load uploaded image.');
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || img.width;
+        canvas.height = img.naturalHeight || img.height;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) {
+          setError('Canvas rendering error while reading the uploaded image.');
           setLoadingVerify(false);
-        };
-        img.src = dataUrl;
-      };
-      reader.readAsDataURL(file);
-    } catch {
-      setError('Error processing uploaded file.');
+          return;
+        }
+
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+        const decodedRaw = await decodeQrFromCanvas(canvas);
+        if (decodedRaw) {
+          await verifyCode(decodedRaw);
+        } else {
+          setError(
+            'No QR code detected in the uploaded image. Note: The QR code is located on Page 2 (Back) of your ID Card or the right side of the Dual PNG.'
+          );
+          setLoadingVerify(false);
+        }
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    } catch (err: any) {
+      setError(
+        err?.message ||
+          'Unable to process the uploaded file. Please try uploading a clear ID Card PDF or PNG/JPG image.'
+      );
       setLoadingVerify(false);
+    } finally {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -230,7 +561,7 @@ export const CardScannerModal: React.FC<CardScannerModalProps> = ({ onClose, onV
     setSuccessCode(null);
     setVerifiedData(null);
     setError(null);
-    setScanning(true);
+    scanningRef.current = true;
     setMode('camera');
   };
 
@@ -255,6 +586,7 @@ export const CardScannerModal: React.FC<CardScannerModalProps> = ({ onClose, onV
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close QR scanner"
             className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white cursor-pointer transition-colors"
           >
             <X className="w-4 h-4" />
@@ -295,11 +627,15 @@ export const CardScannerModal: React.FC<CardScannerModalProps> = ({ onClose, onV
               </div>
               <div className="flex justify-between border-b border-slate-800/80 pb-2">
                 <span className="text-slate-400">Assigned Role</span>
-                <span className="font-semibold text-white">{verifiedData.assignedRole || 'Member NexGen Council'}</span>
+                <span className="font-semibold text-white">
+                  {verifiedData.assignedRole || 'Member NexGen Council'}
+                </span>
               </div>
               <div className="flex justify-between border-b border-slate-800/80 pb-2">
                 <span className="text-slate-400">City / Chapter</span>
-                <span className="font-semibold text-white">{verifiedData.city || 'National Chapter'}</span>
+                <span className="font-semibold text-white">
+                  {verifiedData.city || 'National Chapter'}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">Phone Verified</span>
@@ -333,9 +669,14 @@ export const CardScannerModal: React.FC<CardScannerModalProps> = ({ onClose, onV
             <div className="flex bg-slate-950 p-1 rounded-2xl border border-slate-800 text-xs font-semibold">
               <button
                 type="button"
-                onClick={() => setMode('camera')}
+                onClick={() => {
+                  setError(null);
+                  setMode('camera');
+                }}
                 className={`flex-1 py-2.5 rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2 ${
-                  mode === 'camera' ? 'bg-amber-400 text-slate-950 font-bold shadow' : 'text-slate-400 hover:text-white'
+                  mode === 'camera'
+                    ? 'bg-amber-400 text-slate-950 font-bold shadow'
+                    : 'text-slate-400 hover:text-white'
                 }`}
               >
                 <Camera className="w-4 h-4" />
@@ -343,9 +684,14 @@ export const CardScannerModal: React.FC<CardScannerModalProps> = ({ onClose, onV
               </button>
               <button
                 type="button"
-                onClick={() => setMode('upload')}
+                onClick={() => {
+                  setError(null);
+                  setMode('upload');
+                }}
                 className={`flex-1 py-2.5 rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2 ${
-                  mode === 'upload' ? 'bg-amber-400 text-slate-950 font-bold shadow' : 'text-slate-400 hover:text-white'
+                  mode === 'upload'
+                    ? 'bg-amber-400 text-slate-950 font-bold shadow'
+                    : 'text-slate-400 hover:text-white'
                 }`}
               >
                 <Upload className="w-4 h-4" />
@@ -377,29 +723,35 @@ export const CardScannerModal: React.FC<CardScannerModalProps> = ({ onClose, onV
                 {loadingVerify && (
                   <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center gap-3 text-white text-xs font-semibold">
                     <div className="w-8 h-8 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
-                    <span>Verifying Scanned Credential...</span>
+                    <span>{statusMessage}</span>
                   </div>
                 )}
               </div>
             ) : (
-              <div className="border-2 border-dashed border-slate-700 hover:border-amber-400/80 rounded-2xl p-8 text-center space-y-4 bg-slate-950/50 transition-colors">
+              <div className="relative border-2 border-dashed border-slate-700 hover:border-amber-400/80 rounded-2xl p-8 text-center space-y-4 bg-slate-950/50 transition-colors">
                 <div className="w-14 h-14 rounded-2xl bg-amber-400/15 border border-amber-400/30 text-amber-300 flex items-center justify-center mx-auto">
-                  <Upload className="w-6 h-6" />
+                  {loadingVerify ? (
+                    <div className="w-6 h-6 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Upload className="w-6 h-6" />
+                  )}
                 </div>
                 <div className="space-y-1">
                   <h4 className="font-semibold text-sm text-white">Upload Member ID Card or PDF</h4>
                   <p className="text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
-                    Select an image (PNG, JPG, WEBP) containing the QR code or export PDF file
+                    {loadingVerify
+                      ? statusMessage
+                      : 'Upload the 2-page ID Card PDF, Dual Card PNG, Back Card image, or a photo showing the QR code'}
                   </p>
                 </div>
 
                 <label className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs cursor-pointer shadow-md transition-colors">
                   <FileText className="w-4 h-4" />
-                  <span>{loadingVerify ? 'Processing & Scanning...' : 'Choose Card Image / PDF'}</span>
+                  <span>{loadingVerify ? 'Scanning QR Code...' : 'Choose Card Image / PDF'}</span>
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept="image/*,.pdf"
+                    accept="image/*,.pdf,application/pdf"
                     onChange={handleFileUpload}
                     disabled={loadingVerify}
                     className="hidden"
@@ -428,6 +780,7 @@ export const CardScannerModal: React.FC<CardScannerModalProps> = ({ onClose, onV
           }}
           oneTimeIssuance={true}
           isAlreadyIssued={Boolean(verifiedData.idCardIssued)}
+          isPhotoLocked={Boolean(verifiedData.idCardPhotoLocked)}
           issuedAt={verifiedData.idCardIssuedAt}
           onClose={() => setShowIdCardModal(false)}
         />

@@ -1550,6 +1550,7 @@ class Database {
 
   // --- Official ID Card Records (Single-Upload & One-Time Cross-ID Submission Lock) ---
   resolveHolderByRefCode(refCode: string) {
+    this.ensureMeetingArrays();
     const clean = (refCode || '').trim();
     const normalized = clean.toUpperCase();
     let appItem =
@@ -1568,11 +1569,44 @@ class Database {
         : null) || null;
 
     if (!volMatch) {
+      const nxgMatch = normalized.match(/^NXG-\d{4}-([A-Z0-9]{4,8})$/);
+      const nxgSuffix = nxgMatch ? nxgMatch[1] : '';
       volMatch =
         this.data.volunteers.find(v => {
           const volCode = `NG-VOL-${v.id.slice(-6).toUpperCase()}`;
-          return v.id.toUpperCase() === normalized || volCode === normalized;
+          const legacyCardCode = `NXG-${new Date(v.joinedDate || Date.now()).getFullYear()}-${v.id.slice(-4).toUpperCase()}`;
+          return (
+            v.id.toUpperCase() === normalized ||
+            volCode === normalized ||
+            legacyCardCode === normalized ||
+            (nxgSuffix.length >= 4 && v.id.slice(-nxgSuffix.length).toUpperCase() === nxgSuffix)
+          );
         }) || null;
+    }
+
+    // Also resolve directly via persisted official ID card records if present
+    const directCardRecord = (this.data.idCardRecords || []).find(
+      r => r.referenceCode.toUpperCase() === normalized
+    );
+    if (directCardRecord) {
+      if (!appItem && directCardRecord.applicationId) {
+        appItem =
+          this.data.applications.find(a => a.id === directCardRecord.applicationId) || null;
+      }
+      if (!volMatch && directCardRecord.volunteerId) {
+        volMatch =
+          this.data.volunteers.find(v => v.id === directCardRecord.volunteerId) || null;
+      }
+      if (!appItem && directCardRecord.email) {
+        const recEmail = this.normalizeEmailId(directCardRecord.email);
+        appItem =
+          this.data.applications.find(a => this.normalizeEmailId(a.email) === recEmail) || null;
+      }
+      if (!volMatch && directCardRecord.email) {
+        const recEmail = this.normalizeEmailId(directCardRecord.email);
+        volMatch =
+          this.data.volunteers.find(v => this.normalizeEmailId(v.email) === recEmail) || null;
+      }
     }
 
     // Reverse resolve appItem if lookup started from a volunteer code (NG-VOL-...)
@@ -1590,10 +1624,16 @@ class Database {
       ? appItem.referenceCode
       : volMatch
       ? `NG-VOL-${volMatch.id.slice(-6).toUpperCase()}`
+      : directCardRecord
+      ? directCardRecord.referenceCode
       : normalized;
 
-    const resolvedEmail = this.normalizeEmailId(volMatch?.email || appItem?.email);
-    const resolvedPhone = this.normalizePhoneId(volMatch?.phone || appItem?.phone);
+    const resolvedEmail = this.normalizeEmailId(
+      volMatch?.email || appItem?.email || directCardRecord?.email
+    );
+    const resolvedPhone = this.normalizePhoneId(
+      volMatch?.phone || appItem?.phone || directCardRecord?.phone
+    );
 
     return { appItem, volMatch, canonicalCode, resolvedEmail, resolvedPhone };
   }
