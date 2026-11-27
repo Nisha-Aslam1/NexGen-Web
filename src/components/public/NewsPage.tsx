@@ -217,10 +217,12 @@ export const NewsPage: React.FC = () => {
           publisher: {
             '@type': 'NGO',
             name: 'NexGen Council',
-            logo: {
-              '@type': 'ImageObject',
-              url: `${window.location.origin}/logo.png`
-            }
+            logo: buildImageObjectSchema({
+              url: `${window.location.origin}/logo.png`,
+              alt: 'NexGen Council Logo',
+              pageUrl: `${window.location.origin}/news`,
+              orgName: 'NexGen Council'
+            })
           }
         }
       : {

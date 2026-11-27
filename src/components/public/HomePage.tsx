@@ -139,10 +139,12 @@ export const HomePage: React.FC = () => {
           'NexGen Pakistan'
         ],
         url: `${canonicalBase}/`,
-        logo: {
-          '@type': 'ImageObject',
-          url: `${canonicalBase}/logo.png`
-        },
+        logo: buildImageObjectSchema({
+          url: `${canonicalBase}/logo.png`,
+          alt: `${homeOrgName} Official Logo`,
+          pageUrl: `${canonicalBase}/`,
+          orgName: homeOrgName
+        }),
         image: `${canonicalBase}/banner.png`,
         slogan: 'Empowering Women. Inspiring Youth. Transforming Communities.',
         description:

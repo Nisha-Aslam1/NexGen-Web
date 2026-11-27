@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext.tsx';
 import { useDocumentSEO } from '../../lib/seo.ts';
+import { buildImageObjectSchema } from '../../lib/imageSeo.ts';
 import {
   HeartHandshake,
   QrCode,
@@ -185,13 +186,16 @@ export const DonatePage: React.FC = () => {
         description:
           'Donate to NexGen Council for education, healthcare & community relief. Contribute easily via QR Till 992191268, Easypaisa, NayaPay, or JazzCash today.',
         inLanguage: 'en',
-        primaryImageOfPage: {
-          '@type': 'ImageObject',
+        primaryImageOfPage: buildImageObjectSchema({
           url: `${canonicalBase}${POSTER_IMAGE_PATH}`,
+          alt: 'NexGen Council Official Donation Drive — Your Donation Can Change Lives',
+          caption: 'NexGen Council Official Donation Drive — Your Donation Can Change Lives',
           width: 1199,
           height: 1312,
-          caption: 'NexGen Council Official Donation Drive — Your Donation Can Change Lives'
-        },
+          pageUrl: `${canonicalBase}/donate`,
+          orgName: settings?.organizationName || 'NexGen Women Empowerment & Youth Leadership Council',
+          representativeOfPage: true
+        }),
         isPartOf: {
           '@type': 'WebSite',
           name: settings?.organizationName || 'NexGen Council',

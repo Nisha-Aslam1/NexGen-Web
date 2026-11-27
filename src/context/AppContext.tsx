@@ -31,6 +31,7 @@ export type ActivePage =
   | 'contact'
   | 'donate'
   | 'faq'
+  | 'terms'
   | 'admin-login'
   | 'admin'
   | 'room'
@@ -151,6 +152,7 @@ export function parsePathname(pathname: string, hash?: string): {
   if (clean === '/contact' || clean === '/contact-us') return { page: 'contact' };
   if (clean === '/donate' || clean === '/donation' || clean === '/support-us') return { page: 'donate' };
   if (clean === '/faq' || clean === '/faqs' || clean === '/help') return { page: 'faq' };
+  if (clean === '/terms' || clean === '/terms-and-conditions' || clean === '/license' || clean === '/terms-of-service') return { page: 'terms' };
   if (clean === '/admin-login' || clean === '/login') return { page: 'admin-login' };
   if (clean === '/admin/meetings') return { page: 'admin', adminTab: 'meetings' };
   if (clean === '/admin/id-cards') return { page: 'admin', adminTab: 'id-cards' };
@@ -187,6 +189,7 @@ export function getPathForPage(
   if (page === 'contact') return '/contact';
   if (page === 'donate') return '/donate';
   if (page === 'faq') return '/faq';
+  if (page === 'terms') return '/terms';
   if (page === 'admin-login') return '/admin-login';
   if (page === 'admin') return '/admin';
   if (page === 'meetings') return '/meetings';

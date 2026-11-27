@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext.tsx';
 import { useDocumentSEO } from '../../lib/seo.ts';
+import { buildImageObjectSchema } from '../../lib/imageSeo.ts';
 import {
   ArrowRight,
   ChevronDown,
@@ -200,10 +201,13 @@ export const AboutPage: React.FC = () => {
         isPartOf: { '@id': `${canonicalBase}/#website` },
         about: { '@id': `${canonicalBase}/#organization` },
         mainEntity: { '@id': `${canonicalBase}/#organization` },
-        primaryImageOfPage: {
-          '@type': 'ImageObject',
-          url: `${canonicalBase}/logo.png`
-        }
+        primaryImageOfPage: buildImageObjectSchema({
+          url: `${canonicalBase}/logo.png`,
+          alt: 'NexGen Council Emblem',
+          caption: 'NexGen Women Empowerment & Youth Leadership Council Emblem',
+          pageUrl: `${canonicalBase}/about`,
+          orgName: settings?.organizationName || 'NexGen Women Empowerment & Youth Leadership Council'
+        })
       },
       {
         '@context': 'https://schema.org',

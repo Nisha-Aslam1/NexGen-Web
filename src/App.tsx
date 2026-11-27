@@ -19,6 +19,7 @@ const TeamPage = lazy(() => import('./components/public/TeamPage.tsx').then(m =>
 const ContactPage = lazy(() => import('./components/public/ContactPage.tsx').then(m => ({ default: m.ContactPage })));
 const DonatePage = lazy(() => import('./components/public/DonatePage.tsx').then(m => ({ default: m.DonatePage })));
 const FaqPage = lazy(() => import('./components/public/FaqPage.tsx').then(m => ({ default: m.FaqPage })));
+const TermsPage = lazy(() => import('./components/public/TermsPage.tsx').then(m => ({ default: m.TermsPage })));
 const VolunteerForm = lazy(() => import('./components/public/VolunteerForm.tsx').then(m => ({ default: m.VolunteerForm })));
 const TrackApplication = lazy(() => import('./components/public/TrackApplication.tsx').then(m => ({ default: m.TrackApplication })));
 const NotFoundPage = lazy(() => import('./components/public/NotFoundPage.tsx').then(m => ({ default: m.NotFoundPage })));
@@ -173,6 +174,7 @@ const AppContent: React.FC = () => {
           {activePage === 'contact' && <ContactPage />}
           {activePage === 'donate' && <DonatePage />}
           {activePage === 'faq' && <FaqPage />}
+          {activePage === 'terms' && <TermsPage />}
           {(activePage === 'volunteer' || activePage === 'volunteer-apply') && <VolunteerForm />}
           {(activePage === 'track' || activePage === 'track-application') && <TrackApplication />}
           {activePage === '404' && <NotFoundPage />}

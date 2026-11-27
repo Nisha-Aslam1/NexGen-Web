@@ -305,6 +305,10 @@ export const GalleryPage: React.FC = () => {
                 itemType="https://schema.org/ImageObject"
                 className="break-inside-avoid group relative rounded-2xl overflow-hidden bg-slate-900 cursor-pointer shadow-xs hover:shadow-xl transition-all"
               >
+                <meta itemProp="license" content={`${window.location.origin}/terms#media-licensing`} />
+                <meta itemProp="acquireLicensePage" content={`${window.location.origin}/contact`} />
+                <meta itemProp="creditText" content={orgName} />
+                <meta itemProp="copyrightNotice" content={`© ${new Date().getFullYear()} ${orgName}. All rights reserved.`} />
                 <img
                   src={item.imageUrl || '/banner.png'}
                   alt={buildAutoImageAlt({
@@ -368,6 +372,10 @@ export const GalleryPage: React.FC = () => {
                   idx === 0 && filteredItems.length >= 4 ? 'sm:col-span-2 lg:col-span-2 aspect-16/10' : 'aspect-4/3'
                 }`}
               >
+                <meta itemProp="license" content={`${window.location.origin}/terms#media-licensing`} />
+                <meta itemProp="acquireLicensePage" content={`${window.location.origin}/contact`} />
+                <meta itemProp="creditText" content={orgName} />
+                <meta itemProp="copyrightNotice" content={`© ${new Date().getFullYear()} ${orgName}. All rights reserved.`} />
                 <img
                   src={item.imageUrl || '/banner.png'}
                   alt={buildAutoImageAlt({

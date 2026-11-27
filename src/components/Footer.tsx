@@ -68,7 +68,8 @@ export const Footer: React.FC = () => {
     { label: 'Upcoming Events', page: 'events' },
     { label: 'News & Announcements', page: 'news' },
     { label: 'Council Video Meetings', page: 'meetings' },
-    { label: 'Help & FAQs', page: 'faq' }
+    { label: 'Help & FAQs', page: 'faq' },
+    { label: 'Terms & Media Licensing', page: 'terms' }
   ];
 
   const socialItems = (
@@ -346,6 +347,14 @@ export const Footer: React.FC = () => {
             <span className="text-slate-400">
               Developed by <span className="font-semibold text-amber-300">Nisha Aslam</span>
             </span>
+            <span aria-hidden="true" className="hidden sm:inline text-slate-700">·</span>
+            <button
+              type="button"
+              onClick={() => navigate('terms')}
+              className="text-slate-400 hover:text-amber-300 transition-colors underline cursor-pointer"
+            >
+              Terms &amp; Media Licensing
+            </button>
           </div>
 
           <div className="flex flex-wrap items-center justify-center lg:justify-end gap-4">

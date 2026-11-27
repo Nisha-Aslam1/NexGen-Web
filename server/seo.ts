@@ -107,10 +107,12 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       'NexGen Pakistan'
     ],
     url: `${siteUrl}/`,
-    logo: {
-      '@type': 'ImageObject',
-      url: `${siteUrl}/logo.png`
-    },
+    logo: buildImageObjectSchema({
+      url: `${siteUrl}/logo.png`,
+      alt: `${orgName} Official Logo`,
+      pageUrl: `${siteUrl}/`,
+      orgName
+    }),
     image: defaultLogo,
     slogan: 'Empowering Women. Inspiring Youth. Transforming Communities.',
     description: defaultDescription,
@@ -351,10 +353,14 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       isPartOf: { '@id': `${siteUrl}/#website` },
       about: { '@id': `${siteUrl}/#organization` },
       mainEntity: { '@id': `${siteUrl}/#organization` },
-      primaryImageOfPage: {
-        '@type': 'ImageObject',
-        url: defaultLogo
-      }
+      primaryImageOfPage: buildImageObjectSchema({
+        url: defaultLogo,
+        alt: `${aboutTitle} — ${orgName}`,
+        caption: aboutDesc,
+        pageUrl: `${siteUrl}/about`,
+        orgName,
+        representativeOfPage: true
+      })
     };
     const aboutFaqSchema = {
       '@context': 'https://schema.org',
@@ -859,10 +865,12 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
         publisher: {
           '@type': 'Organization',
           name: orgName,
-          logo: {
-            '@type': 'ImageObject',
-            url: `${siteUrl}/logo.png`
-          }
+          logo: buildImageObjectSchema({
+            url: `${siteUrl}/logo.png`,
+            alt: `${orgName} Logo`,
+            pageUrl: resolvedCanonical,
+            orgName
+          })
         }
       };
 
@@ -1180,13 +1188,16 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       inLanguage: 'en',
       isPartOf: { '@id': `${siteUrl}/#website` },
       about: { '@id': `${siteUrl}/#organization` },
-      primaryImageOfPage: {
-        '@type': 'ImageObject',
+      primaryImageOfPage: buildImageObjectSchema({
         url: donatePoster,
+        alt: 'NexGen Council Official Donation Drive — Your Donation Can Change Lives',
+        caption: 'NexGen Council Official Donation Drive — Your Donation Can Change Lives',
         width: 1199,
         height: 1312,
-        caption: 'NexGen Council Official Donation Drive — Your Donation Can Change Lives'
-      },
+        pageUrl: `${siteUrl}/donate`,
+        orgName,
+        representativeOfPage: true
+      }),
       potentialAction: donateActionSchema
     };
 
@@ -1352,6 +1363,67 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
     };
   }
 
+  // Handle Terms & Media Licensing Policy
+  if (
+    cleanPath === '/terms' ||
+    cleanPath === '/terms-and-conditions' ||
+    cleanPath === '/license' ||
+    cleanPath === '/terms-of-service'
+  ) {
+    const termsTitle = `Terms of Service & Media Licensing Policy | ${orgName}`;
+    const termsDesc =
+      'Official terms of service, image licensing guidelines, and copyright policy for NexGen Women Empowerment & Youth Leadership Council assets, photos, and publications.';
+    const termsUrl = `${siteUrl}/terms`;
+    const termsImage = buildImageObjectSchema({
+      url: `${siteUrl}/banner.png`,
+      alt: 'NexGen Council Terms and Media Licensing Policy',
+      caption: termsDesc,
+      pageUrl: termsUrl,
+      orgName,
+      representativeOfPage: true
+    });
+
+    const termsWebPageSchema = {
+      '@context': 'https://schema.org',
+      '@type': 'WebPage',
+      '@id': `${termsUrl}#webpage`,
+      url: termsUrl,
+      name: termsTitle,
+      description: termsDesc,
+      inLanguage: 'en',
+      isPartOf: { '@id': `${siteUrl}/#website` },
+      about: { '@id': `${siteUrl}/#organization` },
+      primaryImageOfPage: termsImage,
+      license: `${termsUrl}#media-licensing`
+    };
+
+    return {
+      title: termsTitle,
+      description: termsDesc,
+      canonicalUrl: termsUrl,
+      ogType: 'website',
+      ogImage: `${siteUrl}/banner.png`,
+      ogImageAlt: 'NexGen Council Terms & Media Licensing Policy',
+      keywords: [
+        ...CORE_NEXGEN_KEYWORDS,
+        'NexGen terms of service',
+        'NexGen media license',
+        'image copyright policy',
+        'editorial usage terms',
+        'licensable images metadata'
+      ],
+      jsonLd: [
+        orgSchema,
+        websiteSchema,
+        termsWebPageSchema,
+        createBreadcrumbs([
+          { name: 'Home', url: `${siteUrl}/` },
+          { name: 'Terms & Media Licensing', url: termsUrl }
+        ])
+      ]
+    };
+  }
+
   // Handle Meeting Room / Conferencing (/meeting/:slug, /room/:code) - STRICTLY PRIVATE / NOINDEX
   if (
     cleanPath.startsWith('/meeting/') ||
@@ -1423,6 +1495,7 @@ export function generateSitemapXml(siteUrl: string): string {
       let node = `\n    <image:image>\n      <image:loc>${escapeXml(fullUrl)}</image:loc>`;
       if (img.title) node += `\n      <image:title>${escapeXml(img.title)}</image:title>`;
       if (img.caption) node += `\n      <image:caption>${escapeXml(img.caption)}</image:caption>`;
+      node += `\n      <image:license>${escapeXml(siteUrl)}/terms#media-licensing</image:license>`;
       node += `\n    </image:image>`;
       chunks.push(node);
     }
@@ -1618,6 +1691,19 @@ export function generateSitemapXml(siteUrl: string): string {
           url: '/banner.png',
           title: 'NexGen Council Frequently Asked Questions',
           caption: 'Official answers about NexGen Council membership, programs, Member ID cards, and donations'
+        }
+      ]
+    },
+    {
+      url: `${siteUrl}/terms`,
+      priority: '0.8',
+      changefreq: 'monthly',
+      lastmod: currentDate,
+      images: [
+        {
+          url: '/banner.png',
+          title: 'NexGen Council Terms of Service & Media Licensing Policy',
+          caption: 'Official media licensing, copyright, and organizational terms of service'
         }
       ]
     }

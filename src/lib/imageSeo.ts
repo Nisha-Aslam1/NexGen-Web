@@ -25,6 +25,8 @@ export interface ImageObjectSchemaInput {
   width?: number;
   height?: number;
   representativeOfPage?: boolean;
+  license?: string;
+  acquireLicensePage?: string;
 }
 
 const DEFAULT_ORG_LABEL = 'NexGen Council';
@@ -73,6 +75,23 @@ export function resolvePublicImageUrl(
   const normalizedOrigin = siteUrl.replace(/\/+$/, '');
   const normalizedPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
   return `${normalizedOrigin}${normalizedPath}`;
+}
+
+/**
+ * Safely extracts site origin from pageUrl or image url with fallback to primary domain
+ */
+function extractOriginFromInput(input: ImageObjectSchemaInput): string {
+  if (input.pageUrl && /^https?:\/\//i.test(input.pageUrl)) {
+    try {
+      return new URL(input.pageUrl).origin;
+    } catch {}
+  }
+  if (input.url && /^https?:\/\//i.test(input.url)) {
+    try {
+      return new URL(input.url).origin;
+    } catch {}
+  }
+  return 'https://nexgencouncil.bond';
 }
 
 /**
@@ -162,12 +181,22 @@ export function buildAutoImageCaption(input: AutoImageAltInput): string {
 }
 
 /**
- * Builds a complete Schema.org ImageObject node for Google Image Search rich attribution.
+ * Builds a complete Schema.org ImageObject node with full Google Image Search
+ * and Image License metadata (license, acquireLicensePage, contentUrl).
  */
 export function buildImageObjectSchema(input: ImageObjectSchemaInput) {
   const orgName = collapseWhitespace(input.orgName) || FULL_ORG_LABEL;
   const altText = collapseWhitespace(input.alt || input.name) || orgName;
   const captionText = collapseWhitespace(input.caption || altText);
+  const siteOrigin = extractOriginFromInput(input);
+
+  const licenseUrl =
+    collapseWhitespace(input.license) || `${siteOrigin}/terms#media-licensing`;
+  const acquireUrl =
+    collapseWhitespace(input.acquireLicensePage) ||
+    (input.pageUrl && /^https?:\/\//i.test(input.pageUrl)
+      ? `${input.pageUrl.replace(/\/+$/, '')}#media-licensing`
+      : `${siteOrigin}/contact`);
 
   return {
     '@type': 'ImageObject',
@@ -181,11 +210,13 @@ export function buildImageObjectSchema(input: ImageObjectSchemaInput) {
     ...(typeof input.height === 'number' ? { height: input.height } : {}),
     ...(input.representativeOfPage ? { representativeOfPage: true } : {}),
     creditText: orgName,
-    copyrightNotice: `© ${new Date().getFullYear()} ${orgName}`,
+    copyrightNotice: `© ${new Date().getFullYear()} ${orgName}. All rights reserved.`,
+    license: licenseUrl,
+    acquireLicensePage: acquireUrl,
     creator: {
       '@type': 'Organization',
-      name: orgName
-    },
-    ...(input.pageUrl ? { acquireLicensePage: input.pageUrl } : {})
+      name: orgName,
+      url: `${siteOrigin}/`
+    }
   };
 }
