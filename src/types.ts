@@ -78,6 +78,7 @@ export interface Volunteer {
   email: string;
   phone: string;
   city: string;
+  referenceCode?: string;
   skills: string[];
   assignedRole: string;
   assignedProgram?: string;
@@ -530,3 +531,99 @@ export interface MeetingCapture {
   expiresAt: string;
 }
 
+export type AppointmentType =
+  | 'Volunteer'
+  | 'Leadership'
+  | 'Ambassador'
+  | 'Coordinator'
+  | 'Management'
+  | 'Executive';
+
+export type AppointmentLetterStatus = 'Active' | 'Revoked';
+export type EffectiveAppointmentStatus = 'ACTIVE' | 'REVOKED' | 'EXPIRED' | 'NOT FOUND';
+
+export interface SignatoryProfile {
+  id: string;
+  name: string;
+  title: string;
+  roleType: 'Executive Director' | 'President' | 'Director' | 'Authorized Signatory';
+  department?: string;
+  signatureAssetFilename?: string;
+  stampAssetFilename?: string;
+  hasSignatureImage?: boolean;
+  hasStampImage?: boolean;
+  active: boolean;
+  isDefault: boolean;
+  allowedRoles: string[];
+  createdAt: string;
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+export interface AppointmentLetter {
+  id: string;
+  applicationId?: string;
+  volunteerId?: string;
+  referenceCode: string;
+  letterNumber: string;
+  verificationToken: string;
+  appointeeName: string;
+  appointeeEmail?: string;
+  appointeePhone?: string;
+  appointeePhotoUrl?: string;
+  country?: string;
+  designation: string;
+  department: string;
+  chapter: string;
+  appointmentType: AppointmentType;
+  membershipTier: string;
+  effectiveDate: string;
+  expiryDate?: string;
+  tenure: string;
+  renewalEligibility: string;
+  reportingAuthority: string;
+  customNotes?: string;
+  signatoryId?: string;
+  signatoryName: string;
+  signatoryTitle: string;
+  signatoryRoleType?: string;
+  issuedBy: string;
+  issuedByName: string;
+  issuedByRole: string;
+  issuedAt: string;
+  updatedAt: string;
+  downloadCount: number;
+  status: AppointmentLetterStatus;
+  effectiveStatus?: EffectiveAppointmentStatus;
+  revokedBy?: string;
+  revokedByName?: string;
+  revokedAt?: string;
+  revocationReason?: string;
+  lastEmailSentAt?: string;
+  emailNotificationCount?: number;
+}
+
+export interface PublicAppointmentVerification {
+  found: boolean;
+  effectiveStatus: EffectiveAppointmentStatus;
+  organizationName: string;
+  documentType: string;
+  letterId?: string;
+  letterNumber?: string;
+  referenceCode?: string;
+  appointeeName?: string;
+  designation?: string;
+  department?: string;
+  chapter?: string;
+  appointmentType?: AppointmentType;
+  membershipTier?: string;
+  issueDate?: string;
+  effectiveDate?: string;
+  expiryDate?: string;
+  tenure?: string;
+  issuingAuthority?: string;
+  issuingAuthorityTitle?: string;
+  revokedAt?: string;
+  revocationReason?: string;
+  verificationToken?: string;
+}

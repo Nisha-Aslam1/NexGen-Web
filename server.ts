@@ -38,10 +38,12 @@ import { meetingsRouter } from './server/meetings.ts';
 import {
   sendCouncilEmail,
   buildVolunteerApprovalEmail,
+  buildAppointmentLetterEmail,
   sanitizeSenderName,
   isValidEmailAddress,
   isValidImageUrl
 } from './server/email.ts';
+import { generateAppointmentLetterPdfBuffer } from './server/appointmentPdf.ts';
 import { handleSupportAiChat, SUPPORT_AI_MODEL } from './server/supportAi.ts';
 // android download zip packaging handled dynamically or via prebuilt assets
 
@@ -275,6 +277,7 @@ const meetingRealtimeLimiter = rateLimit(2400, 60 * 1000, 'meetings_live_api');
 const authLoginLimiter = rateLimit(20, 15 * 60 * 1000, 'auth_login');
 const auth2faLimiter = rateLimit(25, 15 * 60 * 1000, 'auth_2fa');
 const passwordChangeLimiter = rateLimit(15, 15 * 60 * 1000, 'pwd_change');
+const appointmentVerifyLimiter = rateLimit(30, 5 * 60 * 1000, 'apt_verify');
 
 app.use('/api', (req, res, next) => {
   if (req.path.startsWith('/meetings')) {
@@ -284,6 +287,7 @@ app.use('/api', (req, res, next) => {
 });
 
 const PRIVILEGED_CSRF_PREFIXES = [
+  '/admin',
   '/users',
   '/system',
   '/settings',
@@ -1366,6 +1370,31 @@ app.get('/api/applications/verify/:refCode', (req, res) => {
   const { appItem, volMatch, canonicalCode } = db.resolveHolderByRefCode(refCode);
   const idRecord = db.getIdCardRecordByCode(refCode);
 
+  const buildAppointmentSummary = (lookupCode: string, isApproved: boolean) => {
+    if (!isApproved) return null;
+    const apt = db.getAppointmentLetterByRefCode(lookupCode);
+    if (!apt) return null;
+    const effStatus = db.getEffectiveAppointmentStatus(apt);
+    return {
+      id: apt.id,
+      letterNumber: apt.letterNumber,
+      referenceCode: apt.referenceCode,
+      appointeeName: apt.appointeeName,
+      designation: apt.designation,
+      department: apt.department,
+      chapter: apt.chapter,
+      appointmentType: apt.appointmentType,
+      issueDate: apt.issuedAt,
+      effectiveDate: apt.effectiveDate,
+      expiryDate: apt.expiryDate,
+      status: effStatus,
+      issuingAuthority: apt.signatoryName,
+      issuingAuthorityTitle: apt.signatoryTitle,
+      verificationToken: effStatus !== 'REVOKED' ? apt.verificationToken : undefined,
+      revocationReason: effStatus === 'REVOKED' ? apt.revocationReason : undefined
+    };
+  };
+
   if (appItem) {
     const resolvedAvatar =
       idRecord?.photoUrl ||
@@ -1400,7 +1429,8 @@ app.get('/api/applications/verify/:refCode', (req, res) => {
       idCardIssued: isIssuedLocked,
       idCardIssuedAt: idRecord?.issuedAt || volMatch?.idCardIssuedAt || appItem.idCardIssuedAt,
       idCardPhotoUrl: idRecord?.photoUrl || volMatch?.idCardPhotoUrl || appItem.idCardPhotoUrl || resolvedAvatar,
-      idCardPhotoLocked: isPhotoLocked
+      idCardPhotoLocked: isPhotoLocked,
+      appointmentLetter: buildAppointmentSummary(appItem.referenceCode, appItem.status === 'Approved')
     });
   }
 
@@ -1427,7 +1457,8 @@ app.get('/api/applications/verify/:refCode', (req, res) => {
       idCardIssued: isIssuedLocked,
       idCardIssuedAt: volRecord?.issuedAt || volMatch.idCardIssuedAt,
       idCardPhotoUrl: volRecord?.photoUrl || volMatch.idCardPhotoUrl || resolvedAvatar,
-      idCardPhotoLocked: isPhotoLocked
+      idCardPhotoLocked: isPhotoLocked,
+      appointmentLetter: buildAppointmentSummary(canonicalCode, true)
     });
   }
 
@@ -1449,7 +1480,8 @@ app.get('/api/applications/verify/:refCode', (req, res) => {
       idCardIssued: Boolean(idRecord.locked),
       idCardIssuedAt: idRecord.issuedAt,
       idCardPhotoUrl: idRecord.photoUrl,
-      idCardPhotoLocked: Boolean(idRecord.photoLocked || idRecord.locked)
+      idCardPhotoLocked: Boolean(idRecord.photoLocked || idRecord.locked),
+      appointmentLetter: buildAppointmentSummary(idRecord.referenceCode, true)
     });
   }
 
@@ -1728,6 +1760,697 @@ app.delete('/api/id-card-records/:id', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER'
     ipAddress: getClientIp(req)
   });
   res.json({ ok: true });
+});
+
+// ----------------------------------------------------
+// OFFICIAL APPOINTMENT LETTERS, SIGNATORIES & PUBLIC VERIFICATION
+// ----------------------------------------------------
+
+function isPngBufferValid(buffer: Buffer): boolean {
+  if (!buffer || buffer.length < 24) return false;
+  return (
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  );
+}
+
+app.get(
+  '/api/admin/signatories',
+  requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'VIEWER']),
+  (req, res) => {
+    const user = (req as any).user as AuthSession;
+    const activeOnly = req.query.activeOnly === 'true';
+    const forIssuance = req.query.forIssuance === 'true';
+    const list = db.getSignatories({
+      activeOnly,
+      userRole: forIssuance ? user.role : undefined
+    });
+    res.json(list);
+  }
+);
+
+app.post(
+  '/api/admin/signatories',
+  requireAuth(['ADMIN']),
+  (req, res) => {
+    const user = (req as any).user as AuthSession;
+    const { name, title, roleType, department, active, isDefault, allowedRoles, signatureAssetFilename, stampAssetFilename } =
+      req.body || {};
+
+    if (!name || typeof name !== 'string' || !name.trim() || !title || typeof title !== 'string' || !title.trim()) {
+      return res.status(400).json({ error: 'Signatory name and official title are required.' });
+    }
+
+    const created = db.createSignatory(
+      {
+        name: name.trim(),
+        title: title.trim(),
+        roleType,
+        department,
+        active: typeof active === 'boolean' ? active : true,
+        isDefault: Boolean(isDefault),
+        allowedRoles,
+        signatureAssetFilename,
+        stampAssetFilename
+      },
+      user.name
+    );
+
+    db.logActivity({
+      userId: user.userId,
+      userName: user.name,
+      userRole: user.role,
+      action: 'SIGNATORY_CREATED',
+      entityType: 'SignatoryProfile',
+      entityId: created.id,
+      details: `Added authorized signatory ${created.name} (${created.title}).`,
+      ipAddress: getClientIp(req)
+    });
+
+    res.status(201).json(created);
+  }
+);
+
+app.put(
+  '/api/admin/signatories/:id',
+  requireAuth(['ADMIN']),
+  (req, res) => {
+    const user = (req as any).user as AuthSession;
+    const updated = db.updateSignatory(req.params.id, req.body || {}, user.name);
+    if (!updated) {
+      return res.status(404).json({ error: 'Signatory profile not found.' });
+    }
+
+    db.logActivity({
+      userId: user.userId,
+      userName: user.name,
+      userRole: user.role,
+      action: 'SIGNATORY_UPDATED',
+      entityType: 'SignatoryProfile',
+      entityId: updated.id,
+      details: `Updated signatory configuration for ${updated.name} (${updated.title}).`,
+      ipAddress: getClientIp(req)
+    });
+
+    res.json(updated);
+  }
+);
+
+app.delete(
+  '/api/admin/signatories/:id',
+  requireAuth(['ADMIN']),
+  (req, res) => {
+    const user = (req as any).user as AuthSession;
+    const target = db.getSignatoryById(req.params.id);
+    if (!target) {
+      return res.status(404).json({ error: 'Signatory profile not found.' });
+    }
+    const ok = db.deleteSignatory(req.params.id);
+    if (!ok) {
+      return res.status(400).json({ error: 'Cannot delete the last remaining signatory profile.' });
+    }
+
+    db.logActivity({
+      userId: user.userId,
+      userName: user.name,
+      userRole: user.role,
+      action: 'SIGNATORY_DELETED',
+      entityType: 'SignatoryProfile',
+      entityId: req.params.id,
+      details: `Removed signatory profile ${target.name} (${target.title}).`,
+      ipAddress: getClientIp(req)
+    });
+
+    res.json({ ok: true });
+  }
+);
+
+app.post(
+  '/api/admin/appointment-letters/upload-asset',
+  requireAuth(['ADMIN']),
+  async (req, res) => {
+    const user = (req as any).user as AuthSession;
+    const { dataUrl, kind, signatoryId } = req.body || {};
+
+    if (!['signature', 'stamp'].includes(kind)) {
+      return res.status(400).json({ error: 'Asset kind must be either "signature" or "stamp".' });
+    }
+    if (!dataUrl || typeof dataUrl !== 'string') {
+      return res.status(400).json({ error: 'PNG image dataUrl is required.' });
+    }
+
+    const match = dataUrl.match(/^data:image\/png(?:;[^;,=]+=[^;,]+)*;base64,([\s\S]+)$/i);
+    if (!match) {
+      return res.status(400).json({ error: 'Only transparent PNG images (image/png) are allowed for signatures and stamps.' });
+    }
+
+    const base64Body = match[1].replace(/\s+/g, '');
+    const buffer = Buffer.from(base64Body, 'base64');
+    if (buffer.length > 2 * 1024 * 1024) {
+      return res.status(413).json({ error: 'PNG asset exceeds maximum 2MB file size limit.' });
+    }
+    if (!isPngBufferValid(buffer)) {
+      return res.status(400).json({ error: 'Invalid PNG binary file header. Please upload a genuine PNG file.' });
+    }
+
+    const protectedDir = path.join(process.cwd(), 'data', 'protected_assets');
+    if (!fs.existsSync(protectedDir)) {
+      fs.mkdirSync(protectedDir, { recursive: true });
+    }
+
+    const filename = `sigasset_${kind}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.png`;
+    fs.writeFileSync(path.join(protectedDir, filename), buffer);
+
+    mongoSaveMedia(filename, dataUrl, 'image/png', buffer.length).catch(err => {
+      console.warn('[Storage] Background protected asset Mongo sync notice:', err?.message);
+    });
+
+    let updatedSignatory = null;
+    if (signatoryId && typeof signatoryId === 'string') {
+      updatedSignatory = db.updateSignatory(
+        signatoryId,
+        kind === 'signature'
+          ? { signatureAssetFilename: filename }
+          : { stampAssetFilename: filename },
+        user.name
+      );
+    }
+
+    db.logActivity({
+      userId: user.userId,
+      userName: user.name,
+      userRole: user.role,
+      action: 'SIGNATORY_ASSET_UPLOADED',
+      entityType: 'SignatoryAsset',
+      entityId: updatedSignatory?.id || filename,
+      details: `Uploaded protected ${kind} PNG asset (${filename})${updatedSignatory ? ` for signatory ${updatedSignatory.name}` : ''}.`,
+      ipAddress: getClientIp(req)
+    });
+
+    res.json({
+      ok: true,
+      filename,
+      kind,
+      signatory: updatedSignatory
+    });
+  }
+);
+
+app.get(
+  '/api/admin/signatories/:id/asset/:kind',
+  requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'VIEWER']),
+  async (req, res) => {
+    const { id, kind } = req.params;
+    if (!['signature', 'stamp'].includes(kind)) {
+      return res.status(400).json({ error: 'Invalid asset type.' });
+    }
+    const sig = db.getSignatoryById(id);
+    if (!sig) {
+      return res.status(404).json({ error: 'Signatory not found.' });
+    }
+    const filename = kind === 'signature' ? sig.signatureAssetFilename : sig.stampAssetFilename;
+    if (!filename) {
+      return res.status(404).json({ error: 'Asset not uploaded yet.' });
+    }
+
+    const safeName = path.basename(filename);
+    const protectedPath = path.join(process.cwd(), 'data', 'protected_assets', safeName);
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    res.setHeader('Content-Type', 'image/png');
+
+    if (fs.existsSync(protectedPath)) {
+      return res.sendFile(protectedPath);
+    }
+
+    const mediaDoc = await mongoGetMedia(safeName);
+    if (mediaDoc?.dataUrl) {
+      const m = mediaDoc.dataUrl.match(/^data:image\/png(?:;[^;,=]+=[^;,]+)*;base64,([\s\S]+)$/i);
+      if (m) {
+        const buf = Buffer.from(m[1].replace(/\s+/g, ''), 'base64');
+        try {
+          fs.mkdirSync(path.dirname(protectedPath), { recursive: true });
+          fs.writeFileSync(protectedPath, buf);
+        } catch {}
+        return res.send(buf);
+      }
+    }
+
+    return res.status(404).json({ error: 'Protected PNG asset file not found.' });
+  }
+);
+
+app.get(
+  '/api/admin/appointment-letters/eligible',
+  requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'VIEWER']),
+  (req, res) => {
+    res.json(db.getEligibleApprovedApplications());
+  }
+);
+
+app.get(
+  '/api/admin/appointment-letters',
+  requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'VIEWER']),
+  (req, res) => {
+    const { search, status, fromDate, toDate } = req.query as Record<string, string>;
+    res.json(
+      db.getAppointmentLetters({
+        search,
+        status,
+        fromDate,
+        toDate
+      })
+    );
+  }
+);
+
+app.get(
+  '/api/admin/appointment-letters/:id',
+  requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'VIEWER']),
+  (req, res) => {
+    const letter = db.getAppointmentLetterById(req.params.id);
+    if (!letter) return res.status(404).json({ error: 'Appointment letter not found.' });
+    res.json(letter);
+  }
+);
+
+app.post(
+  '/api/admin/appointment-letters',
+  requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']),
+  (req, res) => {
+    const user = (req as any).user as AuthSession;
+    const body = req.body || {};
+
+    if (!body.referenceCode && !body.applicationId && !body.volunteerId) {
+      return res.status(400).json({ error: 'Approved application referenceCode or applicationId is required.' });
+    }
+    if (!body.designation || !String(body.designation).trim()) {
+      return res.status(400).json({ error: 'Official designation is required.' });
+    }
+    if (!body.department || !String(body.department).trim()) {
+      return res.status(400).json({ error: 'Department / division is required.' });
+    }
+
+    const result = db.createAppointmentLetter({
+      ...body,
+      issuer: {
+        userId: user.userId,
+        name: user.name,
+        role: user.role
+      }
+    });
+
+    if (!('letter' in result)) {
+      return res.status(result.status).json({ error: result.error });
+    }
+
+    db.logActivity({
+      userId: user.userId,
+      userName: user.name,
+      userRole: user.role,
+      action: 'APPOINTMENT_LETTER_ISSUED',
+      entityType: 'AppointmentLetter',
+      entityId: result.letter.id,
+      details: `Issued official appointment letter ${result.letter.letterNumber} to ${result.letter.appointeeName} (${result.letter.designation}, ${result.letter.department}) signed by ${result.letter.signatoryName}.`,
+      ipAddress: getClientIp(req)
+    });
+
+    res.status(201).json(result.letter);
+  }
+);
+
+app.post(
+  '/api/admin/appointment-letters/batch-issue',
+  requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']),
+  async (req, res) => {
+    const user = (req as any).user as AuthSession;
+    const body = req.body || {};
+    const applicationIds = Array.isArray(body.applicationIds) ? body.applicationIds : [];
+    if (applicationIds.length === 0) {
+      return res.status(400).json({ error: 'Please select at least one applicant for batch issuance.' });
+    }
+
+    const defaultDesignation = String(body.designation || 'Council Youth Ambassador & Volunteer Scholar').trim();
+    const defaultDepartment = String(body.department || 'Community Leadership & Outreach').trim();
+    const defaultChapter = String(body.chapter || 'Sialkot').trim();
+    const defaultAppointmentType = body.appointmentType || 'Volunteer';
+    const defaultMembershipTier = String(body.membershipTier || 'Active Volunteer Scholar').trim();
+    const defaultTenure = String(body.tenure || '12 Months (Renewable)').trim();
+    const defaultRenewalEligibility = String(body.renewalEligibility || 'Eligible for renewal upon annual performance review').trim();
+    const defaultReportingAuthority = String(body.reportingAuthority || 'Director of Operations & Council Secretariat').trim();
+
+    const results: { success: boolean; referenceCode?: string; name?: string; letterNumber?: string; error?: string }[] = [];
+
+    for (const appId of applicationIds) {
+      const app = db.getApplicationById(appId);
+      if (!app || app.status !== 'Approved') {
+        results.push({ success: false, error: `Application ID ${appId} not found or not approved.` });
+        continue;
+      }
+      const existingLetter = db.getAppointmentLetterByRefCode(app.referenceCode);
+      if (existingLetter && db.getEffectiveAppointmentStatus(existingLetter) === 'ACTIVE') {
+        results.push({
+          success: false,
+          referenceCode: app.referenceCode,
+          name: app.fullName,
+          error: `Skipped: Active letter ${existingLetter.letterNumber} already exists for ${app.fullName} (${app.referenceCode}).`
+        });
+        continue;
+      }
+
+      const createRes = db.createAppointmentLetter({
+        applicationId: app.id,
+        referenceCode: app.referenceCode,
+        appointeeName: app.fullName,
+        appointeeEmail: app.email,
+        appointeePhone: app.phone,
+        appointeePhotoUrl: app.idCardPhotoUrl || app.avatar,
+        chapter: app.city || defaultChapter,
+        designation: defaultDesignation,
+        department: defaultDepartment,
+        appointmentType: defaultAppointmentType,
+        membershipTier: defaultMembershipTier,
+        effectiveDate: new Date().toISOString().split('T')[0],
+        tenure: defaultTenure,
+        renewalEligibility: defaultRenewalEligibility,
+        reportingAuthority: defaultReportingAuthority,
+        issuer: { userId: user.userId, name: user.name, role: user.role }
+      });
+
+      if (!('letter' in createRes)) {
+        results.push({ success: false, referenceCode: app.referenceCode, name: app.fullName, error: createRes.error });
+        continue;
+      }
+
+      const letter = createRes.letter;
+      results.push({ success: true, referenceCode: app.referenceCode, name: app.fullName, letterNumber: letter.letterNumber });
+
+      if (app.email && isValidEmailAddress(app.email)) {
+        try {
+          const settings = db.getSettings();
+          const emailConfig = db.getEmailSenderConfig();
+          const siteUrl = settings.siteUrl || getSiteBaseUrl(req) || 'https://nexgencouncil.bond';
+          const template = buildAppointmentLetterEmail({
+            appointeeName: letter.appointeeName,
+            designation: letter.designation,
+            department: letter.department,
+            chapter: letter.chapter,
+            letterNumber: letter.letterNumber,
+            referenceCode: letter.referenceCode,
+            effectiveDate: letter.effectiveDate,
+            verificationToken: letter.verificationToken,
+            letterId: letter.id,
+            siteUrl
+          });
+          await sendCouncilEmail({
+            to: app.email,
+            subject: template.subject,
+            html: template.html,
+            message: template.message,
+            buttons: template.buttons,
+            fromName: emailConfig.senderName || 'NexGen Council',
+            fromEmail: 'admin@nexgencouncil.bond',
+            replyTo: emailConfig.replyTo,
+            logoUrl: emailConfig.logoUrl,
+            siteUrl
+          });
+          db.markAppointmentEmailSent(letter.id);
+        } catch {}
+      }
+    }
+
+    db.logActivity({
+      userId: user.userId,
+      userName: user.name,
+      userRole: user.role,
+      action: 'BATCH_APPOINTMENT_LETTERS_ISSUED',
+      entityType: 'AppointmentLetter',
+      details: `Executed batch issuance for ${applicationIds.length} applicants. Results: ${results.filter(r => r.success).length} successful, ${results.filter(r => !r.success).length} skipped/failed.`,
+      ipAddress: getClientIp(req)
+    });
+
+    res.json({ ok: true, results });
+  }
+);
+
+app.patch(
+  '/api/admin/appointment-letters/:id',
+  requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']),
+  (req, res) => {
+    const user = (req as any).user as AuthSession;
+    const result = db.updateAppointmentLetter(req.params.id, req.body || {}, user.role);
+    if (!('letter' in result)) {
+      return res.status(result.status).json({ error: result.error });
+    }
+
+    db.logActivity({
+      userId: user.userId,
+      userName: user.name,
+      userRole: user.role,
+      action: 'APPOINTMENT_LETTER_UPDATED',
+      entityType: 'AppointmentLetter',
+      entityId: result.letter.id,
+      details: `Updated appointment letter ${result.letter.letterNumber} for ${result.letter.appointeeName}.`,
+      ipAddress: getClientIp(req)
+    });
+
+    res.json(result.letter);
+  }
+);
+
+app.patch(
+  '/api/admin/appointment-letters/:id/status',
+  requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']),
+  (req, res) => {
+    const user = (req as any).user as AuthSession;
+    const { status, reason } = req.body || {};
+    if (status !== 'Active' && status !== 'Revoked') {
+      return res.status(400).json({ error: 'Status must be "Active" or "Revoked".' });
+    }
+
+    const updated = db.updateAppointmentLetterStatus(
+      req.params.id,
+      status,
+      { userId: user.userId, name: user.name },
+      typeof reason === 'string' ? reason : undefined
+    );
+    if (!updated) {
+      return res.status(404).json({ error: 'Appointment letter not found.' });
+    }
+
+    db.logActivity({
+      userId: user.userId,
+      userName: user.name,
+      userRole: user.role,
+      action: status === 'Revoked' ? 'APPOINTMENT_LETTER_REVOKED' : 'APPOINTMENT_LETTER_REISSUED',
+      entityType: 'AppointmentLetter',
+      entityId: updated.id,
+      details:
+        status === 'Revoked'
+          ? `Revoked appointment letter ${updated.letterNumber} (${updated.appointeeName}). Reason: ${updated.revocationReason}`
+          : `Reissued / reactivated appointment letter ${updated.letterNumber} (${updated.appointeeName}).`,
+      ipAddress: getClientIp(req)
+    });
+
+    res.json(updated);
+  }
+);
+
+app.post(
+  '/api/admin/appointment-letters/:id/notify',
+  requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']),
+  async (req, res) => {
+    const user = (req as any).user as AuthSession;
+    const letter = db.getAppointmentLetterById(req.params.id);
+    if (!letter) {
+      return res.status(404).json({ error: 'Appointment letter not found.' });
+    }
+    if (db.getEffectiveAppointmentStatus(letter) === 'REVOKED') {
+      return res.status(403).json({ error: 'Cannot email notification for a revoked appointment letter.' });
+    }
+    const targetEmail = (req.body?.email || letter.appointeeEmail || '').trim().toLowerCase();
+    if (!targetEmail || !isValidEmailAddress(targetEmail)) {
+      return res.status(400).json({ error: 'Appointee does not have a valid registered email address.' });
+    }
+
+    const settings = db.getSettings();
+    const emailConfig = db.getEmailSenderConfig();
+    const siteUrl = settings.siteUrl || getSiteBaseUrl(req) || 'https://nexgencouncil.bond';
+
+    const template = buildAppointmentLetterEmail({
+      appointeeName: letter.appointeeName,
+      designation: letter.designation,
+      department: letter.department,
+      chapter: letter.chapter,
+      letterNumber: letter.letterNumber,
+      referenceCode: letter.referenceCode,
+      effectiveDate: letter.effectiveDate,
+      verificationToken: letter.verificationToken,
+      letterId: letter.id,
+      siteUrl
+    });
+
+    const senderEmail = 'admin@nexgencouncil.bond';
+    const senderName = emailConfig.senderName || 'NexGen Council';
+
+    const result = await sendCouncilEmail({
+      to: targetEmail,
+      subject: template.subject,
+      html: template.html,
+      message: template.message,
+      buttons: template.buttons,
+      fromName: senderName,
+      fromEmail: senderEmail,
+      replyTo: emailConfig.replyTo,
+      logoUrl: emailConfig.logoUrl,
+      siteUrl
+    });
+
+    db.addEmailLog({
+      resendId: result.data?.id,
+      fromName: senderName,
+      fromEmail: senderEmail,
+      to: [targetEmail],
+      cc: [],
+      bcc: [],
+      subject: template.subject,
+      message: template.message,
+      html: template.html,
+      buttons: template.buttons,
+      replyTo: emailConfig.replyTo,
+      logoUrl: emailConfig.logoUrl,
+      status: result.success ? 'Sent' : 'Failed',
+      error: result.error,
+      sentByUserId: user.userId,
+      sentByName: user.name
+    });
+
+    if (!result.success) {
+      return res.status(result.statusCode || 500).json({
+        error: result.error || 'Failed to dispatch appointment email.'
+      });
+    }
+
+    const updated = db.markAppointmentEmailSent(letter.id) || letter;
+    db.logActivity({
+      userId: user.userId,
+      userName: user.name,
+      userRole: user.role,
+      action: 'APPOINTMENT_LETTER_EMAILED',
+      entityType: 'AppointmentLetter',
+      entityId: letter.id,
+      details: `Dispatched official appointment email (${letter.letterNumber}) to ${targetEmail}.`,
+      ipAddress: getClientIp(req)
+    });
+
+    res.json({ ok: true, letter: updated, emailId: result.data?.id });
+  }
+);
+
+app.get('/api/appointment-letters/verify/:token', appointmentVerifyLimiter, (req, res) => {
+  const token = (req.params.token || '').trim();
+  const letter = db.getAppointmentLetterByToken(token);
+
+  if (!letter) {
+    return res.status(404).json({
+      found: false,
+      effectiveStatus: 'NOT FOUND',
+      organizationName: 'NexGen Women Empowerment & Youth Leadership Council',
+      documentType: 'Official Letter of Appointment'
+    });
+  }
+
+  const effectiveStatus = db.getEffectiveAppointmentStatus(letter);
+  return res.json({
+    found: true,
+    effectiveStatus,
+    organizationName: 'NexGen Women Empowerment & Youth Leadership Council',
+    documentType: 'Official Letter of Appointment',
+    letterId: letter.id,
+    letterNumber: letter.letterNumber,
+    referenceCode: letter.referenceCode,
+    appointeeName: letter.appointeeName,
+    designation: letter.designation,
+    department: letter.department,
+    chapter: letter.chapter,
+    appointmentType: letter.appointmentType,
+    membershipTier: letter.membershipTier,
+    issueDate: letter.issuedAt,
+    effectiveDate: letter.effectiveDate,
+    expiryDate: letter.expiryDate,
+    tenure: letter.tenure,
+    issuingAuthority: letter.signatoryName,
+    issuingAuthorityTitle: letter.signatoryTitle,
+    revokedAt: effectiveStatus === 'REVOKED' ? letter.revokedAt : undefined,
+    revocationReason: effectiveStatus === 'REVOKED' ? letter.revocationReason : undefined,
+    verificationToken: effectiveStatus !== 'REVOKED' ? letter.verificationToken : undefined
+  });
+});
+
+app.get('/api/appointment-letters/:id/pdf', async (req, res) => {
+  const letter = db.getAppointmentLetterById(req.params.id);
+  if (!letter) {
+    return res.status(404).json({ error: 'Appointment letter not found.' });
+  }
+
+  const session = getSession(req);
+  const roleNorm = normalizeRole(session?.role);
+  const isAdminViewer = Boolean(
+    session && ['SUPER_ADMIN', 'ADMIN', 'VOLUNTEER_MANAGER', 'VIEWER'].includes(roleNorm)
+  );
+
+  const providedToken = typeof req.query.token === 'string' ? req.query.token.trim() : '';
+  let tokenMatches = false;
+  if (providedToken && letter.verificationToken) {
+    const a = Buffer.from(providedToken, 'utf8');
+    const b = Buffer.from(letter.verificationToken, 'utf8');
+    tokenMatches = a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+
+  if (!isAdminViewer && !tokenMatches) {
+    return res.status(401).json({ error: 'Verification token or administrative session required to download PDF.' });
+  }
+
+  const effectiveStatus = db.getEffectiveAppointmentStatus(letter);
+  if (!isAdminViewer) {
+    if (effectiveStatus === 'REVOKED') {
+      return res.status(403).json({ error: 'This appointment letter has been revoked and PDF download is disabled.' });
+    }
+    if (letter.applicationId) {
+      const appRecord = db.getApplicationById(letter.applicationId);
+      if (appRecord && appRecord.status !== 'Approved') {
+        return res.status(403).json({ error: 'PDF access is only permitted for approved applications.' });
+      }
+    }
+  }
+
+  try {
+    const signatory = db.getSignatoryById(letter.signatoryId);
+    const settings = db.getSettings();
+    const pdfBuffer = await generateAppointmentLetterPdfBuffer({
+      letter: { ...letter, effectiveStatus },
+      signatory,
+      siteUrl: settings.siteUrl || getSiteBaseUrl(req)
+    });
+
+    db.incrementAppointmentLetterDownload(letter.id);
+
+    const dispositionType = req.query.disposition === 'inline' ? 'inline' : 'attachment';
+    const safeFileName = `NexGen-Appointment-${letter.letterNumber.replace(/[^a-zA-Z0-9_-]/g, '-')}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `${dispositionType}; filename="${safeFileName}"`);
+    res.setHeader('Content-Length', String(pdfBuffer.length));
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    return res.send(pdfBuffer);
+  } catch (err: any) {
+    console.error('[AppointmentPDF] Generation failed:', err);
+    return res.status(500).json({ error: 'Failed to generate official PDF document.' });
+  }
 });
 
 // Admin Applications endpoints
@@ -3831,7 +4554,8 @@ async function startServer() {
   const persistentUploadsDir = path.join(process.cwd(), 'data', 'uploads');
   const publicMeetingsDir = path.join(publicUploadsDir, 'meetings');
   const persistentMeetingsDir = path.join(persistentUploadsDir, 'meetings');
-  for (const dirPath of [publicUploadsDir, persistentUploadsDir, publicMeetingsDir, persistentMeetingsDir]) {
+  const protectedAssetsDir = path.join(process.cwd(), 'data', 'protected_assets');
+  for (const dirPath of [publicUploadsDir, persistentUploadsDir, publicMeetingsDir, persistentMeetingsDir, protectedAssetsDir]) {
     if (!fs.existsSync(dirPath)) {
       fs.mkdirSync(dirPath, { recursive: true });
     }
@@ -4131,7 +4855,10 @@ async function startServer() {
     if (mongoConnected) {
       await db.initFromMongo();
       console.log('[MongoDB] Schema verified and hydrated from live MongoDB.');
-      const restored = await mongoRestoreAllMediaToDisk([publicUploadsDir, persistentUploadsDir]);
+      const restored = await mongoRestoreAllMediaToDisk(
+        [publicUploadsDir, persistentUploadsDir],
+        [protectedAssetsDir]
+      );
       if (restored > 0) {
         console.log(`[Storage] Successfully restored ${restored} media assets from MongoDB to local storage.`);
       }

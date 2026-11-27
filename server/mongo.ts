@@ -155,6 +155,12 @@ export async function initMongo(targetUri?: string): Promise<boolean> {
       await dbInstance.collection('supportConversations').createIndex({ id: 1 }, { unique: true });
       await dbInstance.collection('supportConversations').createIndex({ sessionId: 1 });
       await dbInstance.collection('supportConversations').createIndex({ updatedAt: -1 });
+      await dbInstance.collection('signatories').createIndex({ id: 1 }, { unique: true });
+      await dbInstance.collection('appointmentLetters').createIndex({ id: 1 }, { unique: true });
+      await dbInstance.collection('appointmentLetters').createIndex({ letterNumber: 1 }, { unique: true });
+      await dbInstance.collection('appointmentLetters').createIndex({ verificationToken: 1 }, { unique: true });
+      await dbInstance.collection('appointmentLetters').createIndex({ referenceCode: 1 });
+      await dbInstance.collection('appointmentLetters').createIndex({ issuedAt: -1 });
     } catch (idxErr) {
       console.warn('[MongoDB] Index creation notice:', idxErr);
     }
@@ -287,6 +293,8 @@ export async function loadOrSeedMongo(fallbackData: DatabaseSchema): Promise<Dat
     const meetingParticipants = await dbInstance.collection('meeting_participants').find({}).toArray();
     const meetingMessages = await dbInstance.collection('meeting_messages').find({}).toArray();
     const meetingCaptures = await dbInstance.collection('meetingCaptures').find({}).sort({ createdAt: -1 }).toArray();
+    const signatories = await dbInstance.collection('signatories').find({}).toArray();
+    const appointmentLetters = await dbInstance.collection('appointmentLetters').find({}).sort({ issuedAt: -1 }).toArray();
 
     const settingsDoc = await dbInstance.collection('settings').findOne({ _id: 'global_settings' as any });
 
@@ -345,7 +353,9 @@ export async function loadOrSeedMongo(fallbackData: DatabaseSchema): Promise<Dat
       meetingParticipants: meetingParticipants.length > 0 ? (stripMongoId(meetingParticipants) as any) : (fallbackData.meetingParticipants || []),
       meetingMessages: meetingMessages.length > 0 ? (stripMongoId(meetingMessages) as any) : (fallbackData.meetingMessages || []),
       meetingCaptures: meetingCaptures.length > 0 ? (stripMongoId(meetingCaptures) as any) : (fallbackData.meetingCaptures || []),
-      supportConversations: stripMongoId(supportConversations) as any
+      supportConversations: stripMongoId(supportConversations) as any,
+      signatories: signatories.length > 0 ? (stripMongoId(signatories) as any) : (fallbackData.signatories || []),
+      appointmentLetters: stripMongoId(appointmentLetters) as any
     };
   } catch (err: any) {
     console.error('[MongoDB] Error loading collections from MongoDB, using fallback state:', err.message);
@@ -442,10 +452,13 @@ export async function mongoGetMedia(filename: string): Promise<{ dataUrl: string
 /**
  * Restore all media documents from MongoDB to public/uploads & data/uploads on server startup
  */
-export async function mongoRestoreAllMediaToDisk(targetDirs: string[]): Promise<number> {
+export async function mongoRestoreAllMediaToDisk(
+  targetDirs: string[],
+  protectedDirs: string[] = []
+): Promise<number> {
   if (!isMongoConnected() || !dbInstance) return 0;
   try {
-    for (const d of targetDirs) {
+    for (const d of [...targetDirs, ...protectedDirs]) {
       if (!fs.existsSync(d)) {
         fs.mkdirSync(d, { recursive: true });
       }
@@ -462,8 +475,10 @@ export async function mongoRestoreAllMediaToDisk(targetDirs: string[]): Promise<
         if (matches) {
           const cleanBase64 = matches[2].replace(/\s+/g, '');
           const buffer = Buffer.from(cleanBase64, 'base64');
-          for (const d of targetDirs) {
-            const dest = path.join(d, doc.filename);
+          const isProtectedAsset = String(doc.filename).startsWith('sigasset_');
+          const destDirs = isProtectedAsset ? protectedDirs : targetDirs;
+          for (const d of destDirs) {
+            const dest = path.join(d, path.basename(doc.filename));
             if (!fs.existsSync(dest)) {
               fs.writeFileSync(dest, buffer);
             }
@@ -515,7 +530,9 @@ export async function syncSchemaToMongo(schema: DatabaseSchema) {
       meeting_participants: schema.meetingParticipants || [],
       meeting_messages: schema.meetingMessages || [],
       meetingCaptures: schema.meetingCaptures || [],
-      supportConversations: schema.supportConversations || []
+      supportConversations: schema.supportConversations || [],
+      signatories: schema.signatories || [],
+      appointmentLetters: schema.appointmentLetters || []
     };
 
     for (const [colName, items] of Object.entries(collectionsMap)) {

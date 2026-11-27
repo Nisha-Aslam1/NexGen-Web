@@ -175,6 +175,36 @@ export const SiteFAQ: React.FC<SiteFAQProps> = ({
     }
   }, [selectedCategory, activeItems]);
 
+  useEffect(() => {
+    const openFaqById = (faqId: string) => {
+      if (!faqId) return;
+      setInternalCategory('All');
+      if (onSelectCategory) onSelectCategory('All');
+      setSearchQuery('');
+      setOpenIds(prev => (prev.includes(faqId) ? prev : [...prev, faqId]));
+    };
+
+    try {
+      const prefillId = sessionStorage.getItem('nexgen_faq_prefill_id');
+      if (prefillId) {
+        sessionStorage.removeItem('nexgen_faq_prefill_id');
+        openFaqById(prefillId);
+      }
+    } catch {
+      // ignore storage errors
+    }
+
+    const handleOpenFaqEvent = (event: Event) => {
+      const custom = event as CustomEvent<{ id?: string }>;
+      if (custom.detail?.id) {
+        openFaqById(custom.detail.id);
+      }
+    };
+
+    window.addEventListener('nexgen:open-faq', handleOpenFaqEvent);
+    return () => window.removeEventListener('nexgen:open-faq', handleOpenFaqEvent);
+  }, [onSelectCategory]);
+
   const handleCategoryChange = (cat: FaqCategory) => {
     setInternalCategory(cat);
     if (onSelectCategory) onSelectCategory(cat);

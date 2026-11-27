@@ -26,7 +26,12 @@ import {
   MeetingCapture,
   IdCardRecord,
   TicketStatus,
-  SupportTicketReply
+  SupportTicketReply,
+  SignatoryProfile,
+  AppointmentLetter,
+  AppointmentLetterStatus,
+  EffectiveAppointmentStatus,
+  AppointmentType
 } from '../src/types.ts';
 import { syncSchemaToMongo, loadOrSeedMongo, mongoUpsert, mongoDelete, mongoClearCollections, isMongoConnected } from './mongo.ts';
 
@@ -167,6 +172,8 @@ export interface DatabaseSchema {
   meetingMessages?: MeetingMessage[];
   supportConversations?: SupportConversation[];
   meetingCaptures?: MeetingCapture[];
+  signatories?: SignatoryProfile[];
+  appointmentLetters?: AppointmentLetter[];
   minValidTokenIssuedAt?: number;
 }
 
@@ -745,7 +752,9 @@ function getSeedData(): DatabaseSchema {
     meetingParticipants: [],
     meetingMessages: [],
     meetingCaptures: [],
-    supportConversations: []
+    supportConversations: [],
+    signatories: [],
+    appointmentLetters: []
   };
 }
 
@@ -760,6 +769,30 @@ class Database {
     if (!this.data.supportConversations) this.data.supportConversations = [];
     if (!this.data.meetingCaptures) this.data.meetingCaptures = [];
     if (!this.data.idCardRecords) this.data.idCardRecords = [];
+    if (!Array.isArray(this.data.signatories)) {
+      this.data.signatories = [];
+    }
+    if (this.data.signatories.length === 0) {
+      const now = new Date().toISOString();
+      this.data.signatories.push({
+        id: 'sig_exec_default',
+        name: 'Executive Director',
+        title: 'Executive Director — Council Secretariat',
+        roleType: 'Executive Director',
+        department: 'Council Secretariat',
+        hasSignatureImage: false,
+        hasStampImage: false,
+        active: true,
+        isDefault: true,
+        allowedRoles: ['SUPER_ADMIN', 'ADMIN', 'VOLUNTEER_MANAGER'],
+        createdAt: now,
+        updatedAt: now,
+        updatedBy: 'System Initialization'
+      });
+    }
+    if (!Array.isArray(this.data.appointmentLetters)) {
+      this.data.appointmentLetters = [];
+    }
     if (!Array.isArray(this.data.faqs)) {
       this.data.faqs = getDefaultSeedFaqs();
     }
@@ -2039,6 +2072,605 @@ class Database {
     this.save();
     mongoDelete('idCardRecords', id).catch(() => {});
     return true;
+  }
+
+  // --- Signatories & Protected Institutional Stamps ---
+  private normalizeSignatoryRoleList(roles: unknown): string[] {
+    const valid = ['SUPER_ADMIN', 'ADMIN', 'VOLUNTEER_MANAGER'];
+    if (!Array.isArray(roles)) return ['SUPER_ADMIN', 'ADMIN'];
+    const filtered = Array.from(
+      new Set(
+        roles
+          .map(r => String(r || '').trim().toUpperCase())
+          .filter(r => valid.includes(r))
+      )
+    );
+    if (!filtered.includes('SUPER_ADMIN')) filtered.unshift('SUPER_ADMIN');
+    return filtered;
+  }
+
+  getSignatories(options?: { activeOnly?: boolean; userRole?: string }): SignatoryProfile[] {
+    this.ensureMeetingArrays();
+    let list = [...(this.data.signatories || [])];
+    if (options?.activeOnly) {
+      list = list.filter(s => s.active);
+    }
+    if (options?.userRole) {
+      const roleNorm = options.userRole.trim().toUpperCase();
+      if (roleNorm !== 'SUPER_ADMIN') {
+        list = list.filter(s => Array.isArray(s.allowedRoles) && s.allowedRoles.includes(roleNorm));
+      }
+    }
+    return list.sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name));
+  }
+
+  getSignatoryById(id?: string): SignatoryProfile | null {
+    this.ensureMeetingArrays();
+    if (!id) return null;
+    return (this.data.signatories || []).find(s => s.id === id) || null;
+  }
+
+  createSignatory(
+    input: Partial<SignatoryProfile> & { name: string; title: string },
+    actorName: string
+  ): SignatoryProfile {
+    this.ensureMeetingArrays();
+    const now = new Date().toISOString();
+    const validRoleTypes: SignatoryProfile['roleType'][] = [
+      'Executive Director',
+      'President',
+      'Director',
+      'Authorized Signatory'
+    ];
+    const roleType = validRoleTypes.includes(input.roleType as any)
+      ? (input.roleType as SignatoryProfile['roleType'])
+      : 'Authorized Signatory';
+
+    const shouldBeDefault = Boolean(input.isDefault) || this.data.signatories!.length === 0;
+    if (shouldBeDefault) {
+      for (const s of this.data.signatories!) {
+        if (s.isDefault) {
+          s.isDefault = false;
+          mongoUpsert('signatories', s.id, s).catch(() => {});
+        }
+      }
+    }
+
+    const sig: SignatoryProfile = {
+      id: `sig_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      name: input.name.trim(),
+      title: input.title.trim(),
+      roleType,
+      department: input.department?.trim() || 'Council Secretariat',
+      signatureAssetFilename: input.signatureAssetFilename?.trim() || undefined,
+      stampAssetFilename: input.stampAssetFilename?.trim() || undefined,
+      hasSignatureImage: Boolean(input.signatureAssetFilename?.trim()),
+      hasStampImage: Boolean(input.stampAssetFilename?.trim()),
+      active: input.active !== false,
+      isDefault: shouldBeDefault,
+      allowedRoles: this.normalizeSignatoryRoleList(input.allowedRoles),
+      createdAt: now,
+      updatedAt: now,
+      updatedBy: actorName
+    };
+
+    this.data.signatories!.unshift(sig);
+    this.save();
+    mongoUpsert('signatories', sig.id, sig).catch(() => {});
+    return sig;
+  }
+
+  updateSignatory(
+    id: string,
+    updates: Partial<SignatoryProfile>,
+    actorName: string
+  ): SignatoryProfile | null {
+    this.ensureMeetingArrays();
+    const idx = (this.data.signatories || []).findIndex(s => s.id === id);
+    if (idx === -1) return null;
+    const current = this.data.signatories![idx];
+    const now = new Date().toISOString();
+
+    const validRoleTypes: SignatoryProfile['roleType'][] = [
+      'Executive Director',
+      'President',
+      'Director',
+      'Authorized Signatory'
+    ];
+
+    if (updates.isDefault === true) {
+      for (const s of this.data.signatories!) {
+        if (s.id !== id && s.isDefault) {
+          s.isDefault = false;
+          mongoUpsert('signatories', s.id, s).catch(() => {});
+        }
+      }
+    }
+
+    const nextSigFilename =
+      updates.signatureAssetFilename !== undefined
+        ? updates.signatureAssetFilename?.trim() || undefined
+        : current.signatureAssetFilename;
+    const nextStampFilename =
+      updates.stampAssetFilename !== undefined
+        ? updates.stampAssetFilename?.trim() || undefined
+        : current.stampAssetFilename;
+
+    const updated: SignatoryProfile = {
+      ...current,
+      name: typeof updates.name === 'string' && updates.name.trim() ? updates.name.trim() : current.name,
+      title: typeof updates.title === 'string' && updates.title.trim() ? updates.title.trim() : current.title,
+      roleType: validRoleTypes.includes(updates.roleType as any)
+        ? (updates.roleType as SignatoryProfile['roleType'])
+        : current.roleType,
+      department:
+        typeof updates.department === 'string'
+          ? updates.department.trim() || 'Council Secretariat'
+          : current.department,
+      signatureAssetFilename: nextSigFilename,
+      stampAssetFilename: nextStampFilename,
+      hasSignatureImage: Boolean(nextSigFilename),
+      hasStampImage: Boolean(nextStampFilename),
+      active: typeof updates.active === 'boolean' ? updates.active : current.active,
+      isDefault: typeof updates.isDefault === 'boolean' ? updates.isDefault : current.isDefault,
+      allowedRoles:
+        updates.allowedRoles !== undefined
+          ? this.normalizeSignatoryRoleList(updates.allowedRoles)
+          : current.allowedRoles,
+      updatedAt: now,
+      updatedBy: actorName
+    };
+
+    this.data.signatories![idx] = updated;
+    this.save();
+    mongoUpsert('signatories', updated.id, updated).catch(() => {});
+    return updated;
+  }
+
+  deleteSignatory(id: string): boolean {
+    this.ensureMeetingArrays();
+    const list = this.data.signatories || [];
+    if (list.length <= 1) return false;
+    const target = list.find(s => s.id === id);
+    if (!target) return false;
+
+    this.data.signatories = list.filter(s => s.id !== id);
+    if (target.isDefault && this.data.signatories.length > 0) {
+      this.data.signatories[0].isDefault = true;
+      mongoUpsert('signatories', this.data.signatories[0].id, this.data.signatories[0]).catch(() => {});
+    }
+    this.save();
+    mongoDelete('signatories', id).catch(() => {});
+    return true;
+  }
+
+  // --- Official Appointment Letters & QR Verification ---
+  getEffectiveAppointmentStatus(letter: AppointmentLetter): EffectiveAppointmentStatus {
+    if (letter.status === 'Revoked') return 'REVOKED';
+    if (letter.expiryDate && letter.expiryDate.trim()) {
+      const expTime = new Date(`${letter.expiryDate.trim()}T23:59:59Z`).getTime();
+      if (!Number.isNaN(expTime) && Date.now() > expTime) {
+        return 'EXPIRED';
+      }
+    }
+    return 'ACTIVE';
+  }
+
+  private hydrateAppointmentLetter(letter: AppointmentLetter): AppointmentLetter {
+    return {
+      ...letter,
+      effectiveStatus: this.getEffectiveAppointmentStatus(letter)
+    };
+  }
+
+  private generateUniqueAppointmentNumber(): string {
+    const year = new Date().getFullYear();
+    const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+    for (let attempt = 0; attempt < 25; attempt++) {
+      let suffix = '';
+      for (let i = 0; i < 4; i++) {
+        suffix += chars[crypto.randomInt(0, chars.length)];
+      }
+      const candidate = `NXG-APT-${year}-${suffix}`;
+      if (!(this.data.appointmentLetters || []).some(l => l.letterNumber.toUpperCase() === candidate)) {
+        return candidate;
+      }
+    }
+    return `NXG-APT-${year}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
+  }
+
+  getAppointmentLetters(filters?: {
+    search?: string;
+    status?: string;
+    fromDate?: string;
+    toDate?: string;
+  }): AppointmentLetter[] {
+    this.ensureMeetingArrays();
+    let list = (this.data.appointmentLetters || []).map(l => this.hydrateAppointmentLetter(l));
+
+    if (filters?.status && filters.status !== 'All') {
+      const st = filters.status.toUpperCase();
+      list = list.filter(l => l.effectiveStatus === st);
+    }
+
+    if (filters?.fromDate) {
+      const fromTs = new Date(filters.fromDate).getTime();
+      if (!Number.isNaN(fromTs)) {
+        list = list.filter(l => new Date(l.issuedAt).getTime() >= fromTs);
+      }
+    }
+
+    if (filters?.toDate) {
+      const toTs = new Date(`${filters.toDate}T23:59:59Z`).getTime();
+      if (!Number.isNaN(toTs)) {
+        list = list.filter(l => new Date(l.issuedAt).getTime() <= toTs);
+      }
+    }
+
+    if (filters?.search && filters.search.trim()) {
+      const q = filters.search.trim().toLowerCase();
+      list = list.filter(
+        l =>
+          l.letterNumber.toLowerCase().includes(q) ||
+          l.referenceCode.toLowerCase().includes(q) ||
+          l.appointeeName.toLowerCase().includes(q) ||
+          l.designation.toLowerCase().includes(q) ||
+          l.department.toLowerCase().includes(q) ||
+          l.chapter.toLowerCase().includes(q) ||
+          l.signatoryName.toLowerCase().includes(q)
+      );
+    }
+
+    return list.sort((a, b) => new Date(b.issuedAt).getTime() - new Date(a.issuedAt).getTime());
+  }
+
+  getAppointmentLetterById(id: string): AppointmentLetter | null {
+    this.ensureMeetingArrays();
+    const found = (this.data.appointmentLetters || []).find(
+      l => l.id === id || l.letterNumber.toUpperCase() === id.trim().toUpperCase()
+    );
+    return found ? this.hydrateAppointmentLetter(found) : null;
+  }
+
+  getAppointmentLetterByToken(token: string): AppointmentLetter | null {
+    this.ensureMeetingArrays();
+    const clean = (token || '').trim();
+    if (!clean || clean.length < 16) return null;
+    const tokenBuf = Buffer.from(clean, 'utf8');
+    const found = (this.data.appointmentLetters || []).find(l => {
+      if (!l.verificationToken) return false;
+      const storedBuf = Buffer.from(l.verificationToken, 'utf8');
+      return storedBuf.length === tokenBuf.length && crypto.timingSafeEqual(storedBuf, tokenBuf);
+    });
+    return found ? this.hydrateAppointmentLetter(found) : null;
+  }
+
+  getAppointmentLetterByRefCode(refCode: string): AppointmentLetter | null {
+    this.ensureMeetingArrays();
+    const { appItem, volMatch, canonicalCode } = this.resolveHolderByRefCode(refCode);
+    const cleanUpper = (refCode || '').trim().toUpperCase();
+    const matches = (this.data.appointmentLetters || []).filter(l => {
+      return (
+        l.referenceCode.toUpperCase() === cleanUpper ||
+        l.referenceCode.toUpperCase() === canonicalCode.toUpperCase() ||
+        l.letterNumber.toUpperCase() === cleanUpper ||
+        Boolean(appItem && l.applicationId === appItem.id) ||
+        Boolean(volMatch && l.volunteerId === volMatch.id)
+      );
+    });
+    if (matches.length === 0) return null;
+    const hydrated = matches.map(m => this.hydrateAppointmentLetter(m));
+    hydrated.sort((a, b) => new Date(b.issuedAt).getTime() - new Date(a.issuedAt).getTime());
+    return hydrated.find(m => m.effectiveStatus === 'ACTIVE') || hydrated[0];
+  }
+
+  getEligibleApprovedApplications(): Array<{
+    applicationId: string;
+    volunteerId?: string;
+    referenceCode: string;
+    fullName: string;
+    email: string;
+    phone: string;
+    city: string;
+    preferredRole: string;
+    photoUrl?: string;
+    approvedAt: string;
+    hasActiveLetter: boolean;
+    latestLetterId?: string;
+    latestLetterNumber?: string;
+    latestLetterStatus?: EffectiveAppointmentStatus;
+  }> {
+    this.ensureMeetingArrays();
+    const approvedApps = this.data.applications.filter(a => a.status === 'Approved');
+    return approvedApps.map(app => {
+      const vol = this.data.volunteers.find(
+        v =>
+          v.applicationId === app.id ||
+          (this.normalizeEmailId(v.email) &&
+            this.normalizeEmailId(v.email) === this.normalizeEmailId(app.email))
+      );
+      const letter = this.getAppointmentLetterByRefCode(app.referenceCode);
+      return {
+        applicationId: app.id,
+        volunteerId: vol?.id,
+        referenceCode: app.referenceCode,
+        fullName: vol?.fullName || app.fullName,
+        email: app.email,
+        phone: vol?.phone || app.phone,
+        city: vol?.city || app.city,
+        preferredRole: vol?.assignedRole || app.preferredRole || 'Council Volunteer',
+        photoUrl: vol?.idCardPhotoUrl || app.idCardPhotoUrl || vol?.avatar || app.avatar,
+        approvedAt: app.reviewedAt || app.updatedAt || app.createdAt,
+        hasActiveLetter: Boolean(letter && letter.effectiveStatus === 'ACTIVE'),
+        latestLetterId: letter?.id,
+        latestLetterNumber: letter?.letterNumber,
+        latestLetterStatus: letter?.effectiveStatus
+      };
+    });
+  }
+
+  createAppointmentLetter(params: {
+    applicationId?: string;
+    volunteerId?: string;
+    referenceCode: string;
+    appointeeName?: string;
+    appointeeEmail?: string;
+    appointeePhone?: string;
+    appointeePhotoUrl?: string;
+    country?: string;
+    designation: string;
+    department: string;
+    chapter: string;
+    appointmentType: AppointmentType;
+    membershipTier: string;
+    effectiveDate: string;
+    expiryDate?: string;
+    tenure: string;
+    renewalEligibility: string;
+    reportingAuthority: string;
+    customNotes?: string;
+    signatoryId?: string;
+    issuer: { userId: string; name: string; role: string };
+  }): { ok: true; letter: AppointmentLetter } | { ok: false; error: string; status: number } {
+    this.ensureMeetingArrays();
+    const { appItem, volMatch, canonicalCode } = this.resolveHolderByRefCode(
+      params.referenceCode || params.applicationId || params.volunteerId || ''
+    );
+
+    const targetApp =
+      (params.applicationId ? this.getApplicationById(params.applicationId) : null) || appItem;
+    const targetVol =
+      (params.volunteerId ? this.data.volunteers.find(v => v.id === params.volunteerId) : null) ||
+      volMatch;
+
+    if (!targetApp && !targetVol) {
+      return { ok: false, status: 404, error: 'Referenced approved application or volunteer was not found.' };
+    }
+    if (targetApp && targetApp.status !== 'Approved') {
+      return {
+        ok: false,
+        status: 403,
+        error: 'Appointment letters may only be generated for Approved applications.'
+      };
+    }
+
+    // Resolve signatory & permission
+    const allSignatories = this.getSignatories({ activeOnly: false });
+    const chosenSignatory =
+      (params.signatoryId ? allSignatories.find(s => s.id === params.signatoryId) : null) ||
+      allSignatories.find(s => s.active && s.isDefault) ||
+      allSignatories.find(s => s.active);
+
+    if (!chosenSignatory) {
+      return { ok: false, status: 400, error: 'No active authorized signatory configured.' };
+    }
+    if (!chosenSignatory.active) {
+      return { ok: false, status: 400, error: 'Selected signatory is currently inactive.' };
+    }
+    const issuerRoleNorm = params.issuer.role.trim().toUpperCase();
+    if (
+      issuerRoleNorm !== 'SUPER_ADMIN' &&
+      Array.isArray(chosenSignatory.allowedRoles) &&
+      !chosenSignatory.allowedRoles.includes(issuerRoleNorm)
+    ) {
+      return {
+        ok: false,
+        status: 403,
+        error: `Your role (${params.issuer.role}) does not have permission to issue letters under signatory ${chosenSignatory.name}.`
+      };
+    }
+
+    const nowIso = new Date().toISOString();
+    const letter: AppointmentLetter = {
+      id: `apt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      applicationId: targetApp?.id,
+      volunteerId: targetVol?.id,
+      referenceCode: targetApp?.referenceCode || canonicalCode || params.referenceCode.trim().toUpperCase(),
+      letterNumber: this.generateUniqueAppointmentNumber(),
+      verificationToken: crypto.randomBytes(24).toString('hex'),
+      appointeeName: (params.appointeeName || targetVol?.fullName || targetApp?.fullName || 'Council Member').trim(),
+      appointeeEmail: (params.appointeeEmail || targetVol?.email || targetApp?.email || '').trim().toLowerCase(),
+      appointeePhone: (params.appointeePhone || targetVol?.phone || targetApp?.phone || '').trim(),
+      appointeePhotoUrl:
+        params.appointeePhotoUrl ||
+        targetVol?.idCardPhotoUrl ||
+        targetApp?.idCardPhotoUrl ||
+        targetVol?.avatar ||
+        targetApp?.avatar,
+      country: (params.country || 'Pakistan').trim(),
+      designation: params.designation.trim(),
+      department: params.department.trim(),
+      chapter: (params.chapter || targetVol?.city || targetApp?.city || 'Sialkot').trim(),
+      appointmentType: params.appointmentType || 'Volunteer',
+      membershipTier: (params.membershipTier || targetVol?.membershipTier || 'Active Volunteer Scholar').trim(),
+      effectiveDate: (params.effectiveDate || nowIso.split('T')[0]).trim(),
+      expiryDate: params.expiryDate?.trim() || undefined,
+      tenure: (params.tenure || '12 Months (Renewable)').trim(),
+      renewalEligibility: (params.renewalEligibility || 'Eligible upon satisfactory performance review').trim(),
+      reportingAuthority: (params.reportingAuthority || 'Director of Operations & Council Secretariat').trim(),
+      customNotes: params.customNotes?.trim() || '',
+      signatoryId: chosenSignatory.id,
+      signatoryName: chosenSignatory.name,
+      signatoryTitle: chosenSignatory.title,
+      signatoryRoleType: chosenSignatory.roleType,
+      issuedBy: params.issuer.userId,
+      issuedByName: params.issuer.name,
+      issuedByRole: params.issuer.role,
+      issuedAt: nowIso,
+      updatedAt: nowIso,
+      downloadCount: 0,
+      status: 'Active',
+      emailNotificationCount: 0
+    };
+
+    this.data.appointmentLetters!.unshift(letter);
+    this.save();
+    mongoUpsert('appointmentLetters', letter.id, letter).catch(() => {});
+    return { ok: true, letter: this.hydrateAppointmentLetter(letter) };
+  }
+
+  updateAppointmentLetter(
+    id: string,
+    updates: Partial<AppointmentLetter>,
+    editorRole: string
+  ): { ok: true; letter: AppointmentLetter } | { ok: false; status: number; error: string } {
+    this.ensureMeetingArrays();
+    const idx = (this.data.appointmentLetters || []).findIndex(l => l.id === id);
+    if (idx === -1) return { ok: false, status: 404, error: 'Appointment letter not found.' };
+    const current = this.data.appointmentLetters![idx];
+
+    let nextSignatoryName = current.signatoryName;
+    let nextSignatoryTitle = current.signatoryTitle;
+    let nextSignatoryRoleType = current.signatoryRoleType;
+    let nextSignatoryId = current.signatoryId;
+
+    if (updates.signatoryId && updates.signatoryId !== current.signatoryId) {
+      const sig = this.getSignatoryById(updates.signatoryId);
+      if (!sig || !sig.active) {
+        return { ok: false, status: 400, error: 'Selected signatory is invalid or inactive.' };
+      }
+      const roleNorm = editorRole.trim().toUpperCase();
+      if (roleNorm !== 'SUPER_ADMIN' && Array.isArray(sig.allowedRoles) && !sig.allowedRoles.includes(roleNorm)) {
+        return { ok: false, status: 403, error: `Role ${editorRole} is not authorized to assign signatory ${sig.name}.` };
+      }
+      nextSignatoryId = sig.id;
+      nextSignatoryName = sig.name;
+      nextSignatoryTitle = sig.title;
+      nextSignatoryRoleType = sig.roleType;
+    }
+
+    // Strict immutability protection: never allow client mutation of letterNumber, verificationToken, issuedBy*, issuedAt
+    const updated: AppointmentLetter = {
+      ...current,
+      appointeeName:
+        typeof updates.appointeeName === 'string' && updates.appointeeName.trim()
+          ? updates.appointeeName.trim()
+          : current.appointeeName,
+      country: typeof updates.country === 'string' ? updates.country.trim() || current.country : current.country,
+      designation:
+        typeof updates.designation === 'string' && updates.designation.trim()
+          ? updates.designation.trim()
+          : current.designation,
+      department:
+        typeof updates.department === 'string' && updates.department.trim()
+          ? updates.department.trim()
+          : current.department,
+      chapter:
+        typeof updates.chapter === 'string' && updates.chapter.trim()
+          ? updates.chapter.trim()
+          : current.chapter,
+      appointmentType: updates.appointmentType || current.appointmentType,
+      membershipTier:
+        typeof updates.membershipTier === 'string' && updates.membershipTier.trim()
+          ? updates.membershipTier.trim()
+          : current.membershipTier,
+      effectiveDate:
+        typeof updates.effectiveDate === 'string' && updates.effectiveDate.trim()
+          ? updates.effectiveDate.trim()
+          : current.effectiveDate,
+      expiryDate: updates.expiryDate !== undefined ? updates.expiryDate?.trim() || undefined : current.expiryDate,
+      tenure:
+        typeof updates.tenure === 'string' && updates.tenure.trim() ? updates.tenure.trim() : current.tenure,
+      renewalEligibility:
+        typeof updates.renewalEligibility === 'string' && updates.renewalEligibility.trim()
+          ? updates.renewalEligibility.trim()
+          : current.renewalEligibility,
+      reportingAuthority:
+        typeof updates.reportingAuthority === 'string' && updates.reportingAuthority.trim()
+          ? updates.reportingAuthority.trim()
+          : current.reportingAuthority,
+      customNotes: updates.customNotes !== undefined ? updates.customNotes.trim() : current.customNotes,
+      signatoryId: nextSignatoryId,
+      signatoryName: nextSignatoryName,
+      signatoryTitle: nextSignatoryTitle,
+      signatoryRoleType: nextSignatoryRoleType,
+      updatedAt: new Date().toISOString()
+    };
+
+    this.data.appointmentLetters![idx] = updated;
+    this.save();
+    mongoUpsert('appointmentLetters', updated.id, updated).catch(() => {});
+    return { ok: true, letter: this.hydrateAppointmentLetter(updated) };
+  }
+
+  updateAppointmentLetterStatus(
+    id: string,
+    status: AppointmentLetterStatus,
+    actor: { userId: string; name: string },
+    reason?: string
+  ): AppointmentLetter | null {
+    this.ensureMeetingArrays();
+    const idx = (this.data.appointmentLetters || []).findIndex(l => l.id === id);
+    if (idx === -1) return null;
+    const current = this.data.appointmentLetters![idx];
+    const nowIso = new Date().toISOString();
+
+    const updated: AppointmentLetter = {
+      ...current,
+      status,
+      updatedAt: nowIso,
+      ...(status === 'Revoked'
+        ? {
+            revokedBy: actor.userId,
+            revokedByName: actor.name,
+            revokedAt: nowIso,
+            revocationReason: (reason || 'Revoked by authorized Secretariat administrator.').trim()
+          }
+        : {
+            revokedBy: undefined,
+            revokedByName: undefined,
+            revokedAt: undefined,
+            revocationReason: undefined
+          })
+    };
+
+    this.data.appointmentLetters![idx] = updated;
+    this.save();
+    mongoUpsert('appointmentLetters', updated.id, updated).catch(() => {});
+    return this.hydrateAppointmentLetter(updated);
+  }
+
+  incrementAppointmentLetterDownload(id: string): AppointmentLetter | null {
+    this.ensureMeetingArrays();
+    const idx = (this.data.appointmentLetters || []).findIndex(l => l.id === id);
+    if (idx === -1) return null;
+    const current = this.data.appointmentLetters![idx];
+    current.downloadCount = (current.downloadCount || 0) + 1;
+    this.save();
+    mongoUpsert('appointmentLetters', current.id, current).catch(() => {});
+    return this.hydrateAppointmentLetter(current);
+  }
+
+  markAppointmentEmailSent(id: string): AppointmentLetter | null {
+    this.ensureMeetingArrays();
+    const idx = (this.data.appointmentLetters || []).findIndex(l => l.id === id);
+    if (idx === -1) return null;
+    const current = this.data.appointmentLetters![idx];
+    current.lastEmailSentAt = new Date().toISOString();
+    current.emailNotificationCount = (current.emailNotificationCount || 0) + 1;
+    this.save();
+    mongoUpsert('appointmentLetters', current.id, current).catch(() => {});
+    return this.hydrateAppointmentLetter(current);
   }
 
   // --- Programs ---

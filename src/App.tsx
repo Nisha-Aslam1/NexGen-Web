@@ -45,6 +45,7 @@ const AdminAnalytics = lazy(() => import('./components/admin/AdminAnalytics.tsx'
 const AdminMeetings = lazy(() => import('./components/admin/AdminMeetings.tsx').then(m => ({ default: m.AdminMeetings })));
 const AdminEmailComposer = lazy(() => import('./components/admin/AdminEmailComposer.tsx').then(m => ({ default: m.AdminEmailComposer })));
 const AdminIdCards = lazy(() => import('./components/admin/AdminIdCards.tsx').then(m => ({ default: m.AdminIdCards })));
+const AdminAppointmentLetters = lazy(() => import('./components/admin/AdminAppointmentLetters.tsx').then(m => ({ default: m.AdminAppointmentLetters })));
 const MeetingRoomWrapper = lazy(() => import('./components/meetings/MeetingRoomWrapper.tsx').then(m => ({ default: m.MeetingRoomWrapper })));
 
 const AppContent: React.FC = () => {
@@ -138,6 +139,7 @@ const AppContent: React.FC = () => {
               {adminTab === 'applications' && <AdminApplications />}
               {adminTab === 'volunteers' && <AdminVolunteers />}
               {adminTab === 'id-cards' && <AdminIdCards />}
+              {adminTab === 'appointment-letters' && <AdminAppointmentLetters />}
               {adminTab === 'programs' && <AdminPrograms />}
               {adminTab === 'events' && <AdminEvents />}
               {adminTab === 'news' && <AdminNews />}

@@ -1055,3 +1055,122 @@ export function buildVolunteerApprovalEmail(opts: VolunteerApprovalEmailOptions)
   };
 }
 
+export interface AppointmentLetterEmailOptions {
+  appointeeName: string;
+  designation: string;
+  department: string;
+  chapter: string;
+  letterNumber: string;
+  referenceCode: string;
+  effectiveDate: string;
+  verificationToken: string;
+  letterId: string;
+  siteUrl?: string;
+}
+
+export function buildAppointmentLetterEmail(opts: AppointmentLetterEmailOptions): {
+  subject: string;
+  html: string;
+  message: string;
+  buttons: EmailButton[];
+} {
+  const rawName = String(opts.appointeeName || 'Appointee').trim() || 'Appointee';
+  const safeName = escapeHtml(rawName);
+  const safeDesignation = escapeHtml(String(opts.designation || 'Council Member').trim());
+  const safeDepartment = escapeHtml(String(opts.department || 'General Operations').trim());
+  const safeChapter = escapeHtml(String(opts.chapter || 'National Secretariat').trim());
+  const safeLetterNumber = escapeHtml(String(opts.letterNumber || '').trim());
+  const safeRefCode = escapeHtml(String(opts.referenceCode || '').trim());
+  const safeEffectiveDate = escapeHtml(String(opts.effectiveDate || '').trim());
+
+  let base = String(opts.siteUrl || 'https://nexgencouncil.bond').trim().replace(/\/+$/, '');
+  if (!base || /localhost|127\.0\.0\.1/i.test(base)) {
+    base = 'https://nexgencouncil.bond';
+  }
+
+  const verifyUrl = `${base}/track?code=${encodeURIComponent(opts.referenceCode)}&token=${encodeURIComponent(
+    opts.verificationToken
+  )}`;
+  const pdfUrl = `${base}/api/appointment-letters/${encodeURIComponent(
+    opts.letterId
+  )}/pdf?token=${encodeURIComponent(opts.verificationToken)}`;
+
+  const subject = 'Official Appointment Letter — NexGen Council';
+
+  const buttons: EmailButton[] = [
+    {
+      id: 'download_appointment_pdf',
+      label: 'Download Verified Appointment PDF',
+      url: pdfUrl,
+      style: 'amber',
+      align: 'center'
+    },
+    {
+      id: 'verify_appointment_portal',
+      label: 'Verify Authenticity Online',
+      url: verifyUrl,
+      style: 'primary',
+      align: 'center'
+    }
+  ];
+
+  const html = `
+    <p style="margin: 0 0 16px 0; font-size: 16px; color: #ffffff; font-weight: 700;">
+      Dear ${safeName},
+    </p>
+    <p style="margin: 0 0 16px 0; color: #e2e8f0; font-size: 15px; line-height: 1.65;">
+      The Council Secretariat of <strong style="color: #fbbf24;">NexGen Women Empowerment &amp; Youth Leadership Council</strong>
+      is pleased to issue your official <strong style="color: #34d399;">Letter of Appointment</strong>.
+    </p>
+
+    <div style="margin: 18px 0; padding: 16px 18px; background-color: #020617; border: 1px solid #334155; border-left: 4px solid #f59e0b; border-radius: 10px;">
+      <div style="font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #fbbf24; margin-bottom: 10px;">
+        Official Appointment Summary
+      </div>
+      <div style="font-size: 14px; color: #f8fafc; line-height: 1.75;">
+        <div><strong>Letter Number:</strong> ${safeLetterNumber}</div>
+        <div><strong>Reference Code:</strong> ${safeRefCode}</div>
+        <div><strong>Appointed Designation:</strong> ${safeDesignation}</div>
+        <div><strong>Department / Division:</strong> ${safeDepartment}</div>
+        <div><strong>Assigned Chapter:</strong> ${safeChapter}</div>
+        <div><strong>Effective Date:</strong> ${safeEffectiveDate}</div>
+      </div>
+    </div>
+
+    <p style="margin: 16px 0 10px 0; color: #e2e8f0; font-size: 14px; line-height: 1.65;">
+      Use the buttons below to download your A4 Official Appointment Letter PDF or verify its authenticity at any time on our Secretariat portal.
+    </p>
+
+    <div style="margin: 16px 0; padding: 12px 14px; background-color: #1e1b4b; border: 1px solid #312e81; border-radius: 8px; font-size: 13px; color: #e0e7ff;">
+      <strong>Security &amp; Validity Notice:</strong> Your secure verification link and direct PDF download token are valid for <strong>3 Days</strong> from the date of issuance for your initial secure download.
+    </div>
+
+    <p style="margin: 18px 0 0 0; color: #cbd5e1; font-size: 14px; line-height: 1.6;">
+      With institutional regards,<br />
+      <strong style="color: #ffffff;">Council Secretariat &amp; Executive Directorate</strong><br />
+      <span style="color: #94a3b8;">NexGen Women Empowerment &amp; Youth Leadership Council — Sialkot, Pakistan</span>
+    </p>
+  `.trim();
+
+  const message = [
+    `Dear ${rawName},`,
+    '',
+    'The Council Secretariat of NexGen Women Empowerment & Youth Leadership Council is pleased to issue your Official Letter of Appointment.',
+    '',
+    'Appointment Summary:',
+    `- Letter Number: ${opts.letterNumber}`,
+    `- Reference Code: ${opts.referenceCode}`,
+    `- Designation: ${opts.designation}`,
+    `- Department: ${opts.department}`,
+    `- Chapter: ${opts.chapter}`,
+    `- Effective Date: ${opts.effectiveDate}`,
+    '',
+    `Download PDF: ${pdfUrl}`,
+    `Verify Online: ${verifyUrl}`,
+    '',
+    'Council Secretariat, NexGen Women Empowerment & Youth Leadership Council'
+  ].join('\n');
+
+  return { subject, html, message, buttons };
+}
+

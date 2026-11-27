@@ -6,10 +6,12 @@ import {
   Award,
   Trash2,
   Edit2,
-  Camera
+  Camera,
+  ScrollText
 } from 'lucide-react';
-import { Volunteer } from '../../types.ts';
+import { Volunteer, AppointmentLetter } from '../../types.ts';
 import { VolunteerIdCardModal } from './VolunteerIdCardModal.tsx';
+import { AppointmentLetterModal, AppointmentApplicantSeed } from './AppointmentLetterModal.tsx';
 
 export const AdminVolunteers: React.FC = () => {
   const { addToast } = useApp();
@@ -20,6 +22,9 @@ export const AdminVolunteers: React.FC = () => {
   const [editingVolunteer, setEditingVolunteer] = useState<Volunteer | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<Volunteer | null>(null);
   const [viewingIdCard, setViewingIdCard] = useState<Volunteer | null>(null);
+  const [appointmentSeed, setAppointmentSeed] = useState<AppointmentApplicantSeed | null>(null);
+  const [existingAppointmentLetter, setExistingAppointmentLetter] = useState<AppointmentLetter | null>(null);
+  const [openingLetterVolId, setOpeningLetterVolId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
@@ -109,6 +114,47 @@ export const AdminVolunteers: React.FC = () => {
     } catch {
       // Silently allow local preview even if offline
     }
+  };
+
+  const openAppointmentLetterForVolunteer = async (vol: Volunteer) => {
+    setOpeningLetterVolId(vol.id);
+    let foundLetter: AppointmentLetter | null = null;
+    try {
+      const searchQuery = vol.referenceCode || vol.email || vol.fullName;
+      const res = await authFetch(
+        `/api/admin/appointment-letters?search=${encodeURIComponent(searchQuery)}`
+      );
+      if (res.ok) {
+        const list = await res.json();
+        if (Array.isArray(list)) {
+          foundLetter =
+            list.find(
+              (item: AppointmentLetter) =>
+                item.volunteerId === vol.id ||
+                (vol.referenceCode &&
+                  item.referenceCode?.toUpperCase() === vol.referenceCode.toUpperCase()) ||
+                (vol.email && item.appointeeEmail?.toLowerCase() === vol.email.toLowerCase())
+            ) || null;
+        }
+      }
+    } catch {
+      // Fallback to draft seed
+    } finally {
+      setOpeningLetterVolId(null);
+    }
+
+    setExistingAppointmentLetter(foundLetter);
+    setAppointmentSeed({
+      volunteerId: vol.id,
+      referenceCode: vol.referenceCode || vol.id,
+      fullName: vol.fullName,
+      email: vol.email,
+      phone: vol.phone,
+      city: vol.city,
+      preferredRole: vol.assignedRole,
+      membershipTier: vol.membershipTier,
+      photoUrl: vol.idCardPhotoUrl || vol.avatar
+    });
   };
 
   const confirmDeleteVolunteer = async () => {
@@ -280,6 +326,15 @@ export const AdminVolunteers: React.FC = () => {
                     <td className="py-3.5 px-4 text-right">
                       <div className="flex items-center justify-end gap-1">
                         <button
+                          onClick={() => openAppointmentLetterForVolunteer(vol)}
+                          disabled={openingLetterVolId === vol.id}
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-900 hover:bg-indigo-50 transition-colors cursor-pointer disabled:opacity-50"
+                          title="Generate or View Official Appointment Letter"
+                          aria-label={`Appointment Letter for ${vol.fullName}`}
+                        >
+                          <ScrollText className="w-4 h-4 text-indigo-700" />
+                        </button>
+                        <button
                           onClick={() => setViewingIdCard(vol)}
                           className="p-1.5 rounded-lg text-slate-500 hover:text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"
                           title="View Official Digital ID Card"
@@ -320,6 +375,20 @@ export const AdminVolunteers: React.FC = () => {
           onClose={() => setViewingIdCard(null)}
         />
       )}
+
+      {/* Official Appointment Letter Modal */}
+      <AppointmentLetterModal
+        open={Boolean(appointmentSeed || existingAppointmentLetter)}
+        onClose={() => {
+          setAppointmentSeed(null);
+          setExistingAppointmentLetter(null);
+        }}
+        existingLetter={existingAppointmentLetter}
+        applicantSeed={appointmentSeed}
+        onSaved={(saved) => {
+          setExistingAppointmentLetter(saved);
+        }}
+      />
 
       {/* Edit Volunteer Modal */}
       {editingVolunteer && (

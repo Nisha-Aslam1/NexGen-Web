@@ -12,10 +12,18 @@ import {
   Sparkles,
   Lock,
   QrCode,
-  Camera
+  Camera,
+  FileCheck2,
+  Download,
+  Eye,
+  ShieldCheck,
+  ShieldAlert,
+  FileText,
+  X
 } from 'lucide-react';
 import { VolunteerIdCardModal, IssueOfficialCardPayload, IssueOfficialCardResult } from '../admin/VolunteerIdCardModal.tsx';
 import { CardScannerModal } from './CardScannerModal.tsx';
+import { PublicAppointmentVerification } from '../../types.ts';
 
 export const TrackApplication: React.FC = () => {
   const { setActivePage } = useApp();
@@ -25,6 +33,15 @@ export const TrackApplication: React.FC = () => {
   const [applicationData, setApplicationData] = useState<any | null>(null);
   const [showIdCard, setShowIdCard] = useState<boolean>(false);
   const [showScanner, setShowScanner] = useState<boolean>(false);
+
+  // Official Appointment Letter Verification & PDF Viewing State
+  const [tokenVerification, setTokenVerification] = useState<PublicAppointmentVerification | null>(null);
+  const [verifyingToken, setVerifyingToken] = useState<boolean>(false);
+  const [viewingLetterModal, setViewingLetterModal] = useState<boolean>(false);
+  const [letterPdfUrl, setLetterPdfUrl] = useState<string | null>(null);
+  const [loadingLetterPdf, setLoadingLetterPdf] = useState<boolean>(false);
+  const [letterPdfError, setLetterPdfError] = useState<string | null>(null);
+  const [downloadingLetterPdf, setDownloadingLetterPdf] = useState<boolean>(false);
 
   useDocumentSEO({
     title: 'Track Application Status | NexGen Council',
@@ -57,15 +74,136 @@ export const TrackApplication: React.FC = () => {
     }
   }, []);
 
+  const verifyAppointmentToken = useCallback(async (tokenToVerify: string) => {
+    const cleanToken = tokenToVerify.trim();
+    if (!cleanToken) return;
+    setVerifyingToken(true);
+    try {
+      const res = await fetch(`/api/appointment-letters/verify/${encodeURIComponent(cleanToken)}`);
+      const data = await res.json();
+      setTokenVerification(data);
+    } catch {
+      setTokenVerification({
+        found: false,
+        effectiveStatus: 'NOT FOUND',
+        organizationName: 'NexGen Women Empowerment & Youth Leadership Council',
+        documentType: 'Official Letter of Appointment'
+      });
+    } finally {
+      setVerifyingToken(false);
+    }
+  }, []);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const codeParam = params.get('code');
-    if (codeParam && codeParam.trim()) {
-      const upper = codeParam.trim().toUpperCase();
+    const tokenParam = params.get('token');
+    let prefill = '';
+    try {
+      prefill = sessionStorage.getItem('nexgen_track_prefill_code') || '';
+      if (prefill) sessionStorage.removeItem('nexgen_track_prefill_code');
+    } catch {
+      // ignore storage errors
+    }
+
+    if (tokenParam && tokenParam.trim()) {
+      verifyAppointmentToken(tokenParam.trim());
+    }
+
+    const initialCode = (codeParam || prefill).trim();
+    if (initialCode) {
+      const upper = initialCode.toUpperCase();
       setRefCode(upper);
       lookupCode(upper);
     }
-  }, [lookupCode]);
+
+    const handleCustomTrackEvent = (event: Event) => {
+      const custom = event as CustomEvent<{ code?: string }>;
+      const nextCode = custom.detail?.code?.trim();
+      if (nextCode) {
+        const upper = nextCode.toUpperCase();
+        setRefCode(upper);
+        lookupCode(upper);
+      }
+    };
+
+    window.addEventListener('nexgen:track-code', handleCustomTrackEvent);
+    return () => window.removeEventListener('nexgen:track-code', handleCustomTrackEvent);
+  }, [lookupCode, verifyAppointmentToken]);
+
+  useEffect(() => {
+    return () => {
+      if (letterPdfUrl) {
+        URL.revokeObjectURL(letterPdfUrl);
+      }
+    };
+  }, [letterPdfUrl]);
+
+  const closeLetterViewer = () => {
+    setViewingLetterModal(false);
+    setLetterPdfError(null);
+    if (letterPdfUrl) {
+      URL.revokeObjectURL(letterPdfUrl);
+      setLetterPdfUrl(null);
+    }
+  };
+
+  const handleOpenOfficialLetter = async (letterId: string, verificationToken: string) => {
+    setViewingLetterModal(true);
+    setLoadingLetterPdf(true);
+    setLetterPdfError(null);
+    if (letterPdfUrl) {
+      URL.revokeObjectURL(letterPdfUrl);
+      setLetterPdfUrl(null);
+    }
+    try {
+      const res = await fetch(
+        `/api/appointment-letters/${encodeURIComponent(letterId)}/pdf?token=${encodeURIComponent(verificationToken)}&disposition=inline`
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Official appointment letter could not be loaded.');
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      setLetterPdfUrl(url);
+    } catch (err: any) {
+      setLetterPdfError(err.message || 'Unable to load official appointment letter PDF.');
+    } finally {
+      setLoadingLetterPdf(false);
+    }
+  };
+
+  const handleDownloadVerifiedPdf = async (
+    letterId: string,
+    verificationToken: string,
+    letterNumber?: string
+  ) => {
+    setDownloadingLetterPdf(true);
+    setLetterPdfError(null);
+    try {
+      const res = await fetch(
+        `/api/appointment-letters/${encodeURIComponent(letterId)}/pdf?token=${encodeURIComponent(verificationToken)}`
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Download is restricted for this appointment letter.');
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${letterNumber || 'NexGen-Appointment-Letter'}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    } catch (err: any) {
+      setError(err.message || 'Failed to download verified PDF.');
+    } finally {
+      setDownloadingLetterPdf(false);
+    }
+  };
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -247,6 +385,161 @@ export const TrackApplication: React.FC = () => {
         </button>
       </div>
 
+      {/* QR Verification Portal Result (if ?token= present or Verify Authenticity clicked) */}
+      {(verifyingToken || tokenVerification) && (
+        <div
+          id="appointment-verification-result"
+          className="mb-8 rounded-3xl border shadow-xl overflow-hidden bg-white animate-in fade-in"
+        >
+          {verifyingToken ? (
+            <div className="p-8 text-center text-xs text-slate-500">
+              Verifying Official NexGen Council Appointment Authenticity...
+            </div>
+          ) : tokenVerification ? (
+            <div>
+              <div
+                className={`px-6 py-4 flex flex-wrap items-center justify-between gap-3 ${
+                  tokenVerification.effectiveStatus === 'ACTIVE'
+                    ? 'bg-emerald-950 text-white'
+                    : tokenVerification.effectiveStatus === 'REVOKED'
+                    ? 'bg-rose-950 text-white'
+                    : tokenVerification.effectiveStatus === 'EXPIRED'
+                    ? 'bg-amber-900 text-white'
+                    : 'bg-slate-900 text-white'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  {tokenVerification.effectiveStatus === 'ACTIVE' ? (
+                    <ShieldCheck className="w-6 h-6 text-emerald-300 shrink-0" />
+                  ) : (
+                    <ShieldAlert className="w-6 h-6 text-amber-300 shrink-0" />
+                  )}
+                  <div>
+                    <span className="text-[10px] uppercase tracking-widest text-amber-300 font-bold block">
+                      {tokenVerification.organizationName || 'NEXGEN WOMEN EMPOWERMENT & YOUTH LEADERSHIP COUNCIL'}
+                    </span>
+                    <h3 className="font-serif font-bold text-base">
+                      {tokenVerification.documentType || 'Official Appointment Letter Verification'}
+                    </h3>
+                  </div>
+                </div>
+                <span
+                  className={`px-3 py-1 rounded-full text-[11px] font-bold tracking-wider uppercase ${
+                    tokenVerification.effectiveStatus === 'ACTIVE'
+                      ? 'bg-emerald-400 text-slate-950'
+                      : tokenVerification.effectiveStatus === 'REVOKED'
+                      ? 'bg-rose-400 text-slate-950'
+                      : tokenVerification.effectiveStatus === 'EXPIRED'
+                      ? 'bg-amber-300 text-slate-950'
+                      : 'bg-slate-300 text-slate-950'
+                  }`}
+                >
+                  {tokenVerification.effectiveStatus}
+                </span>
+              </div>
+
+              <div className="p-6 space-y-5 text-xs">
+                <div
+                  className={`p-3.5 rounded-xl border font-medium ${
+                    tokenVerification.effectiveStatus === 'ACTIVE'
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                      : tokenVerification.effectiveStatus === 'REVOKED'
+                      ? 'bg-rose-50 border-rose-200 text-rose-900'
+                      : tokenVerification.effectiveStatus === 'EXPIRED'
+                      ? 'bg-amber-50 border-amber-200 text-amber-900'
+                      : 'bg-slate-50 border-slate-200 text-slate-700'
+                  }`}
+                >
+                  {tokenVerification.effectiveStatus === 'ACTIVE' &&
+                    'ACTIVE — Official appointment letter is valid and verified by Council Secretariat.'}
+                  {tokenVerification.effectiveStatus === 'REVOKED' &&
+                    `REVOKED — This appointment letter has been revoked by an authorized administrator.${
+                      tokenVerification.revocationReason ? ` Reason: ${tokenVerification.revocationReason}` : ''
+                    }`}
+                  {tokenVerification.effectiveStatus === 'EXPIRED' &&
+                    'EXPIRED — Appointment validity has ended.'}
+                  {tokenVerification.effectiveStatus === 'NOT FOUND' &&
+                    'NOT FOUND — Reference number or verification token is invalid or does not exist.'}
+                </div>
+
+                {tokenVerification.effectiveStatus !== 'NOT FOUND' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Letter Number</span>
+                      <strong className="font-mono text-indigo-950">{tokenVerification.letterNumber}</strong>
+                    </div>
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Appointee Name</span>
+                      <strong className="text-slate-900">{tokenVerification.appointeeName}</strong>
+                    </div>
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Official Designation</span>
+                      <strong className="text-slate-900">{tokenVerification.designation}</strong>
+                    </div>
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Department / Division</span>
+                      <strong className="text-slate-900">{tokenVerification.department}</strong>
+                    </div>
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Issue Date</span>
+                      <strong className="text-slate-900">
+                        {tokenVerification.issueDate
+                          ? new Date(tokenVerification.issueDate).toLocaleDateString(undefined, {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric'
+                            })
+                          : '—'}
+                      </strong>
+                    </div>
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Effective Date</span>
+                      <strong className="text-slate-900">
+                        {tokenVerification.effectiveDate
+                          ? new Date(tokenVerification.effectiveDate).toLocaleDateString(undefined, {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric'
+                            })
+                          : '—'}
+                      </strong>
+                    </div>
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Appointment Validity</span>
+                      <strong className="text-slate-900">
+                        {tokenVerification.expiryDate
+                          ? new Date(tokenVerification.expiryDate).toLocaleDateString(undefined, {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric'
+                            })
+                          : tokenVerification.tenure || 'Ongoing / Subject to Renewal'}
+                      </strong>
+                    </div>
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 sm:col-span-2">
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Issuing Authority</span>
+                      <strong className="text-slate-900">
+                        {tokenVerification.issuingAuthority || 'Council Secretariat — Sialkot, Pakistan'}
+                      </strong>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setTokenVerification(null)}
+                    className="px-3.5 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 font-semibold cursor-pointer"
+                  >
+                    Dismiss Verification Notice
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+
       {/* Lookup Form */}
       <div className="bg-white rounded-3xl border border-slate-200 shadow-xl p-6 sm:p-8 space-y-6">
         <form onSubmit={handleSearch} className="space-y-4">
@@ -426,6 +719,128 @@ export const TrackApplication: React.FC = () => {
                       </button>
                     </div>
                   )}
+
+                  {/* Official Appointment Letter Card (when issued for this approved application) */}
+                  {applicationData.appointmentLetter && (
+                    <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white border border-amber-400/40 shadow-lg space-y-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                          <div className="w-11 h-11 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center shrink-0 shadow-sm">
+                            <FileCheck2 className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-bold uppercase tracking-widest text-amber-300 block">
+                              OFFICIAL APPOINTMENT LETTER
+                            </span>
+                            <h4 className="font-serif font-bold text-base text-white mt-0.5">
+                              {applicationData.appointmentLetter.appointeeName}
+                            </h4>
+                            <p className="text-[11px] text-slate-300">
+                              {applicationData.appointmentLetter.designation} · {applicationData.appointmentLetter.department}
+                            </p>
+                          </div>
+                        </div>
+                        <span
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                            applicationData.appointmentLetter.effectiveStatus === 'ACTIVE'
+                              ? 'bg-emerald-400 text-slate-950'
+                              : applicationData.appointmentLetter.effectiveStatus === 'REVOKED'
+                              ? 'bg-rose-400 text-slate-950'
+                              : 'bg-amber-300 text-slate-950'
+                          }`}
+                        >
+                          {applicationData.appointmentLetter.effectiveStatus}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-[11px] bg-white/5 border border-white/10 rounded-xl p-3">
+                        <div>
+                          <span className="text-slate-400 block">Letter Number</span>
+                          <strong className="font-mono text-amber-200">
+                            {applicationData.appointmentLetter.letterNumber}
+                          </strong>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block">Issue Date</span>
+                          <strong className="text-white">
+                            {new Date(applicationData.appointmentLetter.issueDate).toLocaleDateString(undefined, {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric'
+                            })}
+                          </strong>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block">Appointment Status</span>
+                          <strong className="text-white">
+                            {applicationData.appointmentLetter.effectiveStatus}
+                          </strong>
+                        </div>
+                      </div>
+
+                      {applicationData.appointmentLetter.effectiveStatus === 'REVOKED' ? (
+                        <div className="p-3 rounded-xl bg-rose-950/70 border border-rose-400/40 text-rose-100 text-[11px] space-y-1">
+                          <p className="font-bold">
+                            REVOKED — This official appointment letter has been revoked by an authorized administrator.
+                          </p>
+                          {applicationData.appointmentLetter.revokedReason && (
+                            <p className="text-rose-200">
+                              Reason: {applicationData.appointmentLetter.revokedReason}
+                            </p>
+                          )}
+                          <p className="text-rose-200/90">
+                            Downloading the verified appointment PDF is disabled while revoked.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleOpenOfficialLetter(
+                                applicationData.appointmentLetter.id,
+                                applicationData.appointmentLetter.verificationToken
+                              )
+                            }
+                            className="px-3.5 py-2 rounded-xl bg-white text-slate-950 hover:bg-slate-100 font-bold text-[11px] inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-indigo-900" />
+                            <span>VIEW OFFICIAL LETTER</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={downloadingLetterPdf}
+                            onClick={() =>
+                              handleDownloadVerifiedPdf(
+                                applicationData.appointmentLetter.id,
+                                applicationData.appointmentLetter.verificationToken,
+                                applicationData.appointmentLetter.letterNumber
+                              )
+                            }
+                            className="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-[11px] inline-flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            <span>{downloadingLetterPdf ? 'PREPARING PDF...' : 'DOWNLOAD VERIFIED PDF'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              verifyAppointmentToken(applicationData.appointmentLetter.verificationToken);
+                              setTimeout(() => {
+                                document
+                                  .getElementById('appointment-verification-result')
+                                  ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                              }, 100);
+                            }}
+                            className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/20 font-semibold text-[11px] inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                          >
+                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-300" />
+                            <span>VERIFY AUTHENTICITY</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
               {applicationData.status === 'Under Review' && (
@@ -473,6 +888,74 @@ export const TrackApplication: React.FC = () => {
         <CardScannerModal
           onClose={() => setShowScanner(false)}
         />
+      )}
+
+      {/* Official Appointment Letter PDF Viewer Modal */}
+      {viewingLetterModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6">
+          <div className="bg-white rounded-3xl max-w-5xl w-full h-[90vh] flex flex-col overflow-hidden shadow-2xl border border-slate-200">
+            <div className="px-5 py-3.5 bg-slate-950 text-white flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <FileText className="w-5 h-5 text-amber-300" />
+                <div>
+                  <h3 className="font-serif font-bold text-sm leading-tight">
+                    Official NexGen Council Appointment Letter
+                  </h3>
+                  <p className="text-[11px] text-slate-300 font-mono">
+                    {applicationData?.appointmentLetter?.letterNumber || 'Verified Document'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {applicationData?.appointmentLetter?.verificationToken &&
+                  applicationData?.appointmentLetter?.effectiveStatus !== 'REVOKED' && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleDownloadVerifiedPdf(
+                          applicationData.appointmentLetter.id,
+                          applicationData.appointmentLetter.verificationToken,
+                          applicationData.appointmentLetter.letterNumber
+                        )
+                      }
+                      className="px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-[11px] inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download PDF</span>
+                    </button>
+                  )}
+                <button
+                  type="button"
+                  onClick={closeLetterViewer}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+                  aria-label="Close appointment letter viewer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 bg-slate-100 flex items-center justify-center overflow-hidden">
+              {loadingLetterPdf ? (
+                <div className="text-xs text-slate-600 font-medium">
+                  Generating & verifying official A4 PDF document...
+                </div>
+              ) : letterPdfError ? (
+                <div className="p-6 text-center space-y-2 max-w-md">
+                  <AlertCircle className="w-8 h-8 text-rose-600 mx-auto" />
+                  <p className="text-sm font-semibold text-slate-900">Document Unavailable</p>
+                  <p className="text-xs text-slate-600">{letterPdfError}</p>
+                </div>
+              ) : letterPdfUrl ? (
+                <iframe
+                  src={letterPdfUrl}
+                  title="Official NexGen Appointment Letter"
+                  className="w-full h-full border-0"
+                />
+              ) : null}
+            </div>
+          </div>
+        </div>
       )}
 
       <div className="mt-10 grid grid-cols-1 sm:grid-cols-3 gap-4 text-left">

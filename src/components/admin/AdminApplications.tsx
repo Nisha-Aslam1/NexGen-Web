@@ -11,11 +11,13 @@ import {
   Trash2,
   Mail,
   AlertCircle,
-  Award
+  Award,
+  ScrollText
 } from 'lucide-react';
-import { VolunteerApplication, ApplicationStatus } from '../../types.ts';
+import { VolunteerApplication, ApplicationStatus, AppointmentLetter } from '../../types.ts';
 import { VolunteerApprovalModal } from './VolunteerApprovalModal.tsx';
 import { VolunteerIdCardModal } from './VolunteerIdCardModal.tsx';
+import { AppointmentLetterModal, AppointmentApplicantSeed } from './AppointmentLetterModal.tsx';
 
 export const AdminApplications: React.FC = () => {
   const { addToast } = useApp();
@@ -35,6 +37,9 @@ export const AdminApplications: React.FC = () => {
   const [approvalNotes, setApprovalNotes] = useState<string>('');
   const [isResendOnly, setIsResendOnly] = useState<boolean>(false);
   const [idCardApp, setIdCardApp] = useState<VolunteerApplication | null>(null);
+  const [appointmentSeed, setAppointmentSeed] = useState<AppointmentApplicantSeed | null>(null);
+  const [existingAppointmentLetter, setExistingAppointmentLetter] = useState<AppointmentLetter | null>(null);
+  const [openingLetterForId, setOpeningLetterForId] = useState<string | null>(null);
 
   const fetchApplications = async () => {
     setLoading(true);
@@ -68,6 +73,43 @@ export const AdminApplications: React.FC = () => {
     setApprovalModalApp(app);
     setApprovalNotes(notesOverride !== undefined ? notesOverride : (app.internalNotes || app.reviewNotes || ''));
     setIsResendOnly(resendWelcomeOnly);
+  };
+
+  const openAppointmentLetterModal = async (app: VolunteerApplication) => {
+    setOpeningLetterForId(app.id);
+    let foundLetter: AppointmentLetter | null = null;
+    try {
+      const res = await authFetch(
+        `/api/admin/appointment-letters?search=${encodeURIComponent(app.referenceCode)}`
+      );
+      if (res.ok) {
+        const list = await res.json();
+        if (Array.isArray(list)) {
+          foundLetter =
+            list.find(
+              (item: AppointmentLetter) =>
+                item.applicationId === app.id ||
+                item.referenceCode?.toUpperCase() === app.referenceCode.toUpperCase()
+            ) || null;
+        }
+      }
+    } catch {
+      // Fallback to create mode if lookup fails
+    } finally {
+      setOpeningLetterForId(null);
+    }
+
+    setExistingAppointmentLetter(foundLetter);
+    setAppointmentSeed({
+      applicationId: app.id,
+      referenceCode: app.referenceCode,
+      fullName: app.fullName,
+      email: app.email,
+      phone: app.phone,
+      city: app.city,
+      preferredRole: app.preferredRole,
+      photoUrl: app.idCardPhotoUrl || app.avatar
+    });
   };
 
   const executeStatusUpdate = async (
@@ -352,6 +394,16 @@ export const AdminApplications: React.FC = () => {
                           <>
                             <button
                               type="button"
+                              onClick={() => openAppointmentLetterModal(app)}
+                              disabled={openingLetterForId === app.id}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-amber-300 border border-slate-800 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50"
+                              title="Generate or Manage Official Appointment Letter"
+                            >
+                              <ScrollText className="w-3.5 h-3.5 text-amber-300" />
+                              <span>{openingLetterForId === app.id ? 'Opening...' : 'Appointment Letter'}</span>
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => setIdCardApp(app)}
                               className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-950 hover:bg-indigo-900 text-amber-300 border border-indigo-900 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap"
                               title="Generate & Download Official NexGen ID Card"
@@ -434,7 +486,18 @@ export const AdminApplications: React.FC = () => {
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  {selectedApp.status === 'Approved' && (
+                    <button
+                      type="button"
+                      onClick={() => openAppointmentLetterModal(selectedApp)}
+                      disabled={openingLetterForId === selectedApp.id}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-amber-300 text-[11px] font-bold tracking-wide transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+                    >
+                      <ScrollText className="w-3.5 h-3.5 text-amber-300" />
+                      <span>GENERATE APPOINTMENT LETTER</span>
+                    </button>
+                  )}
                   <span
                     className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
                       selectedApp.status === 'Approved'
@@ -689,6 +752,20 @@ export const AdminApplications: React.FC = () => {
           onClose={() => setIdCardApp(null)}
         />
       )}
+
+      {/* Official Appointment Letter Generator Modal */}
+      <AppointmentLetterModal
+        open={Boolean(appointmentSeed || existingAppointmentLetter)}
+        onClose={() => {
+          setAppointmentSeed(null);
+          setExistingAppointmentLetter(null);
+        }}
+        existingLetter={existingAppointmentLetter}
+        applicantSeed={appointmentSeed}
+        onSaved={(saved) => {
+          setExistingAppointmentLetter(saved);
+        }}
+      />
     </div>
   );
 };
