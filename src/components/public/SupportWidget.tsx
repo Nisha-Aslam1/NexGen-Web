@@ -6,12 +6,8 @@ import {
   X,
   Send,
   CheckCircle2,
-  HelpCircle,
-  ChevronDown,
   Phone,
   Mail,
-  Compass,
-  Clock,
   ArrowUpRight,
   MessageCircle,
   RotateCcw,
@@ -100,50 +96,6 @@ function playVisitorReplyChime() {
   } catch {}
 }
 
-const QUICK_FAQS = [
-  {
-    q: 'Who can apply as a volunteer or cohort scholar?',
-    a: 'Women and youth advocates ages 16+ from all academic disciplines and backgrounds can join. No prior experience is required — submit your application on the Volunteer page.'
-  },
-  {
-    q: 'How can I join the 30-Day Leadership & Empowerment Series?',
-    a: 'Open the Programs or Volunteer page on the website, choose the active cohort, and complete the registration form. Approved members receive onboarding and live session links via email and WhatsApp.'
-  },
-  {
-    q: 'How do I track my submitted volunteer application?',
-    a: 'Go to the Track Application page (or click Track Application below) and enter your Application Reference Code (e.g., NG-XXXX) to see your real-time review status.'
-  },
-  {
-    q: 'Is there any fee to join cohorts, workshops, or volunteer?',
-    a: 'No. NexGen Council is a civil-society leadership initiative. Volunteer membership, leadership cohorts, and regular training sessions are 100% free of charge.'
-  },
-  {
-    q: 'Are verified certificates provided after completion?',
-    a: 'Yes! Participants who meet the attendance requirement and submit their practical community project receive an official digital certificate from the Secretariat.'
-  },
-  {
-    q: 'How do I join scheduled online meetings or webinars?',
-    a: 'Visit the Events page or use the direct Meeting Room link sent to your email. If your session requires waiting room admission, our coordinators admit attendees 5 minutes before start.'
-  },
-  {
-    q: 'Where can I view recent Council updates, events, and photo archives?',
-    a: 'You can browse official announcements on the News page, upcoming schedules on Events, and event photography in the Gallery section of this website.'
-  },
-  {
-    q: 'How can universities or organizations partner with NexGen Council?',
-    a: 'Select "University / School Partnership" in the Submit Issue tab here (or ask the AI Assistant to connect you) with your institution name and WhatsApp contact for a formal briefing.'
-  }
-];
-
-const QUICK_NAV_LINKS: { label: string; page: ActivePage }[] = [
-  { label: 'About Us', page: 'about' },
-  { label: 'Programs', page: 'programs' },
-  { label: 'Apply Volunteer', page: 'volunteer' },
-  { label: 'Track Status', page: 'track' },
-  { label: 'Events', page: 'events' },
-  { label: 'Contact Page', page: 'contact' }
-];
-
 const AI_STARTER_PROMPTS = [
   'How do I apply as a volunteer?',
   'Programs & verified certificates info',
@@ -168,8 +120,7 @@ function getOrCreateSupportSessionId(forceNew = false): string {
 export const SupportWidget: React.FC = () => {
   const { settings, addToast, setActivePage } = useApp();
   const [isOpen, setIsOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'ai' | 'ticket' | 'faq'>('ai');
-  const [openFaq, setOpenFaq] = useState<number | null>(0);
+  const [activeTab, setActiveTab] = useState<'ai' | 'ticket'>('ai');
 
   // AI + Live Human Chat State (persisted for 7 days on backend)
   const [sessionId, setSessionId] = useState<string>(() => getOrCreateSupportSessionId(false));
@@ -904,12 +855,12 @@ export const SupportWidget: React.FC = () => {
               </button>
             </div>
 
-            {/* 3-Mode Tabs */}
-            <div className="mt-3.5 grid grid-cols-3 gap-1 rounded-xl bg-white/10 p-1 text-[11px] font-semibold">
+            {/* 2-Mode Tabs */}
+            <div className="mt-3.5 grid grid-cols-2 gap-1 rounded-xl bg-white/10 p-1 text-[11px] font-semibold">
               <button
                 type="button"
                 onClick={() => setActiveTab('ai')}
-                className={`flex items-center justify-center gap-1 rounded-lg py-2 px-1.5 whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+                className={`flex items-center justify-center gap-1.5 rounded-lg py-2 px-2 whitespace-nowrap shrink-0 transition-all cursor-pointer ${
                   activeTab === 'ai'
                     ? 'bg-amber-400 text-slate-950 shadow-xs'
                     : 'text-slate-300 hover:text-white'
@@ -921,7 +872,7 @@ export const SupportWidget: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setActiveTab('ticket')}
-                className={`flex items-center justify-center gap-1 rounded-lg py-2 px-1.5 whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+                className={`flex items-center justify-center gap-1.5 rounded-lg py-2 px-2 whitespace-nowrap shrink-0 transition-all cursor-pointer ${
                   activeTab === 'ticket'
                     ? 'bg-amber-400 text-slate-950 shadow-xs'
                     : 'text-slate-300 hover:text-white'
@@ -929,18 +880,6 @@ export const SupportWidget: React.FC = () => {
               >
                 <Ticket className="w-3.5 h-3.5 shrink-0" />
                 <span>Helpdesk</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('faq')}
-                className={`flex items-center justify-center gap-1 rounded-lg py-2 px-1.5 whitespace-nowrap shrink-0 transition-all cursor-pointer ${
-                  activeTab === 'faq'
-                    ? 'bg-amber-400 text-slate-950 shadow-xs'
-                    : 'text-slate-300 hover:text-white'
-                }`}
-              >
-                <HelpCircle className="w-3.5 h-3.5 shrink-0" />
-                <span>FAQs</span>
               </button>
             </div>
           </div>
@@ -1260,108 +1199,7 @@ export const SupportWidget: React.FC = () => {
             </div>
           ) : (
             <div className="max-h-[440px] overflow-y-auto p-5 bg-slate-50/60">
-              {activeTab === 'faq' ? (
-                <div className="space-y-3.5">
-                  {/* Quick Website Navigation Links */}
-                  <div className="rounded-2xl border border-indigo-200/80 bg-indigo-50/70 p-3.5 space-y-2.5">
-                    <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-indigo-950">
-                      <Compass className="w-3.5 h-3.5 text-amber-600" />
-                      <span>Quick Website Links</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {QUICK_NAV_LINKS.map(link => (
-                        <button
-                          key={link.page}
-                          type="button"
-                          onClick={() => handleNavigatePage(link.page)}
-                          className="flex items-center justify-between gap-1 rounded-xl border border-indigo-200 bg-white px-2.5 py-2 text-[11px] font-semibold text-slate-800 hover:border-indigo-400 hover:bg-indigo-950 hover:text-white transition-colors cursor-pointer"
-                        >
-                          <span className="truncate">{link.label}</span>
-                          <ArrowUpRight className="w-3 h-3 shrink-0 opacity-70" />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Expandable FAQs */}
-                  <div className="space-y-2">
-                    {QUICK_FAQS.map((item, idx) => (
-                      <div
-                        key={idx}
-                        className="rounded-2xl border border-slate-200 bg-white overflow-hidden"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => setOpenFaq(openFaq === idx ? null : idx)}
-                          className="flex w-full items-center justify-between gap-2 p-3.5 text-left text-xs font-bold text-slate-900 hover:bg-slate-50 cursor-pointer"
-                        >
-                          <span>{item.q}</span>
-                          <ChevronDown
-                            className={`w-4 h-4 text-amber-600 shrink-0 transition-transform ${
-                              openFaq === idx ? 'rotate-180' : ''
-                            }`}
-                          />
-                        </button>
-                        {openFaq === idx && (
-                          <div className="border-t border-slate-100 px-3.5 py-3 text-xs leading-relaxed text-slate-600 bg-slate-50/60">
-                            {item.a}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Live Secretariat Info */}
-                  {(settings?.showOfficeHours !== false ||
-                    settings?.showContactEmail !== false ||
-                    (settings?.showContactPhone !== false && settings?.contactPhone)) && (
-                    <div className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-1.5 text-[11px] text-slate-600">
-                      <div className="font-bold text-slate-900 text-xs">Secretariat Desk Info</div>
-                      {settings?.showOfficeHours !== false && settings?.footerOfficeHours && (
-                        <div className="flex items-center gap-1.5">
-                          <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          <span>{settings.footerOfficeHours}</span>
-                        </div>
-                      )}
-                      {settings?.showContactEmail !== false && settings?.contactEmail && (
-                        <div className="flex items-center gap-1.5">
-                          <Mail className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          <a
-                            href={`mailto:${settings.contactEmail}`}
-                            className="text-indigo-900 hover:underline font-medium"
-                          >
-                            {settings.contactEmail}
-                          </a>
-                        </div>
-                      )}
-                      {settings?.showContactPhone !== false && settings?.contactPhone && (
-                        <div className="flex items-center gap-1.5">
-                          <Phone className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          <a
-                            href={`tel:${settings.contactPhone}`}
-                            className="text-indigo-900 hover:underline font-medium"
-                          >
-                            {settings.contactPhone}
-                          </a>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setTicketView('submit');
-                      setActiveTab('ticket');
-                    }}
-                    className="w-full py-3 bg-indigo-950 hover:bg-indigo-900 text-white text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer"
-                  >
-                    <Ticket className="w-3.5 h-3.5 text-amber-300" />
-                    <span>Need help? Open a Support Ticket</span>
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-4">
+              <div className="space-y-4">
                   {/* Helpdesk Mode Switcher: Submit Ticket vs Check Status & Replies */}
                   <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-slate-200/70 text-[11px] font-semibold">
                     <button
@@ -1386,7 +1224,7 @@ export const SupportWidget: React.FC = () => {
                       }`}
                     >
                       <Search className="w-3 h-3" />
-                      <span>Check Replies</span>
+                      <span>Check Ticket Status</span>
                     </button>
                   </div>
 
@@ -1403,7 +1241,8 @@ export const SupportWidget: React.FC = () => {
                           type="text"
                           value={lookupInput}
                           onChange={e => setLookupInput(e.target.value)}
-                          placeholder="Ticket No. (e.g. NXG-TKT-2026-XXXX)"
+                          placeholder="Enter Ticket ID (e.g. NXG-TKT-2026-XXXX)"
+                          aria-label="Ticket ID"
                           className="flex-1 min-w-0 px-3 py-2.5 rounded-xl border border-slate-300 bg-white text-xs font-mono uppercase text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-600"
                         />
                         <button
@@ -1485,15 +1324,29 @@ export const SupportWidget: React.FC = () => {
                                 {lookedUpTicket.assignedTo ? ` · Assigned: ${lookedUpTicket.assignedTo}` : ''}
                               </p>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => lookupTicketByNumber(lookedUpTicket.ticketNumber)}
-                              disabled={lookupLoading}
-                              title="Refresh replies"
-                              className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-950 hover:bg-slate-100 cursor-pointer shrink-0"
-                            >
-                              <RefreshCw className={`w-3.5 h-3.5 ${lookupLoading ? 'animate-spin' : ''}`} />
-                            </button>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => lookupTicketByNumber(lookedUpTicket.ticketNumber)}
+                                disabled={lookupLoading}
+                                title="Refresh ticket status & replies"
+                                className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-950 hover:bg-slate-100 cursor-pointer"
+                              >
+                                <RefreshCw className={`w-3.5 h-3.5 ${lookupLoading ? 'animate-spin' : ''}`} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setLookedUpTicket(null);
+                                  setLookupInput('');
+                                  setLookupError(null);
+                                }}
+                                title="Check a different Ticket ID"
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </div>
 
                           {/* Chronological Thread: Initial Inquiry + Replies */}
@@ -1586,7 +1439,7 @@ export const SupportWidget: React.FC = () => {
                           Support Ticket Created
                         </h4>
                         <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
-                          Save this Ticket Number to check status (Open / In Review / Resolved) and read replies anytime:
+                          Save your unique Ticket ID below to check your ticket status (Open / In Review / Resolved) and admin responses anytime:
                         </p>
                       </div>
 
@@ -1623,7 +1476,7 @@ export const SupportWidget: React.FC = () => {
                           }}
                           className="w-full py-2.5 bg-indigo-950 hover:bg-indigo-900 text-white rounded-xl text-xs font-bold cursor-pointer"
                         >
-                          View Ticket Status &amp; Replies
+                          Check Ticket Status &amp; Replies
                         </button>
                         <button
                           type="button"
@@ -1772,7 +1625,6 @@ export const SupportWidget: React.FC = () => {
                     </form>
                   )}
                 </div>
-              )}
             </div>
           )}
         </div>
