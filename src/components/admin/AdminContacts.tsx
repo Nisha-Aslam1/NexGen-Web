@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useApp } from '../../context/AppContext.tsx';
 import { authFetch } from '../../lib/api.ts';
 import {
@@ -17,16 +17,22 @@ import {
   MessageSquareText,
   X,
   Send,
-  Smartphone,
-  Loader2
+  Loader2,
+  Ticket,
+  CheckCircle2,
+  AlertCircle,
+  Copy,
+  Check,
+  MessageSquarePlus
 } from 'lucide-react';
-import { ContactMessage, SupportConversation } from '../../types.ts';
+import { ContactMessage, SupportConversation, TicketStatus } from '../../types.ts';
 import {
   SupportRichText,
   stripSupportFormattingForPreview
 } from '../common/SupportRichText.tsx';
 
 type SourceFilter = 'All' | 'Support Widget' | 'Contact Page';
+type TicketStatusFilter = 'All' | TicketStatus;
 type MainView = 'inquiries' | 'ai_logs';
 type AiFilter = 'all' | 'escalated' | 'ai_only';
 
@@ -46,8 +52,37 @@ function getMessageSource(msg: ContactMessage): 'Support Widget' | 'Contact Page
   return 'Contact Page';
 }
 
-function isUnreadStatus(status: string | undefined): boolean {
-  return status === 'Unread' || status === 'New';
+function resolveTicketStatus(msg: ContactMessage): TicketStatus {
+  if (msg.ticketStatus === 'Open' || msg.ticketStatus === 'In Review' || msg.ticketStatus === 'Resolved') {
+    return msg.ticketStatus;
+  }
+  const raw = String(msg.status || '').trim();
+  if (raw === 'Open' || raw === 'Unread' || raw === 'New') return 'Open';
+  if (raw === 'In Review' || raw === 'Read') return 'In Review';
+  if (raw === 'Resolved' || raw === 'Replied') return 'Resolved';
+  return 'Open';
+}
+
+function getTicketStatusBadge(status: TicketStatus) {
+  if (status === 'Open') {
+    return {
+      label: 'Open',
+      className: 'bg-amber-50 text-amber-900 border-amber-200',
+      Icon: AlertCircle
+    };
+  }
+  if (status === 'In Review') {
+    return {
+      label: 'In Review',
+      className: 'bg-indigo-50 text-indigo-900 border-indigo-200',
+      Icon: Clock
+    };
+  }
+  return {
+    label: 'Resolved',
+    className: 'bg-emerald-50 text-emerald-900 border-emerald-200',
+    Icon: CheckCircle2
+  };
 }
 
 function toWhatsAppLink(rawPhone: string): string {
@@ -75,13 +110,19 @@ export const AdminContacts: React.FC = () => {
   const { addToast } = useApp();
   const [mainView, setMainView] = useState<MainView>('inquiries');
 
-  // Inquiries Inbox State
+  // Helpdesk Queue State
   const [messages, setMessages] = useState<ContactMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedMessage, setSelectedMessage] = useState<ContactMessage | null>(null);
+  const [statusFilter, setStatusFilter] = useState<TicketStatusFilter>('All');
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [updatingStatusId, setUpdatingStatusId] = useState<string | null>(null);
+  const [ticketReplyText, setTicketReplyText] = useState('');
+  const [replyTargetStatus, setReplyTargetStatus] = useState<TicketStatus>('Resolved');
+  const [sendingTicketReply, setSendingTicketReply] = useState(false);
+  const [copiedTicketNum, setCopiedTicketNum] = useState(false);
 
   // AI 7-Day Chat Logs & Live Support State
   const [conversations, setConversations] = useState<SupportConversation[]>([]);
@@ -93,16 +134,18 @@ export const AdminContacts: React.FC = () => {
   const [confirmDeleteConvId, setConfirmDeleteConvId] = useState<string | null>(null);
   const [liveReplyText, setLiveReplyText] = useState('');
   const [sendingLiveReply, setSendingLiveReply] = useState(false);
-  const [downloadingAndroidZip, setDownloadingAndroidZip] = useState(false);
 
   const fetchMessages = useCallback(async () => {
     setLoading(true);
     try {
       const res = await authFetch('/api/contacts');
       const data = await res.json();
-      if (Array.isArray(data)) setMessages(data);
+      if (Array.isArray(data)) {
+        setMessages(data);
+        setSelectedMessage(prev => (prev ? data.find((m: ContactMessage) => m.id === prev.id) || prev : null));
+      }
     } catch {
-      addToast('Failed to load inquiries', 'error');
+      addToast('Failed to load helpdesk queue', 'error');
     } finally {
       setLoading(false);
     }
@@ -124,7 +167,7 @@ export const AdminContacts: React.FC = () => {
     }
   }, [addToast]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     fetchMessages();
     fetchAiConversations();
   }, [fetchMessages, fetchAiConversations]);
@@ -134,22 +177,77 @@ export const AdminContacts: React.FC = () => {
     fetchAiConversations();
   };
 
-  const updateStatus = async (id: string, status: 'Read' | 'Replied') => {
+  const updateTicketStatus = async (id: string, nextTicketStatus: TicketStatus, silent = false) => {
+    setUpdatingStatusId(id);
     try {
-      const res = await authFetch(`/api/contacts/${id}/status`, {
+      const res = await authFetch(`/api/contacts/${id}/ticket-status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status })
+        body: JSON.stringify({ ticketStatus: nextTicketStatus })
       });
       const updated = await res.json();
-      if (!res.ok) throw new Error(updated.error || 'Failed to update message');
+      if (!res.ok) throw new Error(updated.error || 'Failed to update ticket status');
 
       setMessages(prev => prev.map(m => (m.id === id ? updated : m)));
-      if (selectedMessage?.id === id) setSelectedMessage(updated);
-      addToast(`Marked as ${status}`, 'success');
+      setSelectedMessage(prev => (prev?.id === id ? updated : prev));
+      if (!silent) {
+        addToast(`Ticket marked as ${nextTicketStatus}`, 'success');
+      }
     } catch (err: any) {
-      addToast(err.message || 'Error updating status', 'error');
+      addToast(err.message || 'Error updating ticket status', 'error');
+    } finally {
+      setUpdatingStatusId(null);
     }
+  };
+
+  const handleSendTicketReply = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedMessage || !ticketReplyText.trim() || sendingTicketReply) return;
+
+    setSendingTicketReply(true);
+    try {
+      const res = await authFetch(`/api/contacts/${selectedMessage.id}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: ticketReplyText.trim(),
+          ticketStatus: replyTargetStatus
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Could not send helpdesk reply.');
+
+      if (data.ticket) {
+        setMessages(prev => prev.map(m => (m.id === data.ticket.id ? data.ticket : m)));
+        setSelectedMessage(data.ticket);
+      }
+      setTicketReplyText('');
+      addToast(`Reply posted to ${data.ticket?.ticketNumber || 'ticket'} (${replyTargetStatus})`, 'success');
+    } catch (err: any) {
+      addToast(err?.message || 'Error posting helpdesk reply', 'error');
+    } finally {
+      setSendingTicketReply(false);
+    }
+  };
+
+  const handleOpenTicketModal = (msg: ContactMessage) => {
+    setSelectedMessage(msg);
+    setConfirmDeleteId(null);
+    setTicketReplyText('');
+    setCopiedTicketNum(false);
+    const currentStatus = resolveTicketStatus(msg);
+    setReplyTargetStatus(currentStatus === 'Resolved' ? 'Resolved' : 'Resolved');
+    if (currentStatus === 'Open') {
+      updateTicketStatus(msg.id, 'In Review', true);
+    }
+  };
+
+  const handleCopyTicketNumber = (ticketNum?: string) => {
+    if (!ticketNum) return;
+    navigator.clipboard.writeText(ticketNum);
+    setCopiedTicketNum(true);
+    addToast(`Copied ${ticketNum}`, 'info');
+    setTimeout(() => setCopiedTicketNum(false), 2000);
   };
 
   const deleteMessage = async (id: string) => {
@@ -162,9 +260,9 @@ export const AdminContacts: React.FC = () => {
       setMessages(prev => prev.filter(m => m.id !== id));
       if (selectedMessage?.id === id) setSelectedMessage(null);
       setConfirmDeleteId(null);
-      addToast('Message deleted', 'info');
+      addToast('Support ticket deleted', 'info');
     } catch (err: any) {
-      addToast(err.message || 'Error deleting message', 'error');
+      addToast(err.message || 'Error deleting ticket', 'error');
     }
   };
 
@@ -211,66 +309,6 @@ export const AdminContacts: React.FC = () => {
     }
   };
 
-  const handleDownloadAndroidSource = async () => {
-    if (downloadingAndroidZip) return;
-    setDownloadingAndroidZip(true);
-    try {
-      const ticketRes = await authFetch('/api/support-live/android-project-ticket', {
-        method: 'POST',
-        headers: { Accept: 'application/json' }
-      });
-      const ticketData = await ticketRes.json().catch(() => null);
-      if (ticketRes.ok && ticketData?.downloadUrl) {
-        const a = document.createElement('a');
-        a.href = ticketData.downloadUrl;
-        a.download = ticketData.fileName || 'nexgen-support-android-project.zip';
-        a.rel = 'noopener';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        addToast(
-          'Native Android APK project (.zip) downloading! Build via Android Studio or GitHub Actions.',
-          'success'
-        );
-        return;
-      }
-
-      if (ticketRes.status !== 404) {
-        throw new Error(ticketData?.error || `Download failed (HTTP ${ticketRes.status}).`);
-      }
-
-      const res = await authFetch('/api/support-live/android-project.zip');
-      if (!res.ok) {
-        const errData = await res.json().catch(() => null);
-        throw new Error(errData?.error || `Download failed (HTTP ${res.status}).`);
-      }
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('text/html')) {
-        throw new Error('Server returned an unexpected HTML page instead of the ZIP archive.');
-      }
-      const blob = await res.blob();
-      if (!blob || blob.size === 0) {
-        throw new Error('Downloaded archive was empty.');
-      }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'nexgen-support-android-project.zip';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 20000);
-      addToast(
-        'Native Android APK project (.zip) downloaded! Build via Android Studio or GitHub Actions.',
-        'success'
-      );
-    } catch (err: any) {
-      addToast(err?.message || 'Could not download Android APK project right now.', 'error');
-    } finally {
-      setDownloadingAndroidZip(false);
-    }
-  };
-
   const handleOpenLinkedAiChat = (aiConversationId?: string) => {
     if (!aiConversationId) return;
     const match = conversations.find(
@@ -285,29 +323,45 @@ export const AdminContacts: React.FC = () => {
     }
   };
 
-  const sourceCounts = useMemo(() => {
+  const ticketMetrics = useMemo(() => {
+    let open = 0;
+    let inReview = 0;
+    let resolved = 0;
     let widget = 0;
     let contact = 0;
-    let unread = 0;
+
     for (const msg of messages) {
-      if (isUnreadStatus(msg.status)) unread++;
-      if (getMessageSource(msg) === 'Support Widget') {
-        widget++;
-      } else {
-        contact++;
-      }
+      const tStatus = resolveTicketStatus(msg);
+      if (tStatus === 'Open') open++;
+      else if (tStatus === 'In Review') inReview++;
+      else resolved++;
+
+      if (getMessageSource(msg) === 'Support Widget') widget++;
+      else contact++;
     }
-    return { all: messages.length, widget, contact, unread };
+
+    return {
+      total: messages.length,
+      open,
+      inReview,
+      resolved,
+      widget,
+      contact
+    };
   }, [messages]);
 
   const filteredMessages = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return messages.filter(msg => {
+      const tStatus = resolveTicketStatus(msg);
+      if (statusFilter !== 'All' && tStatus !== statusFilter) return false;
       const src = getMessageSource(msg);
       if (sourceFilter !== 'All' && src !== sourceFilter) return false;
       if (!q) return true;
       const phone = (msg.whatsapp || msg.phone || '').toLowerCase();
+      const tNum = (msg.ticketNumber || '').toLowerCase();
       return (
+        tNum.includes(q) ||
         msg.name.toLowerCase().includes(q) ||
         msg.email.toLowerCase().includes(q) ||
         phone.includes(q) ||
@@ -315,7 +369,7 @@ export const AdminContacts: React.FC = () => {
         msg.message.toLowerCase().includes(q)
       );
     });
-  }, [messages, sourceFilter, searchQuery]);
+  }, [messages, statusFilter, sourceFilter, searchQuery]);
 
   const aiStats = useMemo(() => {
     let totalMessages = 0;
@@ -353,10 +407,10 @@ export const AdminContacts: React.FC = () => {
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-serif font-bold text-slate-900">
-            Public Inquiries &amp; Support AI Logs
+            Helpdesk Queue &amp; Support AI Logs
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Manage Secretariat inquiries alongside 7-day persisted AI support conversations ({aiModelName}).
+            Triage support tickets with Ticket Numbers, post public replies, and inspect 7-day persisted AI &amp; Live chat history ({aiModelName}).
           </p>
         </div>
 
@@ -365,19 +419,19 @@ export const AdminContacts: React.FC = () => {
             <button
               type="button"
               onClick={() => setMainView('inquiries')}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 mainView === 'inquiries'
                   ? 'bg-indigo-950 text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <Inbox className="w-3.5 h-3.5" />
-              <span>Inquiries Inbox ({messages.length})</span>
+              <span>Helpdesk Queue ({messages.length})</span>
             </button>
             <button
               type="button"
               onClick={() => setMainView('ai_logs')}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 mainView === 'ai_logs'
                   ? 'bg-indigo-950 text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
@@ -392,7 +446,7 @@ export const AdminContacts: React.FC = () => {
             type="button"
             onClick={handleRefreshAll}
             disabled={loading || aiLoading}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-800 text-xs font-semibold hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-800 text-xs font-semibold hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-60 whitespace-nowrap shrink-0"
           >
             <RefreshCw className={`w-3.5 h-3.5 text-indigo-700 ${(loading || aiLoading) ? 'animate-spin' : ''}`} />
             <span>Refresh</span>
@@ -402,83 +456,98 @@ export const AdminContacts: React.FC = () => {
 
       {mainView === 'inquiries' ? (
         <>
-          {/* Source Breakdown Summary Cards */}
+          {/* Ticket Status KPI Strip */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <button
               type="button"
-              onClick={() => setSourceFilter('All')}
+              onClick={() => setStatusFilter('All')}
               className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
-                sourceFilter === 'All'
+                statusFilter === 'All'
                   ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
                   : 'bg-white text-slate-900 border-slate-200 hover:border-slate-300'
               }`}
             >
-              <p className={`text-[11px] font-bold uppercase tracking-wider ${sourceFilter === 'All' ? 'text-slate-300' : 'text-slate-500'}`}>
-                Total Inquiries
-              </p>
-              <p className="text-2xl font-bold mt-1">{sourceCounts.all}</p>
+              <div className="flex items-center justify-between">
+                <p className={`text-[11px] font-bold uppercase tracking-wider ${statusFilter === 'All' ? 'text-slate-300' : 'text-slate-500'}`}>
+                  All Tickets
+                </p>
+                <Ticket className={`w-4 h-4 ${statusFilter === 'All' ? 'text-amber-300' : 'text-slate-400'}`} />
+              </div>
+              <p className="text-2xl font-bold mt-1 tabular-nums">{ticketMetrics.total}</p>
             </button>
 
             <button
               type="button"
-              onClick={() => setSourceFilter('Support Widget')}
+              onClick={() => setStatusFilter('Open')}
               className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
-                sourceFilter === 'Support Widget'
+                statusFilter === 'Open'
                   ? 'bg-amber-50 text-amber-950 border-amber-400 shadow-sm'
                   : 'bg-white text-slate-900 border-slate-200 hover:border-amber-300'
               }`}
             >
               <div className="flex items-center justify-between">
                 <p className="text-[11px] font-bold uppercase tracking-wider text-amber-800">
-                  Support Widget
+                  Open
                 </p>
-                <Headphones className="w-4 h-4 text-amber-600" />
+                <AlertCircle className="w-4 h-4 text-amber-600" />
               </div>
-              <p className="text-2xl font-bold mt-1 text-amber-950">{sourceCounts.widget}</p>
+              <p className="text-2xl font-bold mt-1 text-amber-950 tabular-nums">{ticketMetrics.open}</p>
             </button>
 
             <button
               type="button"
-              onClick={() => setSourceFilter('Contact Page')}
+              onClick={() => setStatusFilter('In Review')}
               className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
-                sourceFilter === 'Contact Page'
+                statusFilter === 'In Review'
                   ? 'bg-indigo-50 text-indigo-950 border-indigo-400 shadow-sm'
                   : 'bg-white text-slate-900 border-slate-200 hover:border-indigo-300'
               }`}
             >
               <div className="flex items-center justify-between">
                 <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-800">
-                  Contact Page
+                  In Review
                 </p>
-                <Globe className="w-4 h-4 text-indigo-600" />
+                <Clock className="w-4 h-4 text-indigo-600" />
               </div>
-              <p className="text-2xl font-bold mt-1 text-indigo-950">{sourceCounts.contact}</p>
+              <p className="text-2xl font-bold mt-1 text-indigo-950 tabular-nums">{ticketMetrics.inReview}</p>
             </button>
 
-            <div className="p-4 rounded-2xl border border-slate-200 bg-white">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">
-                Unread Queue
-              </p>
-              <p className="text-2xl font-bold mt-1 text-slate-900">{sourceCounts.unread}</p>
-            </div>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('Resolved')}
+              className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
+                statusFilter === 'Resolved'
+                  ? 'bg-emerald-50 text-emerald-950 border-emerald-400 shadow-sm'
+                  : 'bg-white text-slate-900 border-slate-200 hover:border-emerald-300'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">
+                  Resolved
+                </p>
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              </div>
+              <p className="text-2xl font-bold mt-1 text-emerald-950 tabular-nums">{ticketMetrics.resolved}</p>
+            </button>
           </div>
 
-          {/* Source Filters & Search Bar */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+          {/* Filter & Search Bar */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
             <div className="flex flex-wrap items-center gap-2">
               {(
                 [
-                  { key: 'All', label: `All (${sourceCounts.all})` },
-                  { key: 'Support Widget', label: `Support Widget (${sourceCounts.widget})` },
-                  { key: 'Contact Page', label: `Contact Page (${sourceCounts.contact})` }
-                ] as { key: SourceFilter; label: string }[]
+                  { key: 'All', label: `All Status (${ticketMetrics.total})` },
+                  { key: 'Open', label: `Open (${ticketMetrics.open})` },
+                  { key: 'In Review', label: `In Review (${ticketMetrics.inReview})` },
+                  { key: 'Resolved', label: `Resolved (${ticketMetrics.resolved})` }
+                ] as { key: TicketStatusFilter; label: string }[]
               ).map(tab => (
                 <button
                   key={tab.key}
                   type="button"
-                  onClick={() => setSourceFilter(tab.key)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
-                    sourceFilter === tab.key
+                  onClick={() => setStatusFilter(tab.key)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                    statusFilter === tab.key
                       ? 'bg-indigo-950 text-white shadow-xs'
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                   }`}
@@ -488,15 +557,28 @@ export const AdminContacts: React.FC = () => {
               ))}
             </div>
 
-            <div className="relative w-full md:w-72">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                placeholder="Search name, email, WhatsApp, subject..."
-                className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-slate-300 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
-              />
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+              <select
+                value={sourceFilter}
+                onChange={e => setSourceFilter(e.target.value as SourceFilter)}
+                aria-label="Filter by origin"
+                className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              >
+                <option value="All">All Origins ({ticketMetrics.total})</option>
+                <option value="Support Widget">Support Widget ({ticketMetrics.widget})</option>
+                <option value="Contact Page">Contact Page ({ticketMetrics.contact})</option>
+              </select>
+
+              <div className="relative w-full sm:w-72">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Search ticket #, name, email, subject..."
+                  className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-slate-300 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                />
+              </div>
             </div>
           </div>
 
@@ -505,10 +587,10 @@ export const AdminContacts: React.FC = () => {
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase tracking-wider text-[11px]">
                   <tr>
-                    <th className="py-3 px-4 font-semibold">Sender &amp; WhatsApp</th>
-                    <th className="py-3 px-4 font-semibold">Source</th>
-                    <th className="py-3 px-4 font-semibold">Subject</th>
-                    <th className="py-3 px-4 font-semibold">Date</th>
+                    <th className="py-3 px-4 font-semibold">Ticket #</th>
+                    <th className="py-3 px-4 font-semibold">Visitor &amp; Contact</th>
+                    <th className="py-3 px-4 font-semibold">Origin</th>
+                    <th className="py-3 px-4 font-semibold">Subject &amp; Thread</th>
                     <th className="py-3 px-4 font-semibold">Status</th>
                     <th className="py-3 px-4 font-semibold text-right">Actions</th>
                   </tr>
@@ -517,37 +599,56 @@ export const AdminContacts: React.FC = () => {
                   {loading ? (
                     <tr>
                       <td colSpan={6} className="py-12 text-center text-slate-400">
-                        Loading communications inbox...
+                        Loading helpdesk tickets...
                       </td>
                     </tr>
                   ) : filteredMessages.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="py-12 text-center text-slate-400">
                         {messages.length === 0
-                          ? 'No inquiries received yet.'
-                          : 'No inquiries match the selected source or search query.'}
+                          ? 'No support tickets submitted yet.'
+                          : 'No tickets match the selected status, origin, or search query.'}
                       </td>
                     </tr>
                   ) : (
                     filteredMessages.map(msg => {
                       const src = getMessageSource(msg);
-                      const unread = isUnreadStatus(msg.status);
+                      const tStatus = resolveTicketStatus(msg);
+                      const badge = getTicketStatusBadge(tStatus);
+                      const BadgeIcon = badge.Icon;
+                      const isOpenTicket = tStatus === 'Open';
                       const contactNumber = msg.whatsapp || msg.phone;
                       const waHref = contactNumber ? toWhatsAppLink(contactNumber) : '';
+                      const replyCount = msg.replies?.length || 0;
 
                       return (
                         <tr
                           key={msg.id}
-                          className={`hover:bg-slate-50/70 transition-colors ${
-                            unread ? 'bg-amber-50/40 font-medium' : ''
+                          onClick={() => handleOpenTicketModal(msg)}
+                          className={`hover:bg-slate-50/80 transition-colors cursor-pointer ${
+                            isOpenTicket ? 'bg-amber-50/35' : ''
                           }`}
                         >
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <div className="font-mono font-bold text-slate-900 tabular-nums">
+                              {msg.ticketNumber || `NXG-${msg.id.slice(-6).toUpperCase()}`}
+                            </div>
+                            <div className="text-[10px] text-slate-500 font-mono mt-0.5 tabular-nums">
+                              {new Date(msg.createdAt).toLocaleDateString()}
+                            </div>
+                            {msg.priority === 'Urgent' && (
+                              <span className="inline-block mt-1 text-[10px] font-bold uppercase tracking-wider text-rose-700">
+                                Urgent Priority
+                              </span>
+                            )}
+                          </td>
+
                           <td className="py-3.5 px-4">
                             <div className="flex flex-wrap items-center gap-1.5">
                               <strong className="text-slate-900 text-xs">{msg.name}</strong>
                               {msg.aiConversationId && (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                                  <Sparkles className="w-2.5 h-2.5" />
+                                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700">
+                                  <Sparkles className="w-3 h-3" />
                                   AI Escalated
                                 </span>
                               )}
@@ -556,9 +657,6 @@ export const AdminContacts: React.FC = () => {
                             {contactNumber && (
                               <div className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-emerald-700 font-semibold">
                                 <MessageCircle className="w-3 h-3 shrink-0" />
-                                <span className="text-[10px] text-slate-500 font-medium">
-                                  {src === 'Support Widget' || msg.whatsapp ? 'WhatsApp:' : 'Phone:'}
-                                </span>
                                 {waHref ? (
                                   <a
                                     href={waHref}
@@ -578,53 +676,49 @@ export const AdminContacts: React.FC = () => {
 
                           <td className="py-3.5 px-4 whitespace-nowrap">
                             {src === 'Support Widget' ? (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-950 border border-amber-200">
-                                <Headphones className="w-3 h-3 text-amber-700" />
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-900">
+                                <Headphones className="w-3.5 h-3.5 text-amber-700" />
                                 <span>Support Widget</span>
                               </span>
                             ) : (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-950 border border-indigo-200">
-                                <Globe className="w-3 h-3 text-indigo-700" />
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-950">
+                                <Globe className="w-3.5 h-3.5 text-indigo-700" />
                                 <span>Contact Page</span>
                               </span>
                             )}
                           </td>
 
-                          <td className="py-3.5 px-4">
-                            <span className="font-semibold text-indigo-950 block">{msg.subject}</span>
-                            <p className="text-[11px] text-slate-500 truncate max-w-xs">{msg.message}</p>
+                          <td className="py-3.5 px-4 max-w-xs">
+                            <span className="font-semibold text-slate-900 block truncate">{msg.subject}</span>
+                            <p className="text-[11px] text-slate-500 truncate mt-0.5">{msg.message}</p>
+                            {replyCount > 0 && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-700 mt-1 tabular-nums">
+                                <MessageSquarePlus className="w-3 h-3" />
+                                {replyCount} {replyCount === 1 ? 'reply' : 'replies'} in thread
+                              </span>
+                            )}
                           </td>
 
-                          <td className="py-3.5 px-4 text-slate-400 text-[11px] whitespace-nowrap">
-                            {new Date(msg.createdAt).toLocaleDateString()}
-                          </td>
-
-                          <td className="py-3.5 px-4">
+                          <td className="py-3.5 px-4 whitespace-nowrap">
                             <span
-                              className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                                unread
-                                  ? 'bg-amber-100 text-amber-900'
-                                  : msg.status === 'Replied'
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : 'bg-slate-100 text-slate-600'
-                              }`}
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold ${badge.className}`}
                             >
-                              {msg.status}
+                              <BadgeIcon className="w-3.5 h-3.5" />
+                              <span>{badge.label}</span>
                             </span>
                           </td>
 
-                          <td className="py-3.5 px-4 text-right">
+                          <td
+                            className="py-3.5 px-4 text-right whitespace-nowrap"
+                            onClick={e => e.stopPropagation()}
+                          >
                             <div className="flex items-center justify-end gap-1.5">
                               <button
                                 type="button"
-                                onClick={() => {
-                                  setSelectedMessage(msg);
-                                  setConfirmDeleteId(null);
-                                  if (unread) updateStatus(msg.id, 'Read');
-                                }}
-                                className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-950 font-semibold cursor-pointer"
+                                onClick={() => handleOpenTicketModal(msg)}
+                                className="px-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-950 font-semibold cursor-pointer whitespace-nowrap shrink-0"
                               >
-                                View
+                                Manage
                               </button>
                               {confirmDeleteId === msg.id ? (
                                 <div className="inline-flex items-center gap-1">
@@ -647,8 +741,8 @@ export const AdminContacts: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => setConfirmDeleteId(msg.id)}
-                                  title="Delete inquiry"
-                                  className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
+                                  title="Delete ticket"
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
@@ -716,7 +810,7 @@ export const AdminContacts: React.FC = () => {
                   key={tab.key}
                   type="button"
                   onClick={() => setAiFilter(tab.key)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                     aiFilter === tab.key
                       ? 'bg-indigo-950 text-white shadow-xs'
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
@@ -806,23 +900,23 @@ export const AdminContacts: React.FC = () => {
                           <td className="py-3.5 px-4 whitespace-nowrap">
                             <div className="flex items-center gap-1.5 flex-wrap">
                               {conv.mode === 'human' ? (
-                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-900">
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-emerald-50 text-emerald-900 border border-emerald-200">
                                   <Headphones className="w-3 h-3" />
                                   <span>Live Human</span>
                                 </span>
                               ) : conv.escalatedToHuman ? (
-                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-900">
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-emerald-50 text-emerald-900 border border-emerald-200">
                                   <UserCheck className="w-3 h-3" />
                                   <span>Escalated Ticket</span>
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-900">
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-indigo-50 text-indigo-900 border border-indigo-200">
                                   <Bot className="w-3 h-3" />
                                   <span>AI Guided</span>
                                 </span>
                               )}
                               {(conv.unreadByAgent || 0) > 0 && (
-                                <span className="px-2 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-bold">
+                                <span className="px-2 py-0.5 rounded-lg bg-rose-600 text-white text-[10px] font-bold tabular-nums">
                                   {conv.unreadByAgent} new
                                 </span>
                               )}
@@ -830,7 +924,7 @@ export const AdminContacts: React.FC = () => {
                           </td>
 
                           <td className="py-3.5 px-4 whitespace-nowrap">
-                            <div className="text-slate-700 font-mono text-[11px]">
+                            <div className="text-slate-700 font-mono text-[11px] tabular-nums">
                               {new Date(conv.updatedAt).toLocaleString([], {
                                 month: 'short',
                                 day: 'numeric',
@@ -899,142 +993,271 @@ export const AdminContacts: React.FC = () => {
         </>
       )}
 
-      {/* Inquiry Message Modal */}
-      {selectedMessage && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 space-y-5 shadow-2xl animate-in zoom-in-95">
-            <div className="flex items-start justify-between border-b border-slate-200 pb-3 gap-3">
-              <div>
-                <div className="flex flex-wrap items-center gap-2 mb-1">
-                  {getMessageSource(selectedMessage) === 'Support Widget' ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-950 border border-amber-200">
-                      <Headphones className="w-3 h-3 text-amber-700" />
-                      <span>Via Support Widget</span>
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-950 border border-indigo-200">
-                      <Globe className="w-3 h-3 text-indigo-700" />
-                      <span>Via Contact Page</span>
-                    </span>
-                  )}
-                  {selectedMessage.aiConversationId && (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-900">
-                      <Sparkles className="w-3 h-3" />
-                      <span>AI Escalated</span>
-                    </span>
-                  )}
-                  <span className="text-xs text-amber-700 font-semibold uppercase tracking-wider">
-                    {selectedMessage.subject}
-                  </span>
-                </div>
-                <h3 className="font-serif font-bold text-lg text-slate-900">
-                  Inquiry from {selectedMessage.name}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedMessage(null)}
-                className="text-slate-400 hover:text-slate-700 p-1 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+      {/* Structured Helpdesk Ticket Detail & Reply Modal */}
+      {selectedMessage && (() => {
+        const currentStatus = resolveTicketStatus(selectedMessage);
+        const statusBadge = getTicketStatusBadge(currentStatus);
+        const StatusIcon = statusBadge.Icon;
+        const ticketNo = selectedMessage.ticketNumber || `NXG-${selectedMessage.id.slice(-6).toUpperCase()}`;
+        const contactNum = selectedMessage.whatsapp || selectedMessage.phone || '';
+        const waHref = contactNum ? toWhatsAppLink(contactNum) : '';
 
-            <div className="space-y-3 text-xs text-slate-600">
-              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-1.5">
-                <div>
-                  <strong className="text-slate-800">Origin:</strong>{' '}
-                  <span className="font-semibold text-indigo-950">
-                    {getMessageSource(selectedMessage)}
-                  </span>
-                </div>
-                <div>
-                  <strong className="text-slate-800">Email:</strong>{' '}
-                  <a href={`mailto:${selectedMessage.email}`} className="text-indigo-900 underline">
-                    {selectedMessage.email}
-                  </a>
-                </div>
-                {(selectedMessage.whatsapp || selectedMessage.phone) && (
+        return (
+          <div
+            className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
+            onClick={() => setSelectedMessage(null)}
+          >
+            <div
+              className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl flex flex-col max-h-[90vh] overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Modal Header */}
+              <div className="p-5 sm:p-6 border-b border-slate-200 bg-slate-50 flex items-start justify-between gap-4">
+                <div className="space-y-1.5 min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <strong className="text-slate-800">
-                      {selectedMessage.whatsapp ? 'WhatsApp / Phone:' : 'Phone:'}
-                    </strong>{' '}
-                    <span className="font-semibold text-slate-900">
-                      {selectedMessage.whatsapp || selectedMessage.phone}
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 text-white font-mono text-xs font-bold tabular-nums">
+                      <Ticket className="w-3.5 h-3.5 text-amber-300" />
+                      <span>{ticketNo}</span>
                     </span>
-                    {toWhatsAppLink(selectedMessage.whatsapp || selectedMessage.phone || '') && (
-                      <a
-                        href={toWhatsAppLink(selectedMessage.whatsapp || selectedMessage.phone || '')}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-100 text-emerald-800 font-bold hover:bg-emerald-200 transition-colors"
-                      >
-                        <MessageCircle className="w-3 h-3" />
-                        <span>Open WhatsApp</span>
-                        <ExternalLink className="w-2.5 h-2.5" />
-                      </a>
-                    )}
-                  </div>
-                )}
-                <div>
-                  <strong className="text-slate-800">Date Received:</strong>{' '}
-                  {new Date(selectedMessage.createdAt).toLocaleString()}
-                </div>
-                {selectedMessage.aiConversationId && (
-                  <div className="pt-1">
                     <button
                       type="button"
-                      onClick={() => handleOpenLinkedAiChat(selectedMessage.aiConversationId)}
-                      className="inline-flex items-center gap-1.5 text-indigo-700 hover:underline font-semibold cursor-pointer"
+                      onClick={() => handleCopyTicketNumber(ticketNo)}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-[11px] font-semibold text-slate-700 cursor-pointer"
                     >
-                      <MessageSquareText className="w-3.5 h-3.5" />
-                      <span>Open Linked AI Chat Transcript</span>
+                      {copiedTicketNum ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                      <span>{copiedTicketNum ? 'Copied' : 'Copy #'}</span>
                     </button>
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-semibold ${statusBadge.className}`}>
+                      <StatusIcon className="w-3.5 h-3.5" />
+                      <span>{statusBadge.label}</span>
+                    </span>
+                    {selectedMessage.priority === 'Urgent' && (
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-rose-700">
+                        · Urgent
+                      </span>
+                    )}
                   </div>
-                )}
-              </div>
 
-              <div>
-                <strong className="text-slate-900 block mb-1">Message Content:</strong>
-                <p className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-slate-800 leading-relaxed font-normal whitespace-pre-wrap">
-                  {selectedMessage.message}
-                </p>
-              </div>
-            </div>
+                  <h3 className="font-serif font-bold text-lg text-slate-900 leading-snug">
+                    {selectedMessage.subject}
+                  </h3>
+                  <p className="text-xs text-slate-600">
+                    Submitted by <strong className="text-slate-900">{selectedMessage.name}</strong> ·{' '}
+                    <span className="font-medium text-indigo-900">{getMessageSource(selectedMessage)}</span>
+                  </p>
+                </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => updateStatus(selectedMessage.id, 'Replied')}
-                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white rounded-xl text-xs font-semibold cursor-pointer"
-              >
-                Mark as Replied
-              </button>
-
-              <div className="flex items-center gap-2">
-                {(selectedMessage.whatsapp || selectedMessage.phone) &&
-                  toWhatsAppLink(selectedMessage.whatsapp || selectedMessage.phone || '') && (
-                    <a
-                      href={toWhatsAppLink(selectedMessage.whatsapp || selectedMessage.phone || '')}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold cursor-pointer"
-                    >
-                      <MessageCircle className="w-3.5 h-3.5" />
-                      <span>Chat on WhatsApp</span>
-                    </a>
-                  )}
-                <a
-                  href={`mailto:${selectedMessage.email}?subject=Re: ${encodeURIComponent(selectedMessage.subject)}`}
-                  className="px-4 py-2 bg-indigo-950 hover:bg-indigo-900 text-white rounded-xl text-xs font-semibold cursor-pointer"
+                <button
+                  type="button"
+                  onClick={() => setSelectedMessage(null)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 cursor-pointer shrink-0"
+                  aria-label="Close ticket modal"
                 >
-                  Reply via Email
-                </a>
+                  <X className="w-4 h-4" />
+                </button>
               </div>
+
+              {/* Scrollable Ticket Dossier & Thread */}
+              <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-5">
+                {/* Status Control Bar + Metadata */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3 text-xs">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-200">
+                    <span className="font-semibold text-slate-800">Ticket Status Transition:</span>
+                    <div className="inline-flex items-center gap-1.5 flex-wrap">
+                      {(['Open', 'In Review', 'Resolved'] as TicketStatus[]).map(st => {
+                        const active = currentStatus === st;
+                        return (
+                          <button
+                            key={st}
+                            type="button"
+                            disabled={updatingStatusId === selectedMessage.id}
+                            onClick={() => updateTicketStatus(selectedMessage.id, st)}
+                            className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                              active
+                                ? 'bg-indigo-950 text-white border-indigo-950'
+                                : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                            }`}
+                          >
+                            {st}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-slate-600">
+                    <div>
+                      <span className="text-slate-500 block text-[11px]">Email Address</span>
+                      <a href={`mailto:${selectedMessage.email}`} className="font-semibold text-indigo-900 hover:underline break-all">
+                        {selectedMessage.email}
+                      </a>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block text-[11px]">WhatsApp / Phone</span>
+                      {contactNum ? (
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-slate-900">{contactNum}</span>
+                          {waHref && (
+                            <a
+                              href={waHref}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 hover:underline"
+                            >
+                              Open WhatsApp <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-slate-400">Not provided</span>
+                      )}
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block text-[11px]">Created</span>
+                      <span className="font-mono text-slate-800 tabular-nums">
+                        {new Date(selectedMessage.createdAt).toLocaleString()}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block text-[11px]">Last Updated</span>
+                      <span className="font-mono text-slate-800 tabular-nums">
+                        {new Date(selectedMessage.updatedAt || selectedMessage.createdAt).toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+
+                  {selectedMessage.aiConversationId && (
+                    <div className="pt-2 border-t border-slate-200">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenLinkedAiChat(selectedMessage.aiConversationId)}
+                        className="inline-flex items-center gap-1.5 text-indigo-800 hover:underline font-semibold cursor-pointer"
+                      >
+                        <MessageSquareText className="w-3.5 h-3.5" />
+                        <span>Open Linked AI / Live Chat Transcript</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Chronological Conversation Thread */}
+                <div className="space-y-3">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    Ticket Conversation Thread ({1 + (selectedMessage.replies?.length || 0)})
+                  </h4>
+
+                  {/* Initial Visitor Inquiry */}
+                  <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                      <span className="font-bold text-slate-900">{selectedMessage.name} · Original Inquiry</span>
+                      <span className="font-mono text-slate-400 tabular-nums">
+                        {new Date(selectedMessage.createdAt).toLocaleString()}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">
+                      {selectedMessage.message}
+                    </p>
+                  </div>
+
+                  {/* Replies */}
+                  {(selectedMessage.replies || []).map(rep => {
+                    const isAdmin = rep.senderRole === 'admin';
+                    return (
+                      <div
+                        key={rep.id}
+                        className={`rounded-2xl p-4 border space-y-1.5 ${
+                          isAdmin
+                            ? 'bg-emerald-50/70 border-emerald-200'
+                            : 'bg-indigo-50/60 border-indigo-200'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2 text-[11px]">
+                          <span className={`font-bold ${isAdmin ? 'text-emerald-950' : 'text-indigo-950'}`}>
+                            {isAdmin
+                              ? `${rep.senderName || 'Council Secretariat'} (Official Reply)`
+                              : `${rep.senderName || selectedMessage.name} (Visitor Follow-up)`}
+                          </span>
+                          <span className="font-mono text-slate-500 tabular-nums">
+                            {new Date(rep.createdAt).toLocaleString()}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-800 leading-relaxed whitespace-pre-wrap">
+                          {rep.message}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Official Helpdesk Reply Composer */}
+              <form
+                onSubmit={handleSendTicketReply}
+                className="p-4 sm:p-5 border-t border-slate-200 bg-slate-50 space-y-3"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <label htmlFor="admin-ticket-reply" className="text-xs font-bold text-slate-800">
+                    Post Reply (Visible to visitor via Ticket #{ticketNo})
+                  </label>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-slate-500">Set status to:</span>
+                    <select
+                      value={replyTargetStatus}
+                      onChange={e => setReplyTargetStatus(e.target.value as TicketStatus)}
+                      className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    >
+                      <option value="In Review">In Review</option>
+                      <option value="Resolved">Resolved</option>
+                      <option value="Open">Open</option>
+                    </select>
+                  </div>
+                </div>
+
+                <textarea
+                  id="admin-ticket-reply"
+                  rows={3}
+                  value={ticketReplyText}
+                  onChange={e => setTicketReplyText(e.target.value)}
+                  disabled={sendingTicketReply}
+                  placeholder="Write an official helpdesk response. Visitors can view this immediately using their ticket number..."
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-700"
+                />
+
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    {waHref && (
+                      <a
+                        href={waHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-2 bg-white border border-emerald-300 hover:bg-emerald-50 text-emerald-800 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0"
+                      >
+                        <MessageCircle className="w-3.5 h-3.5" />
+                        <span>WhatsApp</span>
+                      </a>
+                    )}
+                    <a
+                      href={`mailto:${selectedMessage.email}?subject=${encodeURIComponent(`[${ticketNo}] Re: ${selectedMessage.subject}`)}`}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0"
+                    >
+                      <span>Email</span>
+                    </a>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={sendingTicketReply || !ticketReplyText.trim()}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-950 hover:bg-indigo-900 text-white rounded-xl text-xs font-semibold disabled:opacity-40 cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    {sendingTicketReply ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                    <span>{sendingTicketReply ? 'Posting Reply...' : 'Send Ticket Reply'}</span>
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Full AI Conversation Transcript Modal */}
       {selectedConv && (
@@ -1049,7 +1272,7 @@ export const AdminContacts: React.FC = () => {
             <div className="p-5 sm:p-6 border-b border-slate-200 flex items-start justify-between gap-3 bg-slate-50">
               <div>
                 <div className="flex flex-wrap items-center gap-2 mb-1">
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-950">
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[10px] font-bold bg-indigo-100 text-indigo-950">
                     <Bot className="w-3 h-3" />
                     <span>{aiModelName} Transcript</span>
                   </span>
@@ -1132,7 +1355,7 @@ export const AdminContacts: React.FC = () => {
               <button
                 type="submit"
                 disabled={sendingLiveReply || !liveReplyText.trim()}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold disabled:opacity-40 cursor-pointer shrink-0"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold disabled:opacity-40 cursor-pointer shrink-0 whitespace-nowrap"
               >
                 <Send className="w-3.5 h-3.5" />
                 <span>{sendingLiveReply ? 'Sending...' : 'Reply Live'}</span>

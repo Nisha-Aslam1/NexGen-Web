@@ -24,7 +24,9 @@ import {
   SupportConversation,
   SupportChatMessage,
   MeetingCapture,
-  IdCardRecord
+  IdCardRecord,
+  TicketStatus,
+  SupportTicketReply
 } from '../src/types.ts';
 import { syncSchemaToMongo, loadOrSeedMongo, mongoUpsert, mongoDelete, mongoClearCollections, isMongoConnected } from './mongo.ts';
 
@@ -2595,23 +2597,87 @@ class Database {
     return 'Contact Page';
   }
 
+  private normalizeTicketStatus(msg: Partial<ContactMessage>): TicketStatus {
+    if (msg.ticketStatus === 'Open' || msg.ticketStatus === 'In Review' || msg.ticketStatus === 'Resolved') {
+      return msg.ticketStatus;
+    }
+    if (msg.status === 'Resolved' || msg.status === 'Replied') return 'Resolved';
+    if (msg.status === 'In Review' || msg.status === 'Read') return 'In Review';
+    return 'Open';
+  }
+
+  private generateUniqueTicketNumber(): string {
+    const year = new Date().getFullYear();
+    const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+    for (let attempt = 0; attempt < 15; attempt++) {
+      let code = '';
+      for (let i = 0; i < 4; i++) {
+        code += chars[crypto.randomInt(0, chars.length)];
+      }
+      const candidate = `NXG-TKT-${year}-${code}`;
+      if (!this.data.contacts.some(c => c.ticketNumber?.toUpperCase() === candidate)) {
+        return candidate;
+      }
+    }
+    return `NXG-TKT-${year}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
+  }
+
+  private deriveLegacyTicketNumber(msg: ContactMessage): string {
+    if (msg.ticketNumber && msg.ticketNumber.trim()) return msg.ticketNumber.trim().toUpperCase();
+    const year = new Date(msg.createdAt || Date.now()).getFullYear() || new Date().getFullYear();
+    const suffix = (msg.id || '0000').replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase().padStart(4, '0');
+    return `NXG-TKT-${year}-${suffix}`;
+  }
+
+  private hydrateContactTicket(c: ContactMessage): ContactMessage {
+    return {
+      ...c,
+      source: this.normalizeContactSource(c),
+      ticketNumber: this.deriveLegacyTicketNumber(c),
+      ticketStatus: this.normalizeTicketStatus(c),
+      priority: c.priority === 'Urgent' ? 'Urgent' : 'Normal',
+      replies: Array.isArray(c.replies) ? c.replies : []
+    };
+  }
+
   getContacts() {
     return [...this.data.contacts]
-      .map(c => ({
-        ...c,
-        source: this.normalizeContactSource(c)
-      }))
+      .map(c => this.hydrateContactTicket(c))
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
-  createContact(contact: Omit<ContactMessage, 'id' | 'status' | 'createdAt'>) {
+  getContactByTicketNumber(rawTicketNumber: string): ContactMessage | null {
+    const clean = (rawTicketNumber || '').trim().replace(/^#/, '').toUpperCase();
+    if (!clean) return null;
+    const match = this.data.contacts.find(c => {
+      const hydrated = this.hydrateContactTicket(c);
+      return (
+        hydrated.ticketNumber?.toUpperCase() === clean ||
+        c.id.toUpperCase() === clean
+      );
+    });
+    return match ? this.hydrateContactTicket(match) : null;
+  }
+
+  createContact(
+    contact: Omit<ContactMessage, 'id' | 'status' | 'createdAt' | 'ticketNumber' | 'ticketStatus' | 'replies'> & {
+      priority?: 'Normal' | 'Urgent';
+    }
+  ) {
     const normalizedSource = this.normalizeContactSource(contact);
+    const nowIso = new Date().toISOString();
+    const ticketNumber = this.generateUniqueTicketNumber();
     const newMsg: ContactMessage = {
       ...contact,
       source: normalizedSource,
       id: `cnt_${Date.now()}`,
+      ticketNumber,
       status: 'Unread',
-      createdAt: new Date().toISOString()
+      ticketStatus: 'Open',
+      priority: contact.priority === 'Urgent' ? 'Urgent' : 'Normal',
+      replies: [],
+      createdAt: nowIso,
+      updatedAt: nowIso
     };
     this.data.contacts.unshift(newMsg);
     this.save();
@@ -2619,13 +2685,99 @@ class Database {
     return newMsg;
   }
 
-  updateContactStatus(id: string, status: ContactMessage['status']) {
-    const msg = this.data.contacts.find(c => c.id === id);
+  updateContactStatus(idOrTicket: string, rawStatus: ContactMessage['status'] | TicketStatus) {
+    const clean = (idOrTicket || '').trim();
+    const msg = this.data.contacts.find(
+      c => c.id === clean || this.deriveLegacyTicketNumber(c) === clean.toUpperCase()
+    );
     if (!msg) return null;
-    msg.status = status;
+
+    const nowIso = new Date().toISOString();
+    let mappedTicketStatus: TicketStatus = 'Open';
+    let mappedLegacyStatus: ContactMessage['status'] = 'Unread';
+
+    if (rawStatus === 'Resolved' || rawStatus === 'Replied') {
+      mappedTicketStatus = 'Resolved';
+      mappedLegacyStatus = 'Replied';
+      msg.resolvedAt = nowIso;
+    } else if (rawStatus === 'In Review' || rawStatus === 'Read') {
+      mappedTicketStatus = 'In Review';
+      mappedLegacyStatus = 'Read';
+      msg.resolvedAt = undefined;
+    } else {
+      mappedTicketStatus = 'Open';
+      mappedLegacyStatus = 'Unread';
+      msg.resolvedAt = undefined;
+    }
+
+    if (!msg.ticketNumber) {
+      msg.ticketNumber = this.deriveLegacyTicketNumber(msg);
+    }
+    msg.ticketStatus = mappedTicketStatus;
+    msg.status = mappedLegacyStatus;
+    msg.updatedAt = nowIso;
+
     this.save();
-    mongoUpsert('contacts', id, msg).catch(() => {});
-    return msg;
+    mongoUpsert('contacts', msg.id, msg).catch(() => {});
+    return this.hydrateContactTicket(msg);
+  }
+
+  addTicketReply(
+    idOrTicket: string,
+    payload: { senderRole: 'visitor' | 'admin'; senderName: string; message: string },
+    nextStatus?: TicketStatus
+  ): { ticket: ContactMessage; reply: SupportTicketReply } | null {
+    const clean = (idOrTicket || '').trim().replace(/^#/, '');
+    const msg = this.data.contacts.find(
+      c =>
+        c.id === clean ||
+        this.deriveLegacyTicketNumber(c).toUpperCase() === clean.toUpperCase()
+    );
+    if (!msg) return null;
+
+    const nowIso = new Date().toISOString();
+    if (!msg.ticketNumber) {
+      msg.ticketNumber = this.deriveLegacyTicketNumber(msg);
+    }
+    if (!Array.isArray(msg.replies)) {
+      msg.replies = [];
+    }
+
+    const reply: SupportTicketReply = {
+      id: `trep_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+      senderRole: payload.senderRole,
+      senderName: payload.senderName.trim() || (payload.senderRole === 'admin' ? 'Council Secretariat' : msg.name),
+      message: payload.message.trim(),
+      createdAt: nowIso
+    };
+
+    msg.replies.push(reply);
+    msg.updatedAt = nowIso;
+
+    const currentTicketStatus = this.normalizeTicketStatus(msg);
+    if (payload.senderRole === 'admin') {
+      msg.assignedTo = reply.senderName;
+      const targetStatus: TicketStatus =
+        nextStatus || (currentTicketStatus === 'Open' ? 'In Review' : currentTicketStatus);
+      msg.ticketStatus = targetStatus;
+      msg.status = targetStatus === 'Resolved' ? 'Replied' : 'Read';
+      if (targetStatus === 'Resolved') {
+        msg.resolvedAt = nowIso;
+      } else {
+        msg.resolvedAt = undefined;
+      }
+    } else {
+      // Visitor follow-up reopens a Resolved ticket so admins see it cleanly in queue
+      if (currentTicketStatus === 'Resolved') {
+        msg.ticketStatus = 'Open';
+        msg.status = 'Unread';
+        msg.resolvedAt = undefined;
+      }
+    }
+
+    this.save();
+    mongoUpsert('contacts', msg.id, msg).catch(() => {});
+    return { ticket: this.hydrateContactTicket(msg), reply };
   }
 
   deleteContact(id: string) {
@@ -3324,7 +3476,9 @@ class Database {
       totalEvents: this.data.events.length,
       totalNewsPosts: this.data.news.length,
       totalInquiries: this.data.contacts.length,
-      unreadInquiries: this.data.contacts.filter(c => c.status === 'Unread').length,
+      unreadInquiries: this.data.contacts.filter(
+        c => this.normalizeTicketStatus(c) === 'Open' || c.status === 'Unread'
+      ).length,
       recentActivity: this.data.activityLogs.slice(0, 8),
       monthlyApplications,
       interestDistribution
@@ -3347,7 +3501,9 @@ class Database {
     const rejectedApplications = apps.filter(a => a.status === 'Rejected').length;
 
     const activeVolunteers = vols.filter(v => v.status === 'Active').length;
-    const unreadInquiries = contacts.filter(c => c.status === 'Unread').length;
+    const unreadInquiries = contacts.filter(
+      c => this.normalizeTicketStatus(c) === 'Open' || c.status === 'Unread'
+    ).length;
     const widgetInquiries = contacts.filter(c => c.source === 'Support Widget').length;
     const contactPageInquiries = contacts.filter(c => c.source !== 'Support Widget').length;
 

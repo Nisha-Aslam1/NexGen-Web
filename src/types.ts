@@ -217,8 +217,19 @@ export interface FaqItem {
   updatedAt?: string;
 }
 
+export type TicketStatus = 'Open' | 'In Review' | 'Resolved';
+
+export interface SupportTicketReply {
+  id: string;
+  senderRole: 'visitor' | 'admin';
+  senderName: string;
+  message: string;
+  createdAt: string;
+}
+
 export interface ContactMessage {
   id: string;
+  ticketNumber?: string;
   name: string;
   email: string;
   phone?: string;
@@ -227,8 +238,14 @@ export interface ContactMessage {
   aiConversationId?: string;
   subject: string;
   message: string;
-  status: 'Unread' | 'Read' | 'Replied';
+  status: 'Unread' | 'Read' | 'Replied' | 'Open' | 'In Review' | 'Resolved';
+  ticketStatus?: TicketStatus;
+  priority?: 'Normal' | 'Urgent';
+  assignedTo?: string;
+  replies?: SupportTicketReply[];
   createdAt: string;
+  updatedAt?: string;
+  resolvedAt?: string;
 }
 
 export interface SupportChatMessage {

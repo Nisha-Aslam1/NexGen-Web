@@ -2499,15 +2499,19 @@ app.delete('/api/faqs/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICAT
   res.json({ ok: true });
 });
 
-// 10. Contact & Support Widget Inquiries
+// 10. Contact & Support Widget Inquiries (Structured Helpdesk Queue)
 app.post(['/api/contact', '/api/contacts', '/api/support-widget'], (req, res) => {
-  const { name, email, phone, whatsapp, source, channel, subject, message } = req.body || {};
+  const { name, email, phone, whatsapp, source, channel, subject, message, priority, sessionId } = req.body || {};
   const cleanName = typeof name === 'string' ? name.trim() : '';
   const cleanEmail = typeof email === 'string' ? email.trim() : '';
   const cleanSubject = (typeof subject === 'string' && subject.trim()) ? subject.trim() : 'General Inquiry';
   const cleanMessage = typeof message === 'string' ? message.trim() : '';
   const cleanPhone = typeof phone === 'string' ? phone.trim() : '';
   const explicitWhatsapp = typeof whatsapp === 'string' ? whatsapp.trim() : '';
+  const cleanPriority: 'Normal' | 'Urgent' = priority === 'Urgent' ? 'Urgent' : 'Normal';
+  const cleanSessionId = typeof sessionId === 'string' && /^[a-zA-Z0-9_-]{6,100}$/.test(sessionId.trim())
+    ? sessionId.trim()
+    : undefined;
 
   const querySource = typeof req.query?.source === 'string' ? req.query.source.trim().toLowerCase() : '';
   const bodySource = typeof source === 'string' ? source.trim().toLowerCase() : '';
@@ -2548,8 +2552,10 @@ app.post(['/api/contact', '/api/contacts', '/api/support-widget'], (req, res) =>
     phone: cleanPhone || cleanWhatsapp || undefined,
     whatsapp: cleanWhatsapp || undefined,
     source: normalizedSource,
+    aiConversationId: cleanSessionId,
     subject: cleanSubject,
-    message: cleanMessage
+    message: cleanMessage,
+    priority: cleanPriority
   });
   db.logActivity({
     userId: 'public_visitor',
@@ -2558,7 +2564,7 @@ app.post(['/api/contact', '/api/contacts', '/api/support-widget'], (req, res) =>
     action: 'CONTACT_SUBMITTED',
     entityType: 'ContactMessage',
     entityId: contact.id,
-    details: `Inquiry received via ${normalizedSource} from ${cleanName} (${cleanEmail}${cleanWhatsapp ? `, WhatsApp: ${cleanWhatsapp}` : ''}): "${contact.subject}"`,
+    details: `Ticket ${contact.ticketNumber} created via ${normalizedSource} from ${cleanName} (${cleanEmail}${cleanWhatsapp ? `, WhatsApp: ${cleanWhatsapp}` : ''}): "${contact.subject}"`,
     ipAddress: req.ip || 'unknown'
   });
   broadcastToSupportAgents({
@@ -2568,8 +2574,96 @@ app.post(['/api/contact', '/api/contacts', '/api/support-widget'], (req, res) =>
   res.status(201).json({
     ok: true,
     id: contact.id,
+    ticketNumber: contact.ticketNumber,
+    ticketStatus: contact.ticketStatus || 'Open',
+    priority: contact.priority || 'Normal',
+    createdAt: contact.createdAt,
     source: contact.source,
-    message: 'Message sent successfully. Our team will contact you shortly.'
+    message: 'Helpdesk ticket submitted successfully. Keep your ticket number to check replies anytime.'
+  });
+});
+
+// Public Visitor: Look up Helpdesk Ticket Status & Replies by Ticket Number
+app.get('/api/support-tickets/lookup/:ticketNumber', (req, res) => {
+  const ticket = db.getContactByTicketNumber(req.params.ticketNumber);
+  if (!ticket) {
+    return res.status(404).json({
+      error: 'Support ticket not found. Please check the ticket number (e.g., NXG-TKT-2026-XXXX) and try again.'
+    });
+  }
+
+  return res.json({
+    id: ticket.id,
+    ticketNumber: ticket.ticketNumber,
+    name: ticket.name,
+    subject: ticket.subject,
+    message: ticket.message,
+    ticketStatus: ticket.ticketStatus || 'Open',
+    priority: ticket.priority || 'Normal',
+    assignedTo: ticket.assignedTo || null,
+    replies: ticket.replies || [],
+    createdAt: ticket.createdAt,
+    updatedAt: ticket.updatedAt || ticket.createdAt,
+    resolvedAt: ticket.resolvedAt || null
+  });
+});
+
+// Public Visitor: Post Follow-up Reply to Existing Support Ticket
+app.post('/api/support-tickets/:ticketNumber/visitor-reply', (req, res) => {
+  const cleanMessage = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+  const cleanName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  if (!cleanMessage || cleanMessage.length > 2000) {
+    return res.status(400).json({ error: 'Follow-up message must be between 1 and 2,000 characters.' });
+  }
+
+  const existing = db.getContactByTicketNumber(req.params.ticketNumber);
+  if (!existing) {
+    return res.status(404).json({ error: 'Support ticket not found.' });
+  }
+
+  const result = db.addTicketReply(existing.id, {
+    senderRole: 'visitor',
+    senderName: cleanName || existing.name,
+    message: cleanMessage
+  });
+  if (!result) {
+    return res.status(404).json({ error: 'Support ticket not found.' });
+  }
+
+  db.logActivity({
+    userId: 'public_visitor',
+    userName: result.reply.senderName,
+    userRole: 'VISITOR',
+    action: 'TICKET_VISITOR_REPLY',
+    entityType: 'ContactMessage',
+    entityId: result.ticket.id,
+    details: `Visitor added follow-up on ticket ${result.ticket.ticketNumber}`,
+    ipAddress: req.ip || 'unknown'
+  });
+
+  broadcastToSupportAgents({
+    type: 'support:ticket_updated',
+    ticket: result.ticket,
+    reply: result.reply
+  });
+
+  return res.status(201).json({
+    ok: true,
+    ticket: {
+      id: result.ticket.id,
+      ticketNumber: result.ticket.ticketNumber,
+      name: result.ticket.name,
+      subject: result.ticket.subject,
+      message: result.ticket.message,
+      ticketStatus: result.ticket.ticketStatus || 'Open',
+      priority: result.ticket.priority || 'Normal',
+      assignedTo: result.ticket.assignedTo || null,
+      replies: result.ticket.replies || [],
+      createdAt: result.ticket.createdAt,
+      updatedAt: result.ticket.updatedAt || result.ticket.createdAt,
+      resolvedAt: result.ticket.resolvedAt || null
+    },
+    reply: result.reply
   });
 });
 
@@ -2577,10 +2671,83 @@ app.get(['/api/contact', '/api/contacts'], requireAuth(['ADMIN', 'CONTENT_MANAGE
   res.json(db.getContacts());
 });
 
-app.patch(['/api/contact/:id', '/api/contacts/:id', '/api/contacts/:id/status'], requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
-  const updated = db.updateContactStatus(req.params.id, req.body.status);
-  if (!updated) return res.status(404).json({ error: 'Message not found' });
+app.patch(['/api/contact/:id', '/api/contacts/:id', '/api/contacts/:id/status', '/api/contacts/:id/ticket-status'], requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
+  const requestedStatus = req.body?.ticketStatus || req.body?.status;
+  const updated = db.updateContactStatus(req.params.id, requestedStatus);
+  if (!updated) return res.status(404).json({ error: 'Ticket not found' });
+
+  broadcastToSupportAgents({
+    type: 'support:ticket_updated',
+    ticket: updated
+  });
+  if (updated.aiConversationId) {
+    broadcastToSupportVisitor(updated.aiConversationId, {
+      type: 'support:ticket_updated',
+      ticket: updated
+    });
+  }
   res.json(updated);
+});
+
+app.post('/api/contacts/:id/reply', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
+  const cleanMessage = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+  const nextStatus =
+    req.body?.ticketStatus === 'Open' ||
+    req.body?.ticketStatus === 'In Review' ||
+    req.body?.ticketStatus === 'Resolved'
+      ? req.body.ticketStatus
+      : undefined;
+
+  if (!cleanMessage || cleanMessage.length > 4000) {
+    return res.status(400).json({ error: 'Reply message must be between 1 and 4,000 characters.' });
+  }
+
+  const actor = (req as any).user as AuthSession;
+  const agentName = actor?.name || 'Council Secretariat';
+
+  const result = db.addTicketReply(
+    req.params.id,
+    {
+      senderRole: 'admin',
+      senderName: agentName,
+      message: cleanMessage
+    },
+    nextStatus
+  );
+
+  if (!result) {
+    return res.status(404).json({ error: 'Support ticket not found.' });
+  }
+
+  db.logActivity({
+    userId: actor?.userId || 'admin',
+    userName: agentName,
+    userRole: actor?.role || 'ADMIN',
+    action: 'TICKET_ADMIN_REPLY',
+    entityType: 'ContactMessage',
+    entityId: result.ticket.id,
+    details: `Replied to ticket ${result.ticket.ticketNumber} (Status: ${result.ticket.ticketStatus})`,
+    ipAddress: req.ip || 'unknown'
+  });
+
+  broadcastToSupportAgents({
+    type: 'support:ticket_updated',
+    ticket: result.ticket,
+    reply: result.reply
+  });
+  if (result.ticket.aiConversationId) {
+    broadcastToSupportVisitor(result.ticket.aiConversationId, {
+      type: 'support:ticket_updated',
+      ticket: result.ticket,
+      reply: result.reply
+    });
+  }
+
+  return res.status(201).json({
+    ok: true,
+    ticket: result.ticket,
+    reply: result.reply
+  });
 });
 
 app.delete(['/api/contact/:id', '/api/contacts/:id'], requireAuth(['ADMIN']), (req, res) => {
