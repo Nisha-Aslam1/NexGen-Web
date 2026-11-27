@@ -374,12 +374,13 @@ export const AdminAppointmentLetters: React.FC = () => {
     kind: 'signature' | 'stamp',
     signatoryId?: string
   ) => {
-    if (file.type !== 'image/png' && !file.name.toLowerCase().endsWith('.png')) {
-      addToast('Please select a transparent PNG (.png) file.', 'error');
+    const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+    if (!validTypes.includes(file.type) && !/\.(png|jpg|jpeg|webp)$/i.test(file.name)) {
+      addToast('Please select a valid image file (PNG, JPEG, or WebP).', 'error');
       return;
     }
     if (file.size > 2 * 1024 * 1024) {
-      addToast('PNG file must be 2MB or smaller.', 'error');
+      addToast('Image file must be 2MB or smaller.', 'error');
       return;
     }
     setUploadingKind(kind);
@@ -387,7 +388,7 @@ export const AdminAppointmentLetters: React.FC = () => {
       const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result || ''));
-        reader.onerror = () => reject(new Error('Failed to read PNG file'));
+        reader.onerror = () => reject(new Error('Failed to read image file'));
         reader.readAsDataURL(file);
       });
 
@@ -396,6 +397,10 @@ export const AdminAppointmentLetters: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dataUrl, kind, signatoryId })
       });
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        throw new Error('Session expired or server returned HTML error. Please refresh and log in.');
+      }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Upload failed');
 
@@ -408,7 +413,7 @@ export const AdminAppointmentLetters: React.FC = () => {
       if (data.signatory) {
         setSignatories(prev => prev.map(s => (s.id === data.signatory.id ? data.signatory : s)));
       }
-      addToast(`Protected ${kind} PNG uploaded successfully.`, 'success');
+      addToast(`Protected ${kind} asset uploaded successfully.`, 'success');
     } catch (err: any) {
       addToast(err.message || `Failed to upload ${kind} PNG`, 'error');
     } finally {
@@ -1210,7 +1215,7 @@ export const AdminAppointmentLetters: React.FC = () => {
                     <span>{uploadingKind === 'signature' ? 'Uploading...' : 'Upload Signature PNG'}</span>
                     <input
                       type="file"
-                      accept="image/png"
+                      accept="image/png,image/jpeg,image/webp"
                       className="hidden"
                       disabled={uploadingKind !== null}
                       onChange={e => {
@@ -1242,7 +1247,7 @@ export const AdminAppointmentLetters: React.FC = () => {
                     <span>{uploadingKind === 'stamp' ? 'Uploading...' : 'Upload Stamp PNG'}</span>
                     <input
                       type="file"
-                      accept="image/png"
+                      accept="image/png,image/jpeg,image/webp"
                       className="hidden"
                       disabled={uploadingKind !== null}
                       onChange={e => {

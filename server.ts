@@ -1766,18 +1766,20 @@ app.delete('/api/id-card-records/:id', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER'
 // OFFICIAL APPOINTMENT LETTERS, SIGNATORIES & PUBLIC VERIFICATION
 // ----------------------------------------------------
 
-function isPngBufferValid(buffer: Buffer): boolean {
-  if (!buffer || buffer.length < 24) return false;
-  return (
-    buffer[0] === 0x89 &&
-    buffer[1] === 0x50 &&
-    buffer[2] === 0x4e &&
-    buffer[3] === 0x47 &&
-    buffer[4] === 0x0d &&
-    buffer[5] === 0x0a &&
-    buffer[6] === 0x1a &&
-    buffer[7] === 0x0a
-  );
+function isImageBufferValid(buffer: Buffer): boolean {
+  if (!buffer || buffer.length < 12) return false;
+  const isPng = buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+  const isJpg = buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  const isWebp =
+    buffer[0] === 0x52 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x46 &&
+    buffer[8] === 0x57 &&
+    buffer[9] === 0x45 &&
+    buffer[10] === 0x42 &&
+    buffer[11] === 0x50;
+  return isPng || isJpg || isWebp;
 }
 
 app.get(
@@ -1905,18 +1907,18 @@ app.post(
       return res.status(400).json({ error: 'PNG image dataUrl is required.' });
     }
 
-    const match = dataUrl.match(/^data:image\/png(?:;[^;,=]+=[^;,]+)*;base64,([\s\S]+)$/i);
+    const match = dataUrl.match(/^data:image\/(png|jpeg|jpg|webp)(?:;[^;,=]+=[^;,]+)*;base64,([\s\S]+)$/i);
     if (!match) {
-      return res.status(400).json({ error: 'Only transparent PNG images (image/png) are allowed for signatures and stamps.' });
+      return res.status(400).json({ error: 'Only PNG, JPEG, or WebP images are allowed for signatures and stamps.' });
     }
 
-    const base64Body = match[1].replace(/\s+/g, '');
+    const base64Body = match[2].replace(/\s+/g, '');
     const buffer = Buffer.from(base64Body, 'base64');
     if (buffer.length > 2 * 1024 * 1024) {
-      return res.status(413).json({ error: 'PNG asset exceeds maximum 2MB file size limit.' });
+      return res.status(413).json({ error: 'Asset exceeds maximum 2MB file size limit.' });
     }
-    if (!isPngBufferValid(buffer)) {
-      return res.status(400).json({ error: 'Invalid PNG binary file header. Please upload a genuine PNG file.' });
+    if (!isImageBufferValid(buffer)) {
+      return res.status(400).json({ error: 'Invalid image file header. Please upload a genuine PNG, JPEG, or WebP image.' });
     }
 
     const protectedDir = path.join(process.cwd(), 'data', 'protected_assets');
