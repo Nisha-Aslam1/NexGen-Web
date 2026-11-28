@@ -1399,13 +1399,19 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
         </div>
 
         <div className="flex items-center gap-2.5">
-          {/* Official Gmail Badge */}
-          <svg viewBox="0 0 24 18" className="w-4.5 h-3.5 shrink-0" aria-label="Gmail">
-            <path d="M0 5.5V16.5C0 17.33.67 18 1.5 18H5.5V9.2L0 5.5z" fill="#4285F4" />
-            <path d="M24 5.5V16.5C24 17.33 23.33 18 22.5 18H18.5V9.2L24 5.5z" fill="#34A853" />
-            <path d="M0 3V6.2L5.5 10V4.4L3.2 2.5C1.8 1.3 0 2.1 0 3z" fill="#C5221F" />
-            <path d="M24 3V6.2L18.5 10V4.4L20.8 2.5C22.2 1.3 24 2.1 24 3z" fill="#FBBC04" />
-            <path d="M5.5 4.4L12 8.9L18.5 4.4V10L12 14.3L5.5 10V4.4z" fill="#EA4335" />
+          {/* Official Email Icon */}
+          <svg
+            viewBox="0 0 24 24"
+            className="w-4.5 h-4.5 shrink-0"
+            aria-label="Email"
+            fill="none"
+            stroke="#162A4D"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect x="3" y="5" width="18" height="14" rx="2.5" />
+            <path d="m4 7 8 6 8-6" />
           </svg>
           <span className="leading-tight break-all text-[9px]">info@nexgencouncil.bond</span>
         </div>
