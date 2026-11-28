@@ -19,7 +19,14 @@ import {
   AppointmentType,
   SignatoryProfile
 } from '../../types.ts';
-import { AppointmentLetterPreview, AppointmentPreviewData } from './AppointmentLetterPreview.tsx';
+import {
+  AppointmentLetterPreview,
+  AppointmentPreviewData,
+  A4_WIDTH_PX,
+  A4_HEIGHT_PX,
+  MAX_DESIGNATION_LENGTH,
+  normalizeDesignation
+} from './AppointmentLetterPreview.tsx';
 
 export interface AppointmentApplicantSeed {
   applicationId?: string;
@@ -60,9 +67,7 @@ const MEMBERSHIP_TIERS = [
   'Executive Member'
 ];
 
-// A4 at 96dpi
-const A4_W = 794;
-const A4_H = 1123;
+const PDF_TIMEOUT_MS = 60000;
 
 export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
   open,
@@ -98,14 +103,18 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
   const [savedLetter, setSavedLetter] = useState<AppointmentLetter | null>(null);
   const [previewMode, setPreviewMode] = useState<'html' | 'pdf'>('html');
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+
+  // Each action has its OWN loading flag (previously one flag made two buttons show loading together)
   const [saving, setSaving] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [sendingEmail, setSendingEmail] = useState(false);
   const [printing, setPrinting] = useState(false);
 
-  // --- Fit the A4 page into the available pane (always one whole page visible) ---
+  // --- Fit the A4 page into the available pane ---
   const paneRef = useRef<HTMLDivElement | null>(null);
   const [scale, setScale] = useState(1);
+  const [fitMode, setFitMode] = useState<'page' | 'width'>('page');
 
   useEffect(() => {
     if (!open) return;
@@ -113,13 +122,17 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
     if (!el) return;
     const update = () => {
       const w = el.clientWidth - 32;
-      setScale(Math.max(0.3, Math.min(1, w / A4_W)));
+      const h = el.clientHeight - 32;
+      const byWidth = w / A4_WIDTH_PX;
+      const byHeight = h / A4_HEIGHT_PX;
+      const next = fitMode === 'page' ? Math.min(byWidth, byHeight) : byWidth;
+      setScale(Math.max(0.3, Math.min(1, next)));
     };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [open, previewMode]);
+  }, [open, previewMode, fitMode]);
 
   useEffect(() => {
     if (!open) return;
@@ -181,7 +194,8 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
       setSavedLetter(null);
       setAppointeeName(applicantSeed.fullName || '');
       setReferenceCode(applicantSeed.referenceCode || '');
-      setDesignation(applicantSeed.preferredRole || 'Council Volunteer');
+      // The applicant's "preferred role" is free text (often a full sentence) -> convert to a short title
+      setDesignation(normalizeDesignation(applicantSeed.preferredRole));
       setDepartment('Community Leadership & Outreach');
       setChapter(applicantSeed.city || 'Sialkot');
       setCountry('Pakistan');
@@ -221,19 +235,45 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
     null;
 
   const currentLetter = savedLetter || existingLetter || null;
+  const designationTooLong = designation.trim().length > MAX_DESIGNATION_LENGTH;
 
-  const fetchPdfBlob = useCallback(async (letterId: string): Promise<Blob> => {
-    const res = await authFetch(`/api/appointment-letters/${encodeURIComponent(letterId)}/pdf?disposition=inline&t=${Date.now()}`);
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to generate A4 PDF');
-    }
-    return res.blob();
-  }, []);
+  /** Fetches the real generated PDF. Aborts after 60s so buttons never get stuck on "Generating...". */
+  const fetchPdfBlob = useCallback(
+    async (letterId: string, disposition: 'inline' | 'attachment' = 'inline'): Promise<Blob> => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), PDF_TIMEOUT_MS);
+      try {
+        const res = await authFetch(
+          `/api/appointment-letters/${encodeURIComponent(letterId)}/pdf?disposition=${disposition}&t=${Date.now()}`,
+          { signal: controller.signal }
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || 'Failed to generate A4 PDF');
+        }
+        return await res.blob();
+      } catch (err: any) {
+        if (err?.name === 'AbortError') {
+          throw new Error('PDF generation took too long. Please try again.');
+        }
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    []
+  );
 
   const handleSaveOrIssue = async (): Promise<AppointmentLetter | null> => {
     if (!designation.trim() || !department.trim()) {
       addToast('Please enter both Designation and Department.', 'error');
+      return null;
+    }
+    if (designationTooLong) {
+      addToast(
+        `Designation must be a short job title (max ${MAX_DESIGNATION_LENGTH} characters). Use "Auto-shorten" or edit it.`,
+        'error'
+      );
       return null;
     }
 
@@ -304,15 +344,16 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
   };
 
   const handleLoadPdfPreview = async () => {
+    if (previewLoading) return;
     let target = currentLetter;
     if (!target) {
       target = await handleSaveOrIssue();
       if (!target) return;
     }
 
-    setDownloadingPdf(true);
+    setPreviewLoading(true);
     try {
-      const blob = await fetchPdfBlob(target.id);
+      const blob = await fetchPdfBlob(target.id, 'inline');
       setPdfBlobUrl(prev => {
         if (prev) URL.revokeObjectURL(prev);
         return URL.createObjectURL(blob);
@@ -321,11 +362,12 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
     } catch (err: any) {
       addToast(err.message || 'Failed to render PDF preview', 'error');
     } finally {
-      setDownloadingPdf(false);
+      setPreviewLoading(false);
     }
   };
 
   const handleDownloadPdf = async () => {
+    if (downloadingPdf) return;
     let target = currentLetter;
     if (!target) {
       target = await handleSaveOrIssue();
@@ -334,12 +376,7 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
 
     setDownloadingPdf(true);
     try {
-      const res = await authFetch(`/api/appointment-letters/${encodeURIComponent(target.id)}/pdf`);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || 'Failed to download PDF');
-      }
-      const blob = await res.blob();
+      const blob = await fetchPdfBlob(target.id, 'attachment');
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -361,6 +398,7 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
    * through a hidden iframe, so nothing else on the admin page gets printed.
    */
   const handlePrintA4 = async () => {
+    if (printing) return;
     let target = currentLetter;
     if (!target) {
       target = await handleSaveOrIssue();
@@ -368,7 +406,7 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
     }
     setPrinting(true);
     try {
-      const blob = await fetchPdfBlob(target.id);
+      const blob = await fetchPdfBlob(target.id, 'inline');
       const url = URL.createObjectURL(blob);
       const iframe = document.createElement('iframe');
       iframe.style.position = 'fixed';
@@ -399,6 +437,7 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
   };
 
   const handleSendNotificationEmail = async () => {
+    if (sendingEmail) return;
     let target = currentLetter;
     if (!target) {
       target = await handleSaveOrIssue();
@@ -506,13 +545,13 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
               <button
                 type="button"
                 onClick={handleLoadPdfPreview}
-                disabled={downloadingPdf}
+                disabled={previewLoading}
                 className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer transition-colors ${
                   previewMode === 'pdf' ? 'bg-amber-400 text-slate-950' : 'text-slate-300 hover:text-white'
                 }`}
               >
                 <FileText className="w-3.5 h-3.5" />
-                <span>{downloadingPdf ? 'Rendering...' : 'PDF Output View'}</span>
+                <span>{previewLoading ? 'Rendering...' : 'PDF Output View'}</span>
               </button>
             </div>
 
@@ -606,7 +645,9 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
                   value={designation}
                   onChange={e => setDesignation(e.target.value)}
                   placeholder="e.g. Chapter Coordinator"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white"
+                  className={`w-full px-3 py-2 rounded-xl border bg-white ${
+                    designationTooLong ? 'border-amber-500' : 'border-slate-300'
+                  }`}
                 />
               </div>
               <div>
@@ -620,6 +661,25 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
                 />
               </div>
             </div>
+
+            {designationTooLong && (
+              <div className="flex items-start gap-2 text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px" />
+                <div className="space-y-1.5">
+                  <p>
+                    Designation is a full sentence ({designation.trim().length} characters). It should be a short job
+                    title such as &quot;Event Management &amp; Social Media Volunteer&quot;.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setDesignation(normalizeDesignation(designation))}
+                    className="px-2.5 py-1 rounded-md bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold cursor-pointer"
+                  >
+                    Auto-shorten
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -727,9 +787,7 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">
-                Authorized Signatory *
-              </label>
+              <label className="block font-bold text-slate-700 mb-1">Authorized Signatory *</label>
               <select
                 value={signatoryId}
                 onChange={e => setSignatoryId(e.target.value)}
@@ -741,7 +799,8 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
                 ) : (
                   signatories.map(s => (
                     <option key={s.id} value={s.id}>
-                      {s.name} — {s.title} {s.hasSignatureImage ? '✓ Sign' : '(No sign)'} {s.hasStampImage ? '✓ Seal' : '(No seal)'}
+                      {s.name} — {s.title} {s.hasSignatureImage ? '✓ Sign' : '(No sign)'}{' '}
+                      {s.hasStampImage ? '✓ Seal' : '(No seal)'}
                     </option>
                   ))
                 )}
@@ -750,8 +809,8 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
                 <p className="mt-1.5 flex items-start gap-1.5 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
                   <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px" />
                   <span>
-                    {activeSignatory?.name} has no {missingAssets.join(' & ')} uploaded. The letter will be issued without it.
-                    Upload it in Signatories &amp; Official Seals.
+                    {activeSignatory?.name} has no {missingAssets.join(' & ')} uploaded. The letter will be issued
+                    without it. Upload it in Signatories &amp; Official Seals.
                   </span>
                 </p>
               )}
@@ -793,40 +852,62 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
             </div>
           </div>
 
-          {/* Right: ONE full A4 page, scaled to fit the pane */}
-          <div
-            ref={paneRef}
-            className="lg:col-span-8 bg-slate-200/80 p-4 overflow-auto min-h-0"
-          >
-            {previewMode === 'pdf' && pdfBlobUrl ? (
-              <iframe
-                key={pdfBlobUrl}
-                src={`${pdfBlobUrl}#toolbar=0&navpanes=0&scrollbar=0&view=Fit`}
-                title="Official Appointment Letter PDF Preview"
-                className="w-full h-full min-h-[70vh] rounded-xl border border-slate-300 bg-white shadow-lg"
-              />
-            ) : (
-              <div
-                className="mx-auto"
-                style={{ width: A4_W * scale, height: A4_H * scale }}
-              >
-                <div
-                  className="bg-white shadow-lg overflow-hidden origin-top-left"
-                  style={{
-                    width: A4_W,
-                    height: A4_H,
-                    transform: `scale(${scale})`
-                  }}
-                >
-                  <AppointmentLetterPreview
-                    data={previewData}
-                    signatory={activeSignatory}
-                    siteUrl={settings.siteUrl}
-                    isAdminPreview={true}
-                  />
+          {/* Right: A4 preview pane */}
+          <div className="lg:col-span-8 bg-slate-200/80 min-h-0 flex flex-col">
+            {previewMode === 'html' && (
+              <div className="shrink-0 px-4 pt-3 flex items-center justify-between text-[11px] text-slate-600">
+                <span className="font-semibold">A4 · 210 × 297 mm · {Math.round(scale * 100)}%</span>
+                <div className="inline-flex rounded-lg bg-white border border-slate-300 p-0.5 font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => setFitMode('page')}
+                    className={`px-2.5 py-1 rounded-md cursor-pointer ${
+                      fitMode === 'page' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Fit page
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFitMode('width')}
+                    className={`px-2.5 py-1 rounded-md cursor-pointer ${
+                      fitMode === 'width' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Fit width
+                  </button>
                 </div>
               </div>
             )}
+
+            <div ref={paneRef} className="flex-1 min-h-0 overflow-auto p-4">
+              {previewMode === 'pdf' && pdfBlobUrl ? (
+                <iframe
+                  key={pdfBlobUrl}
+                  src={`${pdfBlobUrl}#toolbar=0&navpanes=0&scrollbar=0&view=Fit`}
+                  title="Official Appointment Letter PDF Preview"
+                  className="w-full h-full min-h-[70vh] rounded-xl border border-slate-300 bg-white shadow-lg"
+                />
+              ) : (
+                <div className="mx-auto" style={{ width: A4_WIDTH_PX * scale, height: A4_HEIGHT_PX * scale }}>
+                  <div
+                    className="bg-white shadow-lg overflow-hidden origin-top-left"
+                    style={{
+                      width: A4_WIDTH_PX,
+                      height: A4_HEIGHT_PX,
+                      transform: `scale(${scale})`
+                    }}
+                  >
+                    <AppointmentLetterPreview
+                      data={previewData}
+                      signatory={activeSignatory}
+                      siteUrl={settings.siteUrl}
+                      isAdminPreview={true}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
