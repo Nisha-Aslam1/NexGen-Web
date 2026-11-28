@@ -49,6 +49,34 @@ export const A4_WIDTH_PX = 794;
 export const A4_HEIGHT_PX = 1123;
 const MIN_FIT_SCALE = 0.72;
 
+/** Designation must stay a short job title, never a paragraph. */
+export const MAX_DESIGNATION_LENGTH = 70;
+
+/**
+ * Turns an applicant's free-text "preferred role" (which is often a whole sentence like
+ * "My preference is Event Management, because I am good at...") into a clean short designation.
+ */
+export function normalizeDesignation(raw?: string, fallback = 'Council Volunteer'): string {
+  let s = (raw || '').replace(/\s+/g, ' ').trim();
+  if (!s) return fallback;
+
+  s = s
+    .replace(
+      /^(my\s+(first\s+)?preferences?\s+(is|are)|i\s+(prefer|would\s+like|want|am\s+interested\s+in)|preferred\s+role\s*[:\-]?)\s*/i,
+      ''
+    )
+    .trim();
+
+  s = s.split(/\s+(?:because|as\s+i|since|so\s+that)\s+|[.,;:\n!?]/i)[0].trim();
+
+  if (!s || s.length > MAX_DESIGNATION_LENGTH) return fallback;
+
+  if (!/(volunteer|coordinator|ambassador|lead|manager|officer|fellow|director|member|executive|representative)/i.test(s)) {
+    s = `${s} Volunteer`;
+  }
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function formatReadableDate(raw?: string): string {
   if (!raw || !raw.trim()) return 'Open-Ended / Renewable';
   const d = new Date(raw);
@@ -202,6 +230,10 @@ export const AppointmentLetterPreview: React.FC<AppointmentLetterPreviewProps> =
     el.style.transform = `scale(${chosen})`;
   });
 
+  const statusColor =
+    status === 'REVOKED' ? 'text-rose-700' : status === 'EXPIRED' ? 'text-amber-700' : 'text-emerald-700';
+  const stampBorder = status === 'REVOKED' ? 'border-rose-700 text-rose-700' : 'border-amber-700 text-amber-700';
+
   return (
     <div
       className="bg-white text-slate-900 relative overflow-hidden"
@@ -209,7 +241,7 @@ export const AppointmentLetterPreview: React.FC<AppointmentLetterPreviewProps> =
     >
       {/* Outer Navy & Inner Gold Institutional Frame */}
       <div className="absolute inset-[10px] border-[2.5px] border-[#0F2346] p-[3px]">
-        <div className="border border-[#C4942D] h-full relative bg-white px-7 py-6 flex flex-col">
+        <div className="border border-[#C4942D] h-full relative bg-white px-7 py-5 flex flex-col">
           {/* Subtle Watermark Logo */}
           <div
             aria-hidden="true"
@@ -218,9 +250,23 @@ export const AppointmentLetterPreview: React.FC<AppointmentLetterPreviewProps> =
             <img src="/logo.png" alt="" className="w-80 h-80 object-contain" />
           </div>
 
+          {/* Revoked / Expired diagonal stamp */}
+          {status !== 'ACTIVE' && (
+            <div
+              aria-hidden="true"
+              className="pointer-events-none select-none absolute inset-0 z-20 flex items-center justify-center overflow-hidden"
+            >
+              <div
+                className={`-rotate-[28deg] border-[6px] rounded-xl px-8 py-1 text-[84px] leading-none font-black tracking-[0.15em] opacity-[0.16] ${stampBorder}`}
+              >
+                {status}
+              </div>
+            </div>
+          )}
+
           {/* ---------- TOP (fixed height) ---------- */}
-          <div className="relative z-10 shrink-0 space-y-4">
-            <header className="flex items-start justify-between gap-4 pb-3 border-b-2 border-[#0F2346]">
+          <div className="relative z-10 shrink-0 space-y-3">
+            <header className="flex items-start justify-between gap-4 pb-2.5 border-b-2 border-[#0F2346]">
               <div className="flex items-center gap-3.5">
                 <img
                   src="/logo.png"
@@ -249,30 +295,23 @@ export const AppointmentLetterPreview: React.FC<AppointmentLetterPreviewProps> =
                 <div className="text-[11px] font-mono font-bold text-[#0F2346] pt-0.5">{letterNumber}</div>
                 <div className="text-[10px] font-mono text-slate-600">Ref: {data.referenceCode || '—'}</div>
                 <div className="text-[10px] font-bold">
-                  Status:{' '}
-                  <span
-                    className={
-                      status === 'REVOKED'
-                        ? 'text-rose-700'
-                        : status === 'EXPIRED'
-                        ? 'text-amber-700'
-                        : 'text-emerald-700'
-                    }
-                  >
-                    {status}
-                  </span>
+                  Status: <span className={statusColor}>{status}</span>
                 </div>
               </div>
             </header>
 
-            <div className="text-center space-y-1.5">
-              <h1 className="font-serif font-bold text-2xl tracking-[0.12em] text-[#0F2346] uppercase">
+            <div className="text-center space-y-1">
+              <h1 className="font-serif font-bold text-[22px] tracking-[0.12em] text-[#0F2346] uppercase">
                 Letter of Appointment
               </h1>
-              <div className="w-28 h-[2px] bg-[#C4942D] mx-auto" />
+              <div className="flex items-center justify-center gap-2">
+                <span className="w-16 h-px bg-[#C4942D]" />
+                <span className="w-1.5 h-1.5 rotate-45 bg-[#C4942D]" />
+                <span className="w-16 h-px bg-[#C4942D]" />
+              </div>
             </div>
 
-            <div className="bg-slate-50/90 border border-slate-300 rounded-md p-3.5 grid grid-cols-12 gap-3 text-[11px]">
+            <div className="bg-slate-50/90 border border-slate-300 rounded-md p-3 grid grid-cols-12 gap-3 text-[11px]">
               <div className="col-span-5 space-y-1.5 border-r border-slate-200 pr-3">
                 <MetaRow label="Appointee:" strong>
                   {data.appointeeName || '—'}
@@ -314,13 +353,15 @@ export const AppointmentLetterPreview: React.FC<AppointmentLetterPreviewProps> =
           </div>
 
           {/* ---------- BODY (takes all remaining space, auto-fitted) ---------- */}
-          <div ref={bodyBoxRef} className="relative z-10 flex-1 min-h-0 overflow-hidden mt-4">
+          <div ref={bodyBoxRef} className="relative z-10 flex-1 min-h-0 overflow-hidden mt-3">
             <div
               ref={bodyContentRef}
-              className="space-y-3 text-[12px] leading-relaxed text-slate-800 font-serif"
+              className="space-y-3 text-[12px] leading-relaxed text-slate-800 font-serif text-justify"
               style={{ transformOrigin: 'top left', width: '100%' }}
             >
-              <p className="font-bold text-[#0F2346] text-[13px]">Dear {data.appointeeName || 'Appointee'},</p>
+              <p className="font-bold text-[#0F2346] text-[13px] text-left">
+                Dear {data.appointeeName || 'Appointee'},
+              </p>
 
               <section className="space-y-1">
                 <SectionTitle>1. Official Appointment Declaration</SectionTitle>
@@ -330,7 +371,7 @@ export const AppointmentLetterPreview: React.FC<AppointmentLetterPreviewProps> =
               <section className="space-y-1">
                 <SectionTitle>2. Responsibilities &amp; Duties</SectionTitle>
                 <p>{content.responsibilitiesIntro}</p>
-                <ul className="list-disc pl-5 space-y-0.5 text-[11.5px]">
+                <ul className="list-disc pl-5 space-y-0.5 text-[11.5px] text-left">
                   {content.responsibilitiesList.map((item, idx) => (
                     <li key={idx}>{item}</li>
                   ))}
@@ -360,43 +401,49 @@ export const AppointmentLetterPreview: React.FC<AppointmentLetterPreviewProps> =
           </div>
 
           {/* ---------- BOTTOM: signature, seal, QR, footer (fixed height) ---------- */}
-          <div className="relative z-10 shrink-0 mt-3 pt-3 border-t border-[#0F2346] space-y-3">
+          <div className="relative z-10 shrink-0 mt-2 pt-2.5 border-t-2 border-[#0F2346] space-y-2.5">
             <div className="grid grid-cols-12 gap-4 items-end">
-              {/* Signature + seal (seal overlaps the signature area like a real stamped letter) */}
-              <div className="col-span-8 relative h-[112px]">
-                {/* Seal: only if uploaded */}
-                {stampAssetUrl && (
-                  <img
-                    src={stampAssetUrl}
-                    alt="Official Council Seal"
-                    className="absolute left-[190px] bottom-1 w-[96px] h-[96px] object-contain -rotate-6"
-                    style={{ mixBlendMode: 'multiply' }}
-                  />
-                )}
+              {/* Signature block: signature sits ABOVE the line, name BELOW it, seal beside it */}
+              <div className="col-span-8">
+                <p className="font-serif italic text-[11px] text-slate-700 mb-1">With warm regards,</p>
 
-                {/* Signature: only if uploaded */}
-                <div className="absolute left-0 bottom-[44px] h-14 flex items-end">
-                  {sigAssetUrl ? (
+                <div className="relative w-[245px]">
+                  {/* signature area (fixed height so it can never overlap the name) */}
+                  <div className="h-[58px] flex items-end">
+                    {sigAssetUrl ? (
+                      <img
+                        src={sigAssetUrl}
+                        alt={`${data.signatoryName} signature`}
+                        className="max-h-[54px] max-w-[200px] object-contain ml-1"
+                        style={{ mixBlendMode: 'multiply' }}
+                      />
+                    ) : isAdminPreview && !signatory?.hasSignatureImage ? (
+                      <div className="px-3 py-1.5 border border-dashed border-slate-300 rounded text-[9.5px] text-slate-400 italic">
+                        No signature uploaded for this signatory
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* signing line + name block */}
+                  <div className="border-t border-[#0F2346] pt-1.5 max-w-[215px]">
+                    <p className="font-serif font-bold text-xs text-[#0F2346] leading-tight">
+                      {data.signatoryName || 'Executive Director'}
+                    </p>
+                    <p className="text-[10px] font-semibold text-[#1E3A8A] leading-tight">
+                      {data.signatoryTitle || 'Executive Director — Council Secretariat'}
+                    </p>
+                    <p className="text-[9.5px] text-slate-500">NexGen Council — Authorized Signatory</p>
+                  </div>
+
+                  {/* official seal: overlaps the end of the signing line like a real stamped letter */}
+                  {stampAssetUrl && (
                     <img
-                      src={sigAssetUrl}
-                      alt={`${data.signatoryName} signature`}
-                      className="max-h-14 max-w-[190px] object-contain"
+                      src={stampAssetUrl}
+                      alt="Official Council Seal"
+                      className="absolute left-[200px] bottom-[16px] w-[104px] h-[104px] object-contain -rotate-6 opacity-90"
+                      style={{ mixBlendMode: 'multiply' }}
                     />
-                  ) : isAdminPreview && !signatory?.hasSignatureImage ? (
-                    <div className="px-3 py-1.5 border border-dashed border-slate-300 rounded text-[9.5px] text-slate-400 italic">
-                      No signature uploaded for this signatory
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="absolute left-0 bottom-0 border-t border-[#0F2346] pt-1.5 w-[230px]">
-                  <p className="font-serif font-bold text-xs text-[#0F2346] leading-tight">
-                    {data.signatoryName || 'Executive Director'}
-                  </p>
-                  <p className="text-[10px] font-semibold text-[#1E3A8A] leading-tight">
-                    {data.signatoryTitle || 'Executive Director — Council Secretariat'}
-                  </p>
-                  <p className="text-[9.5px] text-slate-500">NexGen Council — Authorized Signatory</p>
+                  )}
                 </div>
               </div>
 
@@ -421,11 +468,16 @@ export const AppointmentLetterPreview: React.FC<AppointmentLetterPreviewProps> =
               </div>
             </div>
 
-            <div className="pt-1.5 border-t border-slate-200 flex items-center justify-between gap-2 text-[9px] text-slate-500">
-              <span className="font-bold text-[#0F2346]">NEXGEN COUNCIL SECRETARIAT — SIALKOT, PAKISTAN</span>
-              <span>
-                Ref: {letterNumber} · Issued by {data.issuedByName || 'Authorized Admin'}
-              </span>
+            <div className="pt-1.5 border-t border-slate-200 space-y-0.5">
+              <p className="text-[8.5px] text-slate-500 text-center italic">
+                This is a digitally verifiable document. Any alteration without Secretariat authorization is invalid.
+              </p>
+              <div className="flex items-center justify-between gap-2 text-[9px] text-slate-500">
+                <span className="font-bold text-[#0F2346]">NEXGEN COUNCIL SECRETARIAT — SIALKOT, PAKISTAN</span>
+                <span>
+                  Ref: {letterNumber} · Issued by {data.issuedByName || 'Authorized Admin'}
+                </span>
+              </div>
             </div>
           </div>
         </div>
