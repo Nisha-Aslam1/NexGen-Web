@@ -253,52 +253,6 @@ async function generateBrandedQrDataUrl(data: string, size = 560): Promise<strin
   return qrCanvas.toDataURL('image/png', 1.0);
 }
 
-function drawDirectorSignature(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  scaleX: number,
-  scaleY: number
-) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.scale(scaleX, scaleY);
-
-  ctx.strokeStyle = NAVY;
-  ctx.lineWidth = 2.5;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-
-  ctx.beginPath();
-  ctx.moveTo(4, 34);
-  ctx.bezierCurveTo(10, 8, 16, 4, 18, 28);
-  ctx.bezierCurveTo(21, 10, 29, 4, 31, 27);
-  ctx.bezierCurveTo(33, 30, 38, 19, 44, 23);
-  ctx.bezierCurveTo(49, 27, 52, 17, 57, 22);
-  ctx.bezierCurveTo(61, 26, 67, 13, 72, 16);
-  ctx.bezierCurveTo(75, 18, 71, 27, 81, 23);
-  ctx.bezierCurveTo(89, 19, 97, 7, 102, 14);
-  ctx.bezierCurveTo(106, 20, 99, 28, 111, 22);
-  ctx.bezierCurveTo(120, 17, 128, 14, 135, 22);
-  ctx.bezierCurveTo(142, 28, 152, 17, 165, 21);
-  ctx.bezierCurveTo(175, 24, 188, 17, 204, 19);
-  ctx.stroke();
-
-  ctx.fillStyle = NAVY;
-  ctx.beginPath();
-  ctx.arc(46, 13, 1.8, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.strokeStyle = GOLD;
-  ctx.lineWidth = 1.7;
-  ctx.beginPath();
-  ctx.moveTo(6, 40);
-  ctx.bezierCurveTo(62, 34, 142, 43, 210, 33);
-  ctx.stroke();
-
-  ctx.restore();
-}
-
 function drawSocialIconOnCanvas(
   ctx: CanvasRenderingContext2D,
   type: 'tiktok' | 'facebook' | 'instagram' | 'email',
@@ -897,7 +851,8 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     cw: number,
     ch: number,
     logoImg: HTMLImageElement | null,
-    qrImg: HTMLImageElement | null
+    qrImg: HTMLImageElement | null,
+    signatureImg: HTMLImageElement | null
   ) => {
     const s = cw / 1000;
     ctx.save();
@@ -1018,7 +973,9 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
     ctx.font = `500 ${14.5 * s}px "Plus Jakarta Sans", sans-serif`;
     ctx.fillText('Verify at nexgencouncil.bond/track', 896 * s, 1202 * s);
 
-    drawDirectorSignature(ctx, 646 * s, 1226 * s, 1.18 * s, 0.96 * s);
+    if (signatureImg) {
+      drawContainImage(ctx, signatureImg, 646 * s, 1226 * s, 250 * s, 48 * s);
+    }
     ctx.textAlign = 'right';
     ctx.fillStyle = NAVY;
     ctx.font = `700 ${21 * s}px "Plus Jakarta Sans", sans-serif`;
@@ -1113,6 +1070,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       if (!canProceed) return;
 
       const [logoImg, avatarImg, qrImg] = await renderCardCanvasImages();
+      const signatureImg = await loadImage('/assets/minahil_signature.png');
       const cardW = 1000;
       const cardH = 1620;
 
@@ -1129,7 +1087,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       backCanvas.height = cardH;
       const bctx = backCanvas.getContext('2d');
       if (bctx) {
-        paintBackCard(bctx, 0, 0, cardW, cardH, logoImg, qrImg);
+        paintBackCard(bctx, 0, 0, cardW, cardH, logoImg, qrImg, signatureImg);
       }
 
       const pdf = new jsPDF({
@@ -1171,6 +1129,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
       }
 
       const [logoImg, avatarImg, qrImg] = await renderCardCanvasImages();
+      const signatureImg = await loadImage('/assets/minahil_signature.png');
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
@@ -1198,7 +1157,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
         ctx.fillText(`Official Member Credential · ${formattedName}`, canvas.width / 2, 98);
 
         paintFrontCard(ctx, marginX, headerH, cardW, cardH, logoImg, avatarImg);
-        paintBackCard(ctx, marginX + cardW + gap, headerH, cardW, cardH, logoImg, qrImg);
+        paintBackCard(ctx, marginX + cardW + gap, headerH, cardW, cardH, logoImg, qrImg, signatureImg);
 
         ctx.fillStyle = '#94A3B8';
         ctx.font = '500 20px "Plus Jakarta Sans", sans-serif';
@@ -1213,7 +1172,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
         if (mode === 'front') {
           paintFrontCard(ctx, 0, 0, cardW, cardH, logoImg, avatarImg);
         } else {
-          paintBackCard(ctx, 0, 0, cardW, cardH, logoImg, qrImg);
+          paintBackCard(ctx, 0, 0, cardW, cardH, logoImg, qrImg, signatureImg);
         }
       }
 
@@ -1448,7 +1407,7 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
             <path d="M24 3V6.2L18.5 10V4.4L20.8 2.5C22.2 1.3 24 2.1 24 3z" fill="#FBBC04" />
             <path d="M5.5 4.4L12 8.9L18.5 4.4V10L12 14.3L5.5 10V4.4z" fill="#EA4335" />
           </svg>
-          <span className="leading-tight break-all text-[9px]">nexgenwomenempowermentandyouth@gmail.com</span>
+          <span className="leading-tight break-all text-[9px]">info@nexgencouncil.bond</span>
         </div>
       </div>
 
@@ -1504,7 +1463,11 @@ export const VolunteerIdCardModal: React.FC<VolunteerIdCardModalProps> = ({
           <p className="text-[9px] font-mono font-bold text-[#162A4D] truncate mt-0.5">
             {idCode}
           </p>
-          <CalligraphicSignatureSvg className="w-28 h-6 ml-auto mt-1" />
+          <img
+            src="/assets/minahil_signature.png"
+            alt="Minahil Imran Awan signature"
+            className="w-28 h-6 object-contain ml-auto mt-1"
+          />
           <p className="font-bold text-[8.5px] text-[#162A4D] leading-tight">Minahil Imran Awan</p>
           <p className="text-[7px] text-slate-500 leading-tight">Founder &amp; Director, NexGen</p>
         </div>
