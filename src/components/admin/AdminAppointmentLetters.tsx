@@ -44,47 +44,259 @@ interface EligibleApplicantItem {
   latestLetterStatus?: string;
 }
 
-const SignatoryPngThumbnail: React.FC<{
-  signatoryId: string;
-  kind: 'signature' | 'stamp';
-  exists?: boolean;
-  versionKey?: string;
-}> = ({ signatoryId, kind, exists, versionKey }) => {
+type AssetKind = 'signature' | 'stamp';
+
+/* ------------------------------------------------------------------ */
+/*  Image helpers: any image -> clean, cropped, compressed transparent PNG */
+/* ------------------------------------------------------------------ */
+
+const readFileAsDataUrl = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Failed to read image file'));
+    reader.readAsDataURL(file);
+  });
+
+const loadImage = (src: string): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('This file is not a readable image.'));
+    img.src = src;
+  });
+
+/**
+ * Takes any uploaded image (PNG/JPG/WebP, photo of paper signature, etc.),
+ * 1) scales it down to maxSide (keeps server payload small -> no 413 errors)
+ * 2) removes the white / light paper background (if image has no transparency)
+ * 3) detects the actual signature / seal pixels and crops tightly around them
+ * 4) returns a transparent PNG data URL
+ */
+const prepareAssetImage = async (
+  file: File,
+  kind: AssetKind,
+  opts: { clean: boolean; maxSide: number }
+): Promise<{ dataUrl: string; width: number; height: number }> => {
+  const original = await readFileAsDataUrl(file);
+  const img = await loadImage(original);
+
+  const scale = Math.min(1, opts.maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+  const w = Math.max(1, Math.round(img.naturalWidth * scale));
+  const h = Math.max(1, Math.round(img.naturalHeight * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('Your browser cannot process images.');
+  ctx.clearRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const px = imageData.data;
+
+  // Does the image already have real transparency?
+  let hasTransparency = false;
+  for (let i = 3; i < px.length; i += 4) {
+    if (px[i] < 250) {
+      hasTransparency = true;
+      break;
+    }
+  }
+
+  if (opts.clean && !hasTransparency) {
+    // Estimate background brightness from the 4 corners; only clean light backgrounds.
+    const corners = [
+      0,
+      (w - 1) * 4,
+      (h - 1) * w * 4,
+      ((h - 1) * w + (w - 1)) * 4
+    ];
+    let bright = 0;
+    corners.forEach(c => {
+      bright += Math.min(px[c], px[c + 1], px[c + 2]);
+    });
+    bright /= corners.length;
+
+    if (bright > 170) {
+      const hi = kind === 'signature' ? 235 : 246; // >= hi : fully transparent
+      const lo = kind === 'signature' ? 150 : 200; // <= lo : fully kept
+      for (let i = 0; i < px.length; i += 4) {
+        const minc = Math.min(px[i], px[i + 1], px[i + 2]);
+        if (minc >= hi) {
+          px[i + 3] = 0;
+        } else if (minc > lo) {
+          const a = (hi - minc) / (hi - lo);
+          px[i + 3] = Math.round(px[i + 3] * a);
+        }
+      }
+    }
+  }
+
+  // Detect content bounding box (non-transparent pixels)
+  let minX = w;
+  let minY = h;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (px[(y * w + x) * 4 + 3] > 25) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  if (maxX < 0) {
+    throw new Error(
+      kind === 'signature'
+        ? 'No signature detected in this image. Use dark ink on a light background.'
+        : 'No stamp detected in this image.'
+    );
+  }
+
+  const padX = Math.round((maxX - minX + 1) * 0.04) + 2;
+  const padY = Math.round((maxY - minY + 1) * 0.04) + 2;
+  minX = Math.max(0, minX - padX);
+  minY = Math.max(0, minY - padY);
+  maxX = Math.min(w - 1, maxX + padX);
+  maxY = Math.min(h - 1, maxY + padY);
+
+  const cw = maxX - minX + 1;
+  const ch = maxY - minY + 1;
+
+  ctx.putImageData(imageData, 0, 0);
+  const out = document.createElement('canvas');
+  out.width = cw;
+  out.height = ch;
+  const octx = out.getContext('2d');
+  if (!octx) throw new Error('Your browser cannot process images.');
+  octx.drawImage(canvas, minX, minY, cw, ch, 0, 0, cw, ch);
+
+  return { dataUrl: out.toDataURL('image/png'), width: cw, height: ch };
+};
+
+/** Loads a protected signatory asset (needs auth header) as an object URL. */
+const useAssetSrc = (
+  signatoryId: string | undefined,
+  kind: AssetKind,
+  exists: boolean | undefined,
+  version: string | number | undefined,
+  localSrc?: string | null
+) => {
   const [src, setSrc] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!exists) {
+    if (localSrc) {
+      setSrc(localSrc);
+      return;
+    }
+    if (!exists || !signatoryId) {
       setSrc(null);
       return;
     }
     let cancelled = false;
     let objUrl: string | null = null;
-    authFetch(`/api/admin/signatories/${encodeURIComponent(signatoryId)}/asset/${kind}`)
+    authFetch(`/api/admin/signatories/${encodeURIComponent(signatoryId)}/asset/${kind}?v=${encodeURIComponent(String(version ?? ''))}`)
       .then(res => (res.ok ? res.blob() : null))
       .then(blob => {
         if (!cancelled && blob) {
           objUrl = URL.createObjectURL(blob);
           setSrc(objUrl);
+        } else if (!cancelled) {
+          setSrc(null);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setSrc(null);
+      });
     return () => {
       cancelled = true;
       if (objUrl) URL.revokeObjectURL(objUrl);
     };
-  }, [signatoryId, kind, exists, versionKey]);
+  }, [signatoryId, kind, exists, version, localSrc]);
 
-  if (!exists || !src) {
+  return src;
+};
+
+const CHECKER_STYLE: React.CSSProperties = {
+  backgroundImage:
+    'linear-gradient(45deg,#f1f5f9 25%,transparent 25%),linear-gradient(-45deg,#f1f5f9 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#f1f5f9 75%),linear-gradient(-45deg,transparent 75%,#f1f5f9 75%)',
+  backgroundSize: '12px 12px',
+  backgroundPosition: '0 0,0 6px,6px -6px,-6px 0'
+};
+
+const SignatoryPngThumbnail: React.FC<{
+  signatoryId?: string;
+  kind: AssetKind;
+  exists?: boolean;
+  versionKey?: string | number;
+  localSrc?: string | null;
+  heightClass?: string;
+}> = ({ signatoryId, kind, exists, versionKey, localSrc, heightClass = 'h-16' }) => {
+  const src = useAssetSrc(signatoryId, kind, exists, versionKey, localSrc);
+
+  if (!src) {
     return (
-      <div className="h-14 rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-[10px] text-slate-400 px-3">
-        No PNG uploaded
+      <div
+        className={`${heightClass} rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-[10px] text-slate-400 px-3`}
+      >
+        No {kind} uploaded
       </div>
     );
   }
 
   return (
-    <div className="h-14 rounded-xl border border-slate-200 bg-white flex items-center justify-center p-1.5">
-      <img src={src} alt={`${kind} PNG`} className="max-h-full max-w-full object-contain" />
+    <div
+      className={`${heightClass} rounded-xl border border-slate-200 bg-white flex items-center justify-center p-1.5`}
+      style={CHECKER_STYLE}
+    >
+      <img src={src} alt={`${kind} preview`} className="max-h-full max-w-full object-contain" />
+    </div>
+  );
+};
+
+/** Small A4-style mock showing exactly where signature + seal land on the letter. */
+const LetterPlacementPreview: React.FC<{
+  name: string;
+  title: string;
+  signatoryId?: string;
+  hasSignature: boolean;
+  hasStamp: boolean;
+  version: string | number;
+  localSignature?: string | null;
+  localStamp?: string | null;
+}> = ({ name, title, signatoryId, hasSignature, hasStamp, version, localSignature, localStamp }) => {
+  const sigSrc = useAssetSrc(signatoryId, 'signature', hasSignature, version, localSignature);
+  const stampSrc = useAssetSrc(signatoryId, 'stamp', hasStamp, version, localStamp);
+
+  return (
+    <div className="mx-auto w-44 aspect-[210/297] bg-white border border-slate-300 shadow-md rounded-sm p-3 relative overflow-hidden">
+      <div className="h-1.5 w-16 bg-indigo-950 rounded mb-2" />
+      {[...Array(9)].map((_, i) => (
+        <div key={i} className={`h-[3px] bg-slate-200 rounded mb-1.5 ${i % 4 === 3 ? 'w-2/3' : 'w-full'}`} />
+      ))}
+      <div className="absolute left-3 bottom-4 right-3">
+        <div className="relative h-14">
+          {stampSrc && (
+            <img
+              src={stampSrc}
+              alt="seal"
+              className="absolute right-1 -top-2 h-12 w-12 object-contain opacity-90"
+            />
+          )}
+          {sigSrc && (
+            <img src={sigSrc} alt="signature" className="absolute left-0 top-0 h-9 max-w-[70px] object-contain" />
+          )}
+        </div>
+        <div className="border-t border-slate-400 pt-0.5">
+          <div className="text-[6px] font-bold text-slate-800 truncate">{name || 'Signatory Name'}</div>
+          <div className="text-[5px] text-slate-500 truncate">{title || 'Official Designation'}</div>
+        </div>
+      </div>
     </div>
   );
 };
@@ -158,7 +370,15 @@ export const AdminAppointmentLetters: React.FC = () => {
     stampAssetFilename: ''
   });
   const [savingSig, setSavingSig] = useState(false);
-  const [uploadingKind, setUploadingKind] = useState<'signature' | 'stamp' | null>(null);
+  const [uploadingKey, setUploadingKey] = useState<string | null>(null);
+  const [cleanBackground, setCleanBackground] = useState(true);
+  // local (just processed) previews, so the user sees the result instantly
+  const [localPreview, setLocalPreview] = useState<{ signature: string | null; stamp: string | null }>({
+    signature: null,
+    stamp: null
+  });
+  // bumps on every upload/delete so thumbnails always refetch
+  const [assetVersion, setAssetVersion] = useState(0);
 
   const canManageSignatories =
     currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'ADMIN';
@@ -339,6 +559,7 @@ export const AdminAppointmentLetters: React.FC = () => {
   };
 
   const openSignatoryModal = (sig?: SignatoryProfile) => {
+    setLocalPreview({ signature: null, stamp: null });
     if (sig) {
       setEditingSignatory(sig);
       setSigForm({
@@ -349,8 +570,8 @@ export const AdminAppointmentLetters: React.FC = () => {
         active: sig.active,
         isDefault: sig.isDefault,
         allowedRoles: Array.isArray(sig.allowedRoles) ? sig.allowedRoles : ['SUPER_ADMIN', 'ADMIN'],
-        signatureAssetFilename: sig.signatureAssetFilename || '',
-        stampAssetFilename: sig.stampAssetFilename || ''
+        signatureAssetFilename: sig.signatureAssetFilename || (sig.hasSignatureImage ? 'signature.png' : ''),
+        stampAssetFilename: sig.stampAssetFilename || (sig.hasStampImage ? 'stamp.png' : '')
       });
     } else {
       setEditingSignatory(null);
@@ -369,79 +590,144 @@ export const AdminAppointmentLetters: React.FC = () => {
     setSigModalOpen(true);
   };
 
-  const handleUploadPngAsset = async (
-    file: File,
-    kind: 'signature' | 'stamp',
-    signatoryId?: string
-  ) => {
-    const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
-    if (!validTypes.includes(file.type) && !/\.(png|jpg|jpeg|webp)$/i.test(file.name)) {
-      addToast('Please select a valid image file (PNG, JPEG, or WebP).', 'error');
-      return;
-    }
-    if (file.size > 2 * 1024 * 1024) {
-      addToast('Image file must be 2MB or smaller.', 'error');
-      return;
-    }
-    setUploadingKind(kind);
-    try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ''));
-        reader.onerror = () => reject(new Error('Failed to read image file'));
-        reader.readAsDataURL(file);
-      });
+  /** Low-level POST. Never throws on HTML responses; reports status instead. */
+  const postAssetOnce = async (dataUrl: string, kind: AssetKind, signatoryId?: string) => {
+    const res = await authFetch('/api/admin/appointment-letters/upload-asset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dataUrl, kind, signatoryId })
+    });
+    const contentType = res.headers.get('content-type') || '';
+    const isJson = contentType.includes('application/json');
+    const data = isJson ? await res.json().catch(() => ({})) : {};
+    return { res, isJson, data };
+  };
 
-      const res = await authFetch('/api/admin/appointment-letters/upload-asset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataUrl, kind, signatoryId })
-      });
-      const contentType = res.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) {
-        throw new Error('Session expired or server returned HTML error. Please refresh and log in.');
+  /**
+   * Upload flow for modal AND quick card buttons.
+   * - accepts PNG / JPG / WebP / GIF / BMP / AVIF (anything the browser can decode)
+   * - auto-cleans background, detects the signature/seal, crops, compresses
+   * - retries with smaller sizes if the server rejects the payload (413 / HTML error)
+   */
+  const uploadAsset = async (file: File, kind: AssetKind, signatoryId?: string) => {
+    const looksLikeImage = file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif|heic)$/i.test(file.name);
+    if (!looksLikeImage) {
+      addToast('Please select an image file (PNG, JPG, WebP, GIF...).', 'error');
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      addToast('Image file must be 15MB or smaller.', 'error');
+      return;
+    }
+
+    const key = `${signatoryId || 'new'}:${kind}`;
+    setUploadingKey(key);
+    try {
+      const sizes = kind === 'signature' ? [900, 600, 400, 280] : [700, 500, 350, 250];
+      let lastStatus = 0;
+      let lastMessage = '';
+      let success: { data: any; processed: string } | null = null;
+
+      for (const maxSide of sizes) {
+        const processed = await prepareAssetImage(file, kind, { clean: cleanBackground, maxSide });
+        const { res, isJson, data } = await postAssetOnce(processed.dataUrl, kind, signatoryId);
+        if (res.ok && isJson) {
+          success = { data, processed: processed.dataUrl };
+          break;
+        }
+        lastStatus = res.status;
+        lastMessage = isJson ? data.error || '' : '';
+        // 401/403 = real auth problem, retrying with smaller image will not help
+        if (res.status === 401 || res.status === 403) {
+          throw new Error('Your session has expired or you lack permission. Please refresh and log in again.');
+        }
+        // 4xx with a JSON error message that is not about size: stop and show it
+        if (isJson && res.status !== 413 && res.status < 500 && lastMessage) {
+          throw new Error(lastMessage);
+        }
+        // otherwise (413, HTML error, 5xx) -> retry with a smaller image
       }
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Upload failed');
+
+      if (!success) {
+        if (lastStatus === 404) {
+          throw new Error(
+            'Upload endpoint not found (404). Make sure the server route POST /api/admin/appointment-letters/upload-asset exists.'
+          );
+        }
+        throw new Error(
+          lastMessage ||
+            `Server rejected the image (HTTP ${lastStatus || 'error'}). Increase express.json limit on the server (e.g. express.json({ limit: '10mb' })).`
+        );
+      }
+
+      const { data, processed } = success;
+      setLocalPreview(prev => ({ ...prev, [kind]: processed }));
+      setAssetVersion(v => v + 1);
 
       if (kind === 'signature') {
-        setSigForm(prev => ({ ...prev, signatureAssetFilename: data.filename }));
+        setSigForm(prev => ({ ...prev, signatureAssetFilename: data.filename || 'signature.png' }));
       } else {
-        setSigForm(prev => ({ ...prev, stampAssetFilename: data.filename }));
+        setSigForm(prev => ({ ...prev, stampAssetFilename: data.filename || 'stamp.png' }));
       }
-
       if (data.signatory) {
         setSignatories(prev => prev.map(s => (s.id === data.signatory.id ? data.signatory : s)));
+        if (editingSignatory && editingSignatory.id === data.signatory.id) {
+          setEditingSignatory(data.signatory);
+        }
       }
-      addToast(`Protected ${kind} asset uploaded successfully.`, 'success');
+      addToast(
+        `${kind === 'signature' ? 'Signature' : 'Official stamp'} detected, cleaned & uploaded successfully.`,
+        'success'
+      );
+      if (signatoryId) loadAllData();
     } catch (err: any) {
-      addToast(err.message || `Failed to upload ${kind} PNG`, 'error');
+      addToast(err.message || `Failed to upload ${kind}`, 'error');
     } finally {
-      setUploadingKind(null);
+      setUploadingKey(null);
     }
   };
 
-  const handleDeleteSignatoryAsset = async (kind: 'signature' | 'stamp') => {
-    if (!editingSignatory) {
-      setSigForm(prev => (kind === 'signature' ? { ...prev, signatureAssetFilename: '' } : { ...prev, stampAssetFilename: '' }));
-      addToast(`Cleared ${kind} asset.`, 'info');
+  const removeAsset = async (signatory: SignatoryProfile | null, kind: AssetKind) => {
+    const clearForm = () => {
+      setSigForm(prev =>
+        kind === 'signature' ? { ...prev, signatureAssetFilename: '' } : { ...prev, stampAssetFilename: '' }
+      );
+      setLocalPreview(prev => ({ ...prev, [kind]: null }));
+    };
+
+    if (!signatory) {
+      clearForm();
+      addToast(`Cleared ${kind}.`, 'info');
       return;
     }
     try {
-      const res = await authFetch(`/api/admin/signatories/${encodeURIComponent(editingSignatory.id)}/asset/${kind}`, {
-        method: 'DELETE'
-      });
-      const data = await res.json();
+      const res = await authFetch(
+        `/api/admin/signatories/${encodeURIComponent(signatory.id)}/asset/${kind}`,
+        { method: 'DELETE' }
+      );
+      const contentType = res.headers.get('content-type') || '';
+      const data = contentType.includes('application/json') ? await res.json().catch(() => ({})) : {};
       if (!res.ok) throw new Error(data.error || 'Failed to remove asset');
-      setSigForm(prev => (kind === 'signature' ? { ...prev, signatureAssetFilename: '' } : { ...prev, stampAssetFilename: '' }));
+
+      if (editingSignatory && editingSignatory.id === signatory.id) {
+        clearForm();
+      }
+      setAssetVersion(v => v + 1);
       if (data.signatory) {
         setSignatories(prev => prev.map(s => (s.id === data.signatory.id ? data.signatory : s)));
-        setEditingSignatory(data.signatory);
+        if (editingSignatory && editingSignatory.id === data.signatory.id) setEditingSignatory(data.signatory);
       }
-      addToast(`Removed ${kind} asset successfully.`, 'success');
+      addToast(`Removed ${kind} successfully.`, 'success');
       loadAllData();
     } catch (err: any) {
       addToast(err.message || `Could not remove ${kind}`, 'error');
+    }
+  };
+
+  const confirmRemoveAsset = (signatory: SignatoryProfile, kind: AssetKind) => {
+    const label = kind === 'signature' ? 'signature' : 'official stamp';
+    if (window.confirm(`Delete the ${label} of ${signatory.name}? Letters will no longer include it.`)) {
+      removeAsset(signatory, kind);
     }
   };
 
@@ -468,6 +754,7 @@ export const AdminAppointmentLetters: React.FC = () => {
         'success'
       );
       setSigModalOpen(false);
+      setAssetVersion(v => v + 1);
       loadAllData();
     } catch (err: any) {
       addToast(err.message || 'Could not save signatory', 'error');
@@ -477,6 +764,9 @@ export const AdminAppointmentLetters: React.FC = () => {
   };
 
   const handleDeleteSignatory = async (sig: SignatoryProfile) => {
+    if (!window.confirm(`Delete signatory ${sig.name} together with their signature & seal files? This cannot be undone.`)) {
+      return;
+    }
     try {
       const res = await authFetch(`/api/admin/signatories/${encodeURIComponent(sig.id)}`, {
         method: 'DELETE'
@@ -502,6 +792,48 @@ export const AdminAppointmentLetters: React.FC = () => {
       };
     });
   };
+
+  /** Reusable upload / replace / delete row used on the signatory card. */
+  const renderAssetControls = (sig: SignatoryProfile, kind: AssetKind, exists: boolean | undefined) => {
+    const busy = uploadingKey === `${sig.id}:${kind}`;
+    return (
+      <div className="flex items-center gap-1.5 pt-1">
+        <label
+          className={`flex-1 inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-[10.5px] font-bold cursor-pointer ${
+            busy ? 'opacity-60 pointer-events-none' : ''
+          }`}
+        >
+          <Upload className="w-3 h-3" />
+          <span>{busy ? 'Processing...' : exists ? 'Replace' : 'Upload'}</span>
+          <input
+            type="file"
+            accept="image/*"
+            className="hidden"
+            disabled={busy}
+            onChange={e => {
+              const f = e.target.files?.[0];
+              if (f) uploadAsset(f, kind, sig.id);
+              e.target.value = '';
+            }}
+          />
+        </label>
+        {exists && (
+          <button
+            type="button"
+            onClick={() => confirmRemoveAsset(sig, kind)}
+            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-[10.5px] font-bold cursor-pointer"
+            title={`Delete ${kind}`}
+          >
+            <Trash2 className="w-3 h-3" />
+            <span>Delete</span>
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  const modalSigBusy = uploadingKey === `${editingSignatory?.id || 'new'}:signature`;
+  const modalStampBusy = uploadingKey === `${editingSignatory?.id || 'new'}:stamp`;
 
   return (
     <div className="space-y-6">
@@ -977,7 +1309,7 @@ export const AdminAppointmentLetters: React.FC = () => {
               <div>
                 <strong className="block">Protected Digital Signatory &amp; Institutional Seal Governance</strong>
                 <span className="text-[11px] text-amber-900/90">
-                  Signature and stamp transparent PNG assets are stored in a protected server directory (never served publicly without admin authentication) and embedded directly into generated A4 PDFs.
+                  Upload any signature or seal image (PNG, JPG, WebP). The system automatically removes the paper background, detects the signature/seal, crops it and stores it in a protected server directory. Only these assets are placed on the generated A4 letters.
                 </span>
               </div>
             </div>
@@ -1060,8 +1392,9 @@ export const AdminAppointmentLetters: React.FC = () => {
                       signatoryId={sig.id}
                       kind="signature"
                       exists={sig.hasSignatureImage}
-                      versionKey={sig.updatedAt}
+                      versionKey={`${sig.updatedAt || ''}-${assetVersion}`}
                     />
+                    {canManageSignatories && renderAssetControls(sig, 'signature', sig.hasSignatureImage)}
                   </div>
                   <div className="space-y-1.5">
                     <span className="text-[10px] font-bold uppercase text-slate-500 flex items-center gap-1">
@@ -1072,8 +1405,9 @@ export const AdminAppointmentLetters: React.FC = () => {
                       signatoryId={sig.id}
                       kind="stamp"
                       exists={sig.hasStampImage}
-                      versionKey={sig.updatedAt}
+                      versionKey={`${sig.updatedAt || ''}-${assetVersion}`}
                     />
+                    {canManageSignatories && renderAssetControls(sig, 'stamp', sig.hasStampImage)}
                   </div>
                 </div>
               </div>
@@ -1141,7 +1475,7 @@ export const AdminAppointmentLetters: React.FC = () => {
       {/* Signatory Create / Configure Modal */}
       {sigModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl my-auto">
+          <div className="bg-white rounded-3xl max-w-3xl w-full p-6 space-y-4 shadow-2xl my-auto">
             <div className="flex items-center justify-between border-b border-slate-200 pb-3">
               <h3 className="font-serif font-bold text-lg text-slate-900">
                 {editingSignatory ? 'Configure Authorized Signatory' : 'New Authorized Signatory'}
@@ -1155,165 +1489,230 @@ export const AdminAppointmentLetters: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleSaveSignatory} className="space-y-4 text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Full Name *</label>
-                  <input
-                    type="text"
-                    required
-                    value={sigForm.name}
-                    onChange={e => setSigForm({ ...sigForm, name: e.target.value })}
-                    placeholder="e.g. Dr. Nisha Aslam"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Authority Role Type</label>
-                  <select
-                    value={sigForm.roleType}
-                    onChange={e => setSigForm({ ...sigForm, roleType: e.target.value as any })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white"
-                  >
-                    <option value="Executive Director">Executive Director</option>
-                    <option value="President">President</option>
-                    <option value="Director">Director</option>
-                    <option value="Authorized Signatory">Authorized Signatory</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Official Designation Title *</label>
-                  <input
-                    type="text"
-                    required
-                    value={sigForm.title}
-                    onChange={e => setSigForm({ ...sigForm, title: e.target.value })}
-                    placeholder="e.g. Executive Director — Council Secretariat"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Department</label>
-                  <input
-                    type="text"
-                    value={sigForm.department}
-                    onChange={e => setSigForm({ ...sigForm, department: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300"
-                  />
-                </div>
-              </div>
-
-              {/* Transparent PNG Uploads */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
-                <div className="space-y-2">
-                  <label className="block font-bold text-slate-700">Signature PNG (Transparent)</label>
-                  <label className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-100 cursor-pointer font-semibold">
-                    <Upload className="w-3.5 h-3.5 text-indigo-700" />
-                    <span>{uploadingKind === 'signature' ? 'Uploading...' : 'Upload Signature PNG'}</span>
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      className="hidden"
-                      disabled={uploadingKind !== null}
-                      onChange={e => {
-                        const f = e.target.files?.[0];
-                        if (f) handleUploadPngAsset(f, 'signature', editingSignatory?.id);
-                      }}
-                    />
-                  </label>
-                  {sigForm.signatureAssetFilename && (
-                    <div className="flex items-center justify-between pt-1">
-                      <span className="text-[10px] text-emerald-700 font-semibold truncate">
-                        ✓ {sigForm.signatureAssetFilename}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteSignatoryAsset('signature')}
-                        className="text-[10px] text-rose-600 hover:text-rose-800 font-bold underline cursor-pointer shrink-0"
-                      >
-                        Delete Signature
-                      </button>
+            <form onSubmit={handleSaveSignatory} className="text-xs">
+              <div className="grid grid-cols-1 md:grid-cols-[1fr_200px] gap-5">
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Full Name *</label>
+                      <input
+                        type="text"
+                        required
+                        value={sigForm.name}
+                        onChange={e => setSigForm({ ...sigForm, name: e.target.value })}
+                        placeholder="e.g. Dr. Nisha Aslam"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300"
+                      />
                     </div>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <label className="block font-bold text-slate-700">Official Stamp PNG (Transparent)</label>
-                  <label className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-100 cursor-pointer font-semibold">
-                    <Upload className="w-3.5 h-3.5 text-amber-600" />
-                    <span>{uploadingKind === 'stamp' ? 'Uploading...' : 'Upload Stamp PNG'}</span>
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      className="hidden"
-                      disabled={uploadingKind !== null}
-                      onChange={e => {
-                        const f = e.target.files?.[0];
-                        if (f) handleUploadPngAsset(f, 'stamp', editingSignatory?.id);
-                      }}
-                    />
-                  </label>
-                  {sigForm.stampAssetFilename && (
-                    <div className="flex items-center justify-between pt-1">
-                      <span className="text-[10px] text-emerald-700 font-semibold truncate">
-                        ✓ {sigForm.stampAssetFilename}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteSignatoryAsset('stamp')}
-                        className="text-[10px] text-rose-600 hover:text-rose-800 font-bold underline cursor-pointer shrink-0"
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Authority Role Type</label>
+                      <select
+                        value={sigForm.roleType}
+                        onChange={e => setSigForm({ ...sigForm, roleType: e.target.value as any })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white"
                       >
-                        Delete Stamp
-                      </button>
+                        <option value="Executive Director">Executive Director</option>
+                        <option value="President">President</option>
+                        <option value="Director">Director</option>
+                        <option value="Authorized Signatory">Authorized Signatory</option>
+                      </select>
                     </div>
-                  )}
-                </div>
-              </div>
+                  </div>
 
-              {/* Status & Role Permissions */}
-              <div className="space-y-2 pt-1">
-                <span className="block font-bold text-slate-700">Roles Permitted to Issue Under This Signatory:</span>
-                <div className="flex flex-wrap gap-2">
-                  {['SUPER_ADMIN', 'ADMIN', 'VOLUNTEER_MANAGER'].map(role => (
-                    <label
-                      key={role}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 cursor-pointer"
-                    >
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Official Designation Title *</label>
+                      <input
+                        type="text"
+                        required
+                        value={sigForm.title}
+                        onChange={e => setSigForm({ ...sigForm, title: e.target.value })}
+                        placeholder="e.g. Executive Director — Council Secretariat"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Department</label>
+                      <input
+                        type="text"
+                        value={sigForm.department}
+                        onChange={e => setSigForm({ ...sigForm, department: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Image uploads */}
+                  <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-3">
+                    <label className="inline-flex items-center gap-2 cursor-pointer font-semibold text-slate-700">
                       <input
                         type="checkbox"
-                        checked={sigForm.allowedRoles.includes(role)}
-                        disabled={role === 'SUPER_ADMIN'}
-                        onChange={() => toggleAllowedRole(role)}
+                        checked={cleanBackground}
+                        onChange={e => setCleanBackground(e.target.checked)}
                       />
-                      <span className="font-semibold">{role}</span>
+                      <span>
+                        Auto-detect &amp; clean background (recommended for photos / scans of a signature or stamp)
+                      </span>
                     </label>
-                  ))}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {/* Signature */}
+                      <div className="space-y-2">
+                        <label className="block font-bold text-slate-700">Signature Image</label>
+                        <SignatoryPngThumbnail
+                          signatoryId={editingSignatory?.id}
+                          kind="signature"
+                          exists={!!sigForm.signatureAssetFilename}
+                          versionKey={assetVersion}
+                          localSrc={localPreview.signature}
+                        />
+                        <label
+                          className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-100 cursor-pointer font-semibold ${
+                            modalSigBusy ? 'opacity-60 pointer-events-none' : ''
+                          }`}
+                        >
+                          <Upload className="w-3.5 h-3.5 text-indigo-700" />
+                          <span>
+                            {modalSigBusy
+                              ? 'Detecting & uploading...'
+                              : sigForm.signatureAssetFilename
+                              ? 'Replace Signature'
+                              : 'Upload Signature'}
+                          </span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            disabled={modalSigBusy}
+                            onChange={e => {
+                              const f = e.target.files?.[0];
+                              if (f) uploadAsset(f, 'signature', editingSignatory?.id);
+                              e.target.value = '';
+                            }}
+                          />
+                        </label>
+                        {sigForm.signatureAssetFilename && (
+                          <button
+                            type="button"
+                            onClick={() => removeAsset(editingSignatory, 'signature')}
+                            className="inline-flex items-center gap-1 text-[11px] text-rose-600 hover:text-rose-800 font-bold cursor-pointer"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Delete Signature</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Stamp */}
+                      <div className="space-y-2">
+                        <label className="block font-bold text-slate-700">Official Stamp / Seal Image</label>
+                        <SignatoryPngThumbnail
+                          signatoryId={editingSignatory?.id}
+                          kind="stamp"
+                          exists={!!sigForm.stampAssetFilename}
+                          versionKey={assetVersion}
+                          localSrc={localPreview.stamp}
+                        />
+                        <label
+                          className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-100 cursor-pointer font-semibold ${
+                            modalStampBusy ? 'opacity-60 pointer-events-none' : ''
+                          }`}
+                        >
+                          <Upload className="w-3.5 h-3.5 text-amber-600" />
+                          <span>
+                            {modalStampBusy
+                              ? 'Detecting & uploading...'
+                              : sigForm.stampAssetFilename
+                              ? 'Replace Stamp'
+                              : 'Upload Stamp'}
+                          </span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            disabled={modalStampBusy}
+                            onChange={e => {
+                              const f = e.target.files?.[0];
+                              if (f) uploadAsset(f, 'stamp', editingSignatory?.id);
+                              e.target.value = '';
+                            }}
+                          />
+                        </label>
+                        {sigForm.stampAssetFilename && (
+                          <button
+                            type="button"
+                            onClick={() => removeAsset(editingSignatory, 'stamp')}
+                            className="inline-flex items-center gap-1 text-[11px] text-rose-600 hover:text-rose-800 font-bold cursor-pointer"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Delete Stamp</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Status & Role Permissions */}
+                  <div className="space-y-2 pt-1">
+                    <span className="block font-bold text-slate-700">Roles Permitted to Issue Under This Signatory:</span>
+                    <div className="flex flex-wrap gap-2">
+                      {['SUPER_ADMIN', 'ADMIN', 'VOLUNTEER_MANAGER'].map(role => (
+                        <label
+                          key={role}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={sigForm.allowedRoles.includes(role)}
+                            disabled={role === 'SUPER_ADMIN'}
+                            onChange={() => toggleAllowedRole(role)}
+                          />
+                          <span className="font-semibold">{role}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-4 pt-1">
+                    <label className="inline-flex items-center gap-2 cursor-pointer font-semibold text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={sigForm.active}
+                        onChange={e => setSigForm({ ...sigForm, active: e.target.checked })}
+                      />
+                      <span>Signatory Active</span>
+                    </label>
+                    <label className="inline-flex items-center gap-2 cursor-pointer font-semibold text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={sigForm.isDefault}
+                        onChange={e => setSigForm({ ...sigForm, isDefault: e.target.checked })}
+                      />
+                      <span>Set as Default Authorized Signatory</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Live placement preview */}
+                <div className="space-y-2">
+                  <span className="block font-bold text-slate-700 text-center">Letter Placement Preview</span>
+                  <LetterPlacementPreview
+                    name={sigForm.name}
+                    title={sigForm.title}
+                    signatoryId={editingSignatory?.id}
+                    hasSignature={!!sigForm.signatureAssetFilename}
+                    hasStamp={!!sigForm.stampAssetFilename}
+                    version={assetVersion}
+                    localSignature={localPreview.signature}
+                    localStamp={localPreview.stamp}
+                  />
+                  <p className="text-[10px] text-slate-500 text-center leading-snug">
+                    Only the detected signature and seal appear on the letter, above the signatory name.
+                  </p>
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-4 pt-1">
-                <label className="inline-flex items-center gap-2 cursor-pointer font-semibold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={sigForm.active}
-                    onChange={e => setSigForm({ ...sigForm, active: e.target.checked })}
-                  />
-                  <span>Signatory Active</span>
-                </label>
-                <label className="inline-flex items-center gap-2 cursor-pointer font-semibold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={sigForm.isDefault}
-                    onChange={e => setSigForm({ ...sigForm, isDefault: e.target.checked })}
-                  />
-                  <span>Set as Default Authorized Signatory</span>
-                </label>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2 pt-4 mt-4 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setSigModalOpen(false)}
@@ -1323,7 +1722,7 @@ export const AdminAppointmentLetters: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={savingSig}
+                  disabled={savingSig || uploadingKey !== null}
                   className="px-5 py-2 rounded-xl bg-indigo-950 hover:bg-indigo-900 text-white font-bold cursor-pointer disabled:opacity-50"
                 >
                   {savingSig ? 'Saving...' : 'Save Signatory Profile'}
@@ -1395,8 +1794,9 @@ const AppointmentPdfPreviewModal: React.FC<{
   if (!letter) return null;
 
   const handlePrint = () => {
-    const iframe = document.getElementById('a4-pdf-preview-iframe') as HTMLIFrameElement;
+    const iframe = document.getElementById('a4-pdf-preview-iframe') as HTMLIFrameElement | null;
     if (iframe && iframe.contentWindow) {
+      iframe.contentWindow.focus();
       iframe.contentWindow.print();
     }
   };
@@ -1414,16 +1814,18 @@ const AppointmentPdfPreviewModal: React.FC<{
       link.click();
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1500);
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6">
-      <div className="bg-white rounded-3xl max-w-5xl w-full h-[90vh] flex flex-col overflow-hidden shadow-2xl border border-slate-200">
+      <div className="bg-white rounded-3xl max-w-5xl w-full h-[92vh] flex flex-col overflow-hidden shadow-2xl border border-slate-200">
         <div className="px-6 py-4 bg-slate-950 text-white flex items-center justify-between gap-3 shrink-0">
           <div>
             <div className="text-[10px] text-amber-300 font-bold uppercase tracking-widest">
-              Print-Ready A4 Document Previewer (Exact Dimensions &amp; Fonts)
+              Print-Ready A4 Document Previewer (Single Full Page)
             </div>
             <h3 className="font-serif font-bold text-base mt-0.5">
               Appointment Letter: {letter.letterNumber} — {letter.appointeeName}
@@ -1468,7 +1870,7 @@ const AppointmentPdfPreviewModal: React.FC<{
           ) : blobUrl ? (
             <iframe
               id="a4-pdf-preview-iframe"
-              src={blobUrl}
+              src={`${blobUrl}#toolbar=0&navpanes=0&scrollbar=0&view=Fit`}
               title="A4 Print Preview"
               className="w-full h-full rounded-2xl border border-slate-300 shadow-lg bg-white"
             />
