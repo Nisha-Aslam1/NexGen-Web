@@ -414,26 +414,26 @@ export async function generateAppointmentLetterPdfBuffer(params: {
 
   const renderSection = (title: string, paragraph: string) => {
     doc.setFont('times', 'normal');
-    doc.setFontSize(9.6);
+    doc.setFontSize(9.1);
     const wrapped = doc.splitTextToSize(sanitizePdfText(paragraph), CONTENT_W);
-    const blockHeight = 5.2 + wrapped.length * 4.3 + 3.5;
+    const blockHeight = 4.2 + wrapped.length * 3.75 + 2.2;
     ensureSpace(blockHeight);
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.4);
+    doc.setFontSize(8.2);
     doc.setTextColor(...ROYAL);
     doc.text(title.toUpperCase(), MARGIN, y);
-    y += 1.4;
+    y += 1.0;
     doc.setDrawColor(...GOLD);
     doc.setLineWidth(0.35);
     doc.line(MARGIN, y, MARGIN + 26, y);
-    y += 4;
+    y += 3;
 
     doc.setFont('times', 'normal');
-    doc.setFontSize(9.5);
+    doc.setFontSize(9.0);
     doc.setTextColor(...SLATE_DARK);
-    doc.text(wrapped, MARGIN, y, { lineHeightFactor: 1.32 });
-    y += wrapped.length * 4.25 + 3.2;
+    doc.text(wrapped, MARGIN, y, { lineHeightFactor: 1.18 });
+    y += wrapped.length * 3.75 + 2.0;
   };
 
   renderSection('1. Official Appointment Declaration', content.declaration);
@@ -444,10 +444,10 @@ export async function generateAppointmentLetterPdfBuffer(params: {
     doc.splitTextToSize(sanitizePdfText(item), CONTENT_W - 6)
   );
   const respHeight =
-    6 +
-    introLines.length * 4.25 +
-    bulletLineGroups.reduce((acc, g) => acc + g.length * 4.1 + 1.2, 0) +
-    3;
+    5 +
+    introLines.length * 3.7 +
+    bulletLineGroups.reduce((acc, g) => acc + g.length * 3.65 + 0.7, 0) +
+    2;
   ensureSpace(respHeight);
 
   doc.setFont('helvetica', 'bold');
@@ -461,20 +461,20 @@ export async function generateAppointmentLetterPdfBuffer(params: {
   y += 4;
 
   doc.setFont('times', 'normal');
-  doc.setFontSize(9.5);
+  doc.setFontSize(9.0);
   doc.setTextColor(...SLATE_DARK);
-  doc.text(introLines, MARGIN, y, { lineHeightFactor: 1.3 });
-  y += introLines.length * 4.2 + 1.5;
+  doc.text(introLines, MARGIN, y, { lineHeightFactor: 1.18 });
+  y += introLines.length * 3.7 + 1.0;
 
   for (const lines of bulletLineGroups) {
-    ensureSpace(lines.length * 4.2 + 2);
+    ensureSpace(lines.length * 3.65 + 1.5);
     doc.setFillColor(...GOLD);
-    doc.circle(MARGIN + 2, y - 1, 0.85, 'F');
+    doc.circle(MARGIN + 2, y - 1, 0.75, 'F');
     doc.setFont('times', 'normal');
-    doc.setFontSize(9.3);
+    doc.setFontSize(8.9);
     doc.setTextColor(...SLATE_DARK);
-    doc.text(lines, MARGIN + 5.5, y, { lineHeightFactor: 1.28 });
-    y += lines.length * 4.1 + 1.2;
+    doc.text(lines, MARGIN + 5.5, y, { lineHeightFactor: 1.16 });
+    y += lines.length * 3.65 + 0.7;
   }
   y += 2;
 
@@ -484,8 +484,16 @@ export async function generateAppointmentLetterPdfBuffer(params: {
   renderSection('6. Organizational Recognition', content.recognition);
 
   // Atomic Executive Signatory + Official Stamp + QR Authentication Block (never split across pages)
-  ensureSpace(54);
-  y += 2;
+  console.log('[AppointmentPDF] SIGNATURE POSITION:', {
+    pageNumber,
+    currentY: y,
+    requiredMm: 43,
+    availableMm: (FOOTER_Y - 5) - y,
+    willFit: y + 43 <= FOOTER_Y - 5
+  });
+
+  ensureSpace(40);
+  y += 1.5;
 
   doc.setDrawColor(...NAVY);
   doc.setLineWidth(0.45);
@@ -499,7 +507,9 @@ export async function generateAppointmentLetterPdfBuffer(params: {
   if (signaturePngDataUrl) {
     try {
       doc.addImage(signaturePngDataUrl, 'PNG', leftSigX + 2, sigBlockTopY, 44, 17, undefined, 'FAST');
-    } catch {}
+    } catch (error) {
+      console.error('[AppointmentPDF] Signature image rendering failed:', error);
+    }
   } else {
     doc.setDrawColor(...BORDER_SOFT);
     doc.setLineWidth(0.25);
@@ -537,7 +547,9 @@ export async function generateAppointmentLetterPdfBuffer(params: {
   if (stampPngDataUrl) {
     try {
       doc.addImage(stampPngDataUrl, 'PNG', stampCenterX - 16, sigBlockTopY + 1, 32, 32, undefined, 'FAST');
-    } catch {}
+    } catch (error) {
+      console.error('[AppointmentPDF] Stamp image rendering failed:', error);
+    }
   } else {
     // Clean geometric institutional seal frame when no custom stamp PNG uploaded
     doc.setDrawColor(...NAVY);
