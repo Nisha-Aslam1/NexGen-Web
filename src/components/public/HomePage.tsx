@@ -987,7 +987,13 @@ export const HomePage: React.FC = () => {
               <div className="rounded-2xl overflow-hidden bg-slate-100">
                 <img
                   src={selectedProgram.coverImage || '/banner.png'}
-                  alt={selectedProgram.title}
+                  alt={buildAutoImageAlt({
+                    type: 'program',
+                    customAlt: selectedProgram.imageAlt,
+                    title: selectedProgram.title,
+                    category: selectedProgram.category
+                  })}
+                  title={`${selectedProgram.title} — NexGen Council`}
                   loading="lazy"
                   decoding="async"
                   referrerPolicy="no-referrer"

@@ -433,10 +433,12 @@ export async function mongoSaveMedia(filename: string, dataUrl: string, mimeType
  * Retrieve media/image file from MongoDB by filename
  */
 export async function mongoGetMedia(filename: string): Promise<{ dataUrl: string; mimeType: string } | null> {
-  if (!isMongoConnected() || !dbInstance) return null;
+  if (!isMongoConnected() || !dbInstance || typeof filename !== 'string') return null;
   try {
+    const safeFilename = path.basename(filename.trim());
+    if (!safeFilename) return null;
     const col = dbInstance.collection('media');
-    const doc = await col.findOne({ filename });
+    const doc = await col.findOne({ filename: safeFilename });
     if (doc && doc.dataUrl) {
       return {
         dataUrl: doc.dataUrl,
@@ -447,6 +449,40 @@ export async function mongoGetMedia(filename: string): Promise<{ dataUrl: string
     console.error('[MongoDB] Failed to retrieve media file:', err.message);
   }
   return null;
+}
+
+/**
+ * Check whether a media filename already exists in MongoDB 'media' collection
+ */
+export async function mongoMediaExists(filename: string): Promise<boolean> {
+  if (!isMongoConnected() || !dbInstance || typeof filename !== 'string') return false;
+  try {
+    const safeFilename = path.basename(filename.trim());
+    if (!safeFilename) return false;
+    const col = dbInstance.collection('media');
+    const doc = await col.findOne({ filename: safeFilename }, { projection: { _id: 1 } });
+    return Boolean(doc);
+  } catch (err: any) {
+    console.warn('[MongoDB] Failed to check media existence:', err.message);
+    return false;
+  }
+}
+
+/**
+ * Remove an obsolete/renamed media file from MongoDB 'media' collection
+ */
+export async function mongoDeleteMedia(filename: string): Promise<boolean> {
+  if (!isMongoConnected() || !dbInstance || typeof filename !== 'string') return false;
+  try {
+    const safeFilename = path.basename(filename.trim());
+    if (!safeFilename) return false;
+    const col = dbInstance.collection('media');
+    await col.deleteOne({ filename: safeFilename });
+    return true;
+  } catch (err: any) {
+    console.warn('[MongoDB] Failed to delete renamed media file:', err.message);
+    return false;
+  }
 }
 
 /**

@@ -48,8 +48,10 @@ export const TrackApplication: React.FC = () => {
     description: 'Check the real-time review status of your NexGen Council volunteer enrollment or fellowship application and download your Member ID card.',
     canonicalPath: '/track',
     ogType: 'website',
-    ogImage: '/banner.png',
-    ogImageAlt: 'NexGen Council Volunteer Application Tracker'
+    ogImage: '',
+    ogImageAlt: '',
+    noindex: true,
+    robotsContent: 'noindex, follow'
   });
 
   const lookupCode = useCallback(async (codeToLookup: string) => {
@@ -646,7 +648,8 @@ export const TrackApplication: React.FC = () => {
                           {(applicationData.idCardPhotoUrl || applicationData.avatar) ? (
                             <img
                               src={applicationData.idCardPhotoUrl || applicationData.avatar}
-                              alt={applicationData.fullName}
+                              alt={`${applicationData.fullName} — NexGen Council Member ID Portrait`}
+                              title={`${applicationData.fullName} — NexGen Council`}
                               className="w-full h-full object-cover"
                             />
                           ) : (
@@ -687,7 +690,8 @@ export const TrackApplication: React.FC = () => {
                           <div className="w-11 h-11 rounded-full bg-white border-2 border-amber-500 overflow-hidden shrink-0 shadow-sm">
                             <img
                               src={applicationData.idCardPhotoUrl || applicationData.avatar}
-                              alt={applicationData.fullName}
+                              alt={`${applicationData.fullName} — NexGen Council Member ID Portrait`}
+                              title={`${applicationData.fullName} — NexGen Council`}
                               className="w-full h-full object-cover"
                             />
                           </div>

@@ -277,6 +277,8 @@ export const AdminGallery: React.FC = () => {
                   onChange={url => setFormItem(prev => ({ ...prev, imageUrl: url }))}
                   label="Archive Photo"
                   helperText="Upload an image directly from your computer or provide an image URL"
+                  suggestedName={[formItem.title, formItem.category].filter(Boolean).join(' ')}
+                  entityType="gallery"
                 />
               </div>
 

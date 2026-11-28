@@ -483,6 +483,8 @@ export const AdminEvents: React.FC = () => {
                   label="Event Cover Banner (Optional)"
                   helperText="Upload an event banner or paste an image URL"
                   required={false}
+                  suggestedName={editingEvent.slug || [editingEvent.title, editingEvent.category].filter(Boolean).join(' ')}
+                  entityType="event"
                 />
               </div>
 

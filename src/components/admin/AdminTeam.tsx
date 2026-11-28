@@ -451,6 +451,8 @@ export const AdminTeam: React.FC = () => {
                   onChange={(url) => setEditingMember(prev => (prev ? { ...prev, image: url } : prev))}
                   label="Profile Photograph"
                   helperText="Upload a portrait photo or enter an image URL"
+                  suggestedName={[editingMember.name, editingMember.position].filter(Boolean).join(' ')}
+                  entityType="team"
                 />
               </div>
 

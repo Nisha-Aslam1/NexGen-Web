@@ -66,7 +66,7 @@ export const AdminVolunteers: React.FC = () => {
     }
   };
 
-  const uploadVolunteerAvatarFile = async (file: File): Promise<string> => {
+  const uploadVolunteerAvatarFile = async (file: File, volunteerName?: string): Promise<string> => {
     const rawDataUrl = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result as string);
@@ -76,7 +76,12 @@ export const AdminVolunteers: React.FC = () => {
     const res = await authFetch('/api/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dataUrl: rawDataUrl, filename: file.name })
+      body: JSON.stringify({
+        dataUrl: rawDataUrl,
+        filename: file.name,
+        suggestedName: volunteerName?.trim() || editingVolunteer?.fullName?.trim() || undefined,
+        entityType: 'volunteer'
+      })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Photo upload failed');

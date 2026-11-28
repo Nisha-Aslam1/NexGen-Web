@@ -131,21 +131,13 @@ export function buildAutoImageAlt(input: AutoImageAltInput): string {
       return truncateSeoText(parts.join(' — '), 155);
     }
     case 'news': {
-      const parts = [
-        title || 'Official Dispatch',
-        category ? `${category} Dispatch` : 'News & Research',
-        org
-      ].filter(Boolean);
-      return truncateSeoText(parts.join(' — '), 155);
+      return truncateSeoText(`${title || 'Official Dispatch'} | ${org}`, 175);
     }
     case 'team': {
-      const roleBits = [role, department].filter(Boolean).join(', ');
-      const parts = [
-        title || 'Council Leader',
-        roleBits || 'Executive Leadership',
-        org
-      ].filter(Boolean);
-      return truncateSeoText(parts.join(' — '), 155);
+      const roleText = role || 'Council Member';
+      const personName = title || 'Council Leader';
+      const orgFull = collapseWhitespace(input.organizationName) || FULL_ORG_LABEL;
+      return truncateSeoText(`${personName} appointed as ${roleText} - ${orgFull}`, 175);
     }
     case 'gallery': {
       const parts = [

@@ -163,68 +163,84 @@ export const NewsPage: React.FC = () => {
       })
     : 'News, Dispatches & Announcements — NexGen Council';
 
+  const resolvedArticleCanonical = effectiveArticle
+    ? effectiveArticle.canonicalUrl?.trim() || `/news/${effectiveArticle.slug || effectiveArticle.id}`
+    : '/news';
+  const resolvedArticlePageUrl = `${window.location.origin}${resolvedArticleCanonical.startsWith('/') ? '' : '/'}${resolvedArticleCanonical}`;
+  const resolvedArticleImageUrl = effectiveArticle
+    ? resolvePublicImageUrl(effectiveArticleCover, window.location.origin, {
+        allowDataUrl: true,
+        fallbackPath: '/banner.png'
+      }) || `${window.location.origin}/banner.png`
+    : `${window.location.origin}/banner.png`;
+  const resolvedArticleCaption = effectiveArticle
+    ? buildAutoImageCaption({
+        type: 'news',
+        customAlt: effectiveArticle.imageAlt,
+        title: effectiveArticle.title,
+        category: effectiveArticle.category,
+        summary: effectiveArticle.summary
+      })
+    : '';
+  const resolvedArticleImageObject = effectiveArticle
+    ? buildImageObjectSchema({
+        url: resolvedArticleImageUrl,
+        alt: effectiveArticleAlt,
+        name: effectiveArticle.title,
+        caption: resolvedArticleCaption,
+        pageUrl: resolvedArticlePageUrl,
+        representativeOfPage: true
+      })
+    : null;
+
   useDocumentSEO({
     skip: shouldSkipSeo,
     title: effectiveArticle
-      ? (effectiveArticle.seoTitle || '').trim() || `${effectiveArticle.title} | NexGen Council News`
+      ? (effectiveArticle.seoTitle || '').trim() || `${effectiveArticle.title} | NexGen Council`
       : listingSeoTitle,
     description: effectiveArticle
       ? (effectiveArticle.seoDescription || '').trim() || effectiveArticle.summary
       : listingSeoDesc,
-    canonicalPath: effectiveArticle
-      ? effectiveArticle.canonicalUrl?.trim() || `/news/${effectiveArticle.slug || effectiveArticle.id}`
-      : '/news',
+    canonicalPath: resolvedArticleCanonical,
     ogType: effectiveArticle ? 'article' : 'website',
     ogImage: effectiveArticleCover,
     ogImageAlt: effectiveArticleAlt,
     keywords: articleKeywords,
     publishedTime: effectiveArticle?.publishedAt,
     author: effectiveArticle?.author || 'NexGen Secretariat',
-    jsonLd: effectiveArticle
-      ? {
-          '@context': 'https://schema.org',
-          '@type': 'NewsArticle',
-          headline: effectiveArticle.title,
-          description: (effectiveArticle.seoDescription || '').trim() || effectiveArticle.summary,
-          image: [
-            buildImageObjectSchema({
-              url:
-                resolvePublicImageUrl(effectiveArticleCover, window.location.origin, {
-                  allowDataUrl: true,
-                  fallbackPath: '/banner.png'
-                }) || `${window.location.origin}/banner.png`,
-              alt: effectiveArticleAlt,
-              name: effectiveArticle.title,
-              caption: buildAutoImageCaption({
-                type: 'news',
-                customAlt: effectiveArticle.imageAlt,
-                title: effectiveArticle.title,
-                category: effectiveArticle.category,
-                summary: effectiveArticle.summary
-              }),
-              pageUrl: `${window.location.origin}/news/${effectiveArticle.slug || effectiveArticle.id}`,
-              representativeOfPage: true
-            })
-          ],
-          datePublished: effectiveArticle.publishedAt,
-          dateModified: effectiveArticle.publishedAt,
-          articleSection: effectiveArticle.category,
-          keywords: articleKeywords.join(', '),
-          author: {
-            '@type': 'Person',
-            name: effectiveArticle.author
+    jsonLd: effectiveArticle && resolvedArticleImageObject
+      ? [
+          {
+            '@context': 'https://schema.org',
+            '@type': 'NewsArticle',
+            headline: effectiveArticle.title,
+            description: (effectiveArticle.seoDescription || '').trim() || effectiveArticle.summary,
+            image: [resolvedArticleImageObject],
+            datePublished: effectiveArticle.publishedAt,
+            dateModified: effectiveArticle.publishedAt,
+            articleSection: effectiveArticle.category,
+            keywords: articleKeywords.join(', '),
+            mainEntityOfPage: resolvedArticlePageUrl,
+            author: {
+              '@type': 'Person',
+              name: effectiveArticle.author
+            },
+            publisher: {
+              '@type': 'NGO',
+              name: 'NexGen Council',
+              logo: buildImageObjectSchema({
+                url: `${window.location.origin}/logo.png`,
+                alt: 'NexGen Council Logo',
+                pageUrl: `${window.location.origin}/news`,
+                orgName: 'NexGen Council'
+              })
+            }
           },
-          publisher: {
-            '@type': 'NGO',
-            name: 'NexGen Council',
-            logo: buildImageObjectSchema({
-              url: `${window.location.origin}/logo.png`,
-              alt: 'NexGen Council Logo',
-              pageUrl: `${window.location.origin}/news`,
-              orgName: 'NexGen Council'
-            })
+          {
+            '@context': 'https://schema.org',
+            ...resolvedArticleImageObject
           }
-        }
+        ]
       : {
           '@context': 'https://schema.org',
           '@type': 'ItemList',

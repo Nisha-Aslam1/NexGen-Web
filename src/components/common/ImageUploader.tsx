@@ -9,6 +9,8 @@ interface ImageUploaderProps {
   helperText?: string;
   required?: boolean;
   onUploadingChange?: (uploading: boolean) => void;
+  suggestedName?: string;
+  entityType?: 'news' | 'team' | 'program' | 'event' | 'gallery' | 'volunteer' | 'user' | 'email';
 }
 
 const IMAGE_EXT_REGEX = /\.(png|jpe?g|webp|gif|svg|bmp|avif|ico)$/i;
@@ -20,7 +22,9 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
   label = 'Image / Visual Asset',
   helperText = 'Upload from your device or paste an external image URL',
   required = true,
-  onUploadingChange
+  onUploadingChange,
+  suggestedName,
+  entityType
 }) => {
   const [activeTab, setActiveTab] = useState<'upload' | 'url'>(
     value && !value.startsWith('/uploads/') && !value.startsWith('data:') && !value.startsWith('/')
@@ -133,7 +137,9 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           dataUrl: uploadDataUrl,
-          filename: uploadFilename
+          filename: uploadFilename,
+          suggestedName: suggestedName?.trim() || undefined,
+          entityType
         })
       });
 

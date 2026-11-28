@@ -676,6 +676,8 @@ export const AdminNews: React.FC = () => {
                       helperText="Optional — upload a cover photo, paste an image URL, or leave blank for a text-only dispatch"
                       required={false}
                       onUploadingChange={setUploadingImage}
+                      suggestedName={editingNews.slug || [editingNews.title, editingNews.category].filter(Boolean).join(' ')}
+                      entityType="news"
                     />
                   </div>
 

@@ -294,7 +294,12 @@ export const AdminUsers: React.FC = () => {
       const res = await authFetch('/api/upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataUrl, filename: file.name })
+        body: JSON.stringify({
+          dataUrl,
+          filename: file.name,
+          suggestedName: [editingUser.name || editingUser.username, 'staff'].filter(Boolean).join(' '),
+          entityType: 'user'
+        })
       });
       const data = await res.json();
       if (!res.ok || !data.url) {

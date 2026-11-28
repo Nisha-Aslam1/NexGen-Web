@@ -3090,6 +3090,9 @@ class Database {
       ...(typeof updates.title === 'string' && updates.title.trim() ? { title: updates.title.trim() } : {}),
       ...(typeof updates.category === 'string' && updates.category.trim() ? { category: updates.category.trim() } : {}),
       ...(typeof updates.imageUrl === 'string' && updates.imageUrl.trim() ? { imageUrl: updates.imageUrl.trim() } : {}),
+      ...(typeof updates.imageAlt === 'string'
+        ? { imageAlt: updates.imageAlt.trim() ? updates.imageAlt.trim().slice(0, 220) : undefined }
+        : {}),
       ...(typeof updates.caption === 'string' ? { caption: updates.caption.trim() } : {}),
       ...(typeof updates.date === 'string' && updates.date.trim() ? { date: updates.date.trim() } : {}),
       ...(typeof updates.displayOrder === 'number' && !Number.isNaN(updates.displayOrder)

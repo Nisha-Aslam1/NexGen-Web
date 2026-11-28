@@ -241,6 +241,8 @@ export const AdminPrograms: React.FC = () => {
                   onChange={(url) => setEditingProgram(prev => (prev ? { ...prev, coverImage: url } : prev))}
                   label="Cover Image"
                   helperText="Upload program hero graphic or specify image URL"
+                  suggestedName={editingProgram.slug || editingProgram.title || ''}
+                  entityType="program"
                 />
               </div>
 

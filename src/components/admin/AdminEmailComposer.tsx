@@ -716,7 +716,12 @@ export const AdminEmailComposer: React.FC = () => {
     const res = await authFetch('/api/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dataUrl, filename })
+      body: JSON.stringify({
+        dataUrl,
+        filename,
+        suggestedName: subject?.trim() ? `${subject.trim()} ${kind}` : `email ${kind}`,
+        entityType: 'email'
+      })
     });
     const data = await parseJsonResponse<any>(res);
     if (!res.ok || !data.url) {

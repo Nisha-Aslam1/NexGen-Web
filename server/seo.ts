@@ -36,15 +36,25 @@ export interface RouteMetadata {
   description: string;
   canonicalUrl: string;
   ogType: 'website' | 'article';
-  ogImage: string;
+  ogImage?: string;
   ogImageAlt?: string;
   keywords?: string[];
   noindex?: boolean;
+  robotsContent?: string;
   publishedTime?: string;
   modifiedTime?: string;
   author?: string;
   jsonLd?: Record<string, any>[];
   noscriptImages?: NoscriptImageEntry[];
+}
+
+function safeDecodeSlug(raw: string): string {
+  const trimmed = (raw || '').trim();
+  try {
+    return decodeURIComponent(trimmed).trim();
+  } catch {
+    return trimmed;
+  }
 }
 
 export function getSiteBaseUrl(req?: Request): string {
@@ -512,7 +522,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
   // Handle Dynamic Program Detail (/programs/:slug)
   if (cleanPath.startsWith('/programs/')) {
-    const slug = rawCleanPath.slice('/programs/'.length).trim();
+    const slug = safeDecodeSlug(rawCleanPath.slice('/programs/'.length));
     const program = db.getProgramBySlug(slug);
 
     if (program && program.status === 'Published') {
@@ -649,7 +659,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
   // Handle Dynamic Event Detail (/events/:slug)
   if (cleanPath.startsWith('/events/')) {
-    const slug = rawCleanPath.slice('/events/'.length).trim();
+    const slug = safeDecodeSlug(rawCleanPath.slice('/events/'.length));
     const event = db.getEventBySlug(slug);
 
     if (event && event.status !== 'Draft') {
@@ -799,7 +809,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
   // Handle Dynamic News Article (/news/:slug)
   if (cleanPath.startsWith('/news/')) {
-    const slug = rawCleanPath.slice('/news/'.length).trim();
+    const slug = safeDecodeSlug(rawCleanPath.slice('/news/'.length));
     const article = db.getNewsBySlug(slug);
 
     if (article && article.status === 'Published') {
@@ -815,7 +825,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
             title: article.title,
             category: article.category
           })
-        : `${article.title} — NexGen Council Official Dispatch`;
+        : `${article.title} | NexGen Council`;
       const articleSeoTitle = (article.seoTitle || '').trim() || `${article.title} | ${shortBrand}`;
       const articleSeoDesc = ((article.seoDescription || '').trim() || article.summary || '').slice(0, 160);
       const articleCustomKeywords = Array.isArray(article.seoKeywords) ? article.seoKeywords : [];
@@ -836,6 +846,19 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
           ...CORE_NEXGEN_KEYWORDS
         ].filter(Boolean))
       );
+
+      const articlePrimaryImageObject = {
+        '@context': 'https://schema.org',
+        ...buildImageObjectSchema({
+          url: articleImage,
+          alt: articleImageAlt,
+          name: article.title,
+          caption: articleSeoDesc || articleImageAlt,
+          pageUrl: resolvedCanonical,
+          orgName,
+          representativeOfPage: true
+        })
+      };
 
       const articleSchema = {
         '@context': 'https://schema.org',
@@ -889,6 +912,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
         jsonLd: [
           orgSchema,
           articleSchema,
+          articlePrimaryImageObject,
           createBreadcrumbs([
             { name: 'Home', url: `${siteUrl}/` },
             { name: 'News', url: `${siteUrl}/news` },
@@ -927,24 +951,20 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
     };
   }
 
-  // Handle Track Application
+  // Handle Track Application (Utility lookup page — isolated from unrelated images & marked noindex, follow)
   if (cleanPath === '/track' || cleanPath === '/track-application') {
     return {
       title: `Track Application Status | ${shortBrand}`,
       description:
-        'Check the real-time review status of your NexGen Council volunteer enrollment or fellowship application using your application ID.',
+        'Check the real-time review status of your NexGen Council volunteer enrollment or fellowship application using your application reference code.',
       canonicalUrl: `${siteUrl}/track`,
       ogType: 'website',
-      ogImage: defaultLogo,
-      ogImageAlt: 'NexGen Council Volunteer Application Tracker',
-      keywords: [...CORE_NEXGEN_KEYWORDS, 'NexGen application status', 'track volunteer application'],
-      noscriptImages: [
-        {
-          url: `${siteUrl}/logo.png`,
-          alt: 'NexGen Council Official Crest Logo',
-          title: 'NexGen Council Official Logo'
-        }
-      ],
+      ogImage: '',
+      ogImageAlt: '',
+      noindex: true,
+      robotsContent: 'noindex, follow',
+      keywords: ['NexGen application status', 'track volunteer application'],
+      noscriptImages: [],
       jsonLd: [
         orgSchema,
         createBreadcrumbs([
@@ -957,6 +977,8 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
 
   // Handle Leadership / Team
   if (cleanPath === '/team' || cleanPath === '/leadership') {
+    const resolvedTeamPath = cleanPath === '/leadership' ? '/leadership' : '/team';
+    const resolvedTeamUrl = `${siteUrl}${resolvedTeamPath}`;
     const activeTeam = typeof db.getTeam === 'function' ? db.getTeam(true) : [];
     const teamImages = dedupeImages([
       ...activeTeam.map(m => ({
@@ -977,14 +999,63 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       }
     ]);
 
+    const leadMember = activeTeam[0];
+    const leadPortraitUrl = leadMember
+      ? resolvePublicImageUrl(leadMember.image, siteUrl, { allowDataUrl: false, fallbackPath: '/logo.png' }) || defaultLogo
+      : teamImages[0]?.url || defaultLogo;
+    const leadPortraitAlt = leadMember
+      ? buildAutoImageAlt({
+          type: 'team',
+          customAlt: leadMember.imageAlt,
+          name: leadMember.name,
+          role: leadMember.position,
+          department: leadMember.department
+        })
+      : 'NexGen Council Executive Leadership & Board';
+    const leadPortraitName = leadMember
+      ? `${leadMember.name} — ${leadMember.position}`
+      : `Executive Leadership & Board | ${shortBrand}`;
+    const leadPortraitCaption = leadMember
+      ? buildAutoImageCaption({
+          type: 'team',
+          customAlt: leadMember.imageAlt,
+          name: leadMember.name,
+          role: leadMember.position,
+          department: leadMember.department,
+          caption: leadMember.bio
+        })
+      : leadPortraitAlt;
+
+    const leadershipPrimaryImageObject = {
+      '@context': 'https://schema.org',
+      ...buildImageObjectSchema({
+        url: leadPortraitUrl,
+        alt: leadPortraitAlt,
+        name: leadPortraitName,
+        caption: leadPortraitCaption,
+        pageUrl: resolvedTeamUrl,
+        orgName,
+        representativeOfPage: true
+      })
+    };
+
     const teamPageSchema = {
       '@context': 'https://schema.org',
-      '@type': 'AboutPage',
-      '@id': `${siteUrl}/team#webpage`,
-      url: `${siteUrl}/team`,
+      '@type': 'ProfilePage',
+      '@id': `${resolvedTeamUrl}#webpage`,
+      url: resolvedTeamUrl,
       name: `Executive Leadership & Board | ${shortBrand}`,
       description:
         'Meet the founder, board of directors, council executives, and program coordinators leading NexGen Women Empowerment & Youth Leadership Council.',
+      primaryImageOfPage: buildImageObjectSchema({
+        url: leadPortraitUrl,
+        alt: leadPortraitAlt,
+        name: leadPortraitName,
+        caption: leadPortraitCaption,
+        pageUrl: resolvedTeamUrl,
+        orgName,
+        representativeOfPage: true
+      }),
       mainEntity: activeTeam.map(m => {
         const portraitUrl =
           resolvePublicImageUrl(m.image, siteUrl, { allowDataUrl: false, fallbackPath: '/logo.png' }) || defaultLogo;
@@ -1006,7 +1077,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
             alt: portraitAlt,
             name: `${m.name} — ${m.position}`,
             caption: m.bio || portraitAlt,
-            pageUrl: `${siteUrl}/team`,
+            pageUrl: resolvedTeamUrl,
             orgName
           })
         };
@@ -1017,7 +1088,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
           alt: img.alt,
           name: img.title,
           caption: img.alt,
-          pageUrl: `${siteUrl}/team`,
+          pageUrl: resolvedTeamUrl,
           orgName,
           representativeOfPage: idx === 0
         })
@@ -1028,7 +1099,7 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       title: `Executive Leadership & Board | ${shortBrand}`,
       description:
         'Meet the founder, board of directors, council executives, and program coordinators leading NexGen Women Empowerment & Youth Leadership Council.',
-      canonicalUrl: `${siteUrl}/team`,
+      canonicalUrl: resolvedTeamUrl,
       ogType: 'website',
       ogImage: teamImages[0]?.url || defaultLogo,
       ogImageAlt: teamImages[0]?.alt || 'NexGen Council Executive Leadership & Board',
@@ -1037,9 +1108,10 @@ export function getRouteMetadata(pathname: string, siteUrl: string): RouteMetada
       jsonLd: [
         orgSchema,
         teamPageSchema,
+        leadershipPrimaryImageObject,
         createBreadcrumbs([
           { name: 'Home', url: `${siteUrl}/` },
-          { name: 'Leadership & Executive Board', url: `${siteUrl}/team` }
+          { name: 'Leadership & Executive Board', url: resolvedTeamUrl }
         ])
       ]
     };
@@ -1611,17 +1683,15 @@ export function generateSitemapXml(siteUrl: string): string {
       ]
     },
     {
-      url: `${siteUrl}/track`,
-      priority: '0.5',
+      url: `${siteUrl}/leadership`,
+      priority: '0.8',
       changefreq: 'monthly',
       lastmod: currentDate,
-      images: [
-        {
-          url: '/logo.png',
-          title: 'NexGen Council Application Status Tracker',
-          caption: 'Track your NexGen Council volunteer enrollment and Member ID card status'
-        }
-      ]
+      images: teamMembers.map(m => ({
+        url: m.image || '/logo.png',
+        title: buildAutoImageAlt({ type: 'team', customAlt: m.imageAlt, name: m.name, role: m.position, department: m.department }),
+        caption: buildAutoImageCaption({ type: 'team', customAlt: m.imageAlt, name: m.name, role: m.position, department: m.department, caption: m.bio })
+      }))
     },
     {
       url: `${siteUrl}/team`,
@@ -1789,6 +1859,164 @@ ${xmlEntries}
 </urlset>`;
 }
 
+export function generateImageSitemapXml(siteUrl: string): string {
+  const galleryItems = typeof db.getGallery === 'function' ? db.getGallery() : [];
+  const teamMembers = typeof db.getTeam === 'function' ? db.getTeam(true) : [];
+  const publishedPrograms = typeof db.getPrograms === 'function' ? db.getPrograms(true) : [];
+  const visibleEvents = (typeof db.getEvents === 'function' ? db.getEvents() : []).filter(e => e.status !== 'Draft');
+  const publishedNews = typeof db.getNews === 'function' ? db.getNews(true) : [];
+
+  type SitemapImage = { url: string; title?: string; caption?: string };
+
+  const makeImageNodes = (images?: SitemapImage[]): string => {
+    if (!images || images.length === 0) return '';
+    const seen = new Set<string>();
+    const chunks: string[] = [];
+
+    for (const img of images) {
+      const fullUrl = resolvePublicImageUrl(img.url, siteUrl, { allowDataUrl: false });
+      if (!fullUrl || seen.has(fullUrl)) continue;
+      seen.add(fullUrl);
+      let node = `\n    <image:image>\n      <image:loc>${escapeXml(fullUrl)}</image:loc>`;
+      if (img.title) node += `\n      <image:title>${escapeXml(img.title)}</image:title>`;
+      if (img.caption) node += `\n      <image:caption>${escapeXml(img.caption)}</image:caption>`;
+      node += `\n      <image:license>${escapeXml(siteUrl)}/terms#media-licensing</image:license>`;
+      node += `\n    </image:image>`;
+      chunks.push(node);
+    }
+
+    return chunks.join('');
+  };
+
+  const entries: Array<{ url: string; images: SitemapImage[] }> = [
+    {
+      url: `${siteUrl}/`,
+      images: [
+        {
+          url: '/logo.png',
+          title: 'NexGen Council Official Logo',
+          caption: 'Official crest and insignia of NexGen Women Empowerment & Youth Leadership Council'
+        },
+        {
+          url: '/banner.png',
+          title: 'NexGen Women Empowerment & Youth Leadership Banner',
+          caption: 'Empowering Women. Inspiring Youth. Transforming Communities.'
+        }
+      ]
+    },
+    {
+      url: `${siteUrl}/leadership`,
+      images: teamMembers.map(m => ({
+        url: m.image || '/logo.png',
+        title: buildAutoImageAlt({ type: 'team', customAlt: m.imageAlt, name: m.name, role: m.position, department: m.department }),
+        caption: buildAutoImageCaption({ type: 'team', customAlt: m.imageAlt, name: m.name, role: m.position, department: m.department, caption: m.bio })
+      }))
+    },
+    {
+      url: `${siteUrl}/team`,
+      images: teamMembers.map(m => ({
+        url: m.image || '/logo.png',
+        title: buildAutoImageAlt({ type: 'team', customAlt: m.imageAlt, name: m.name, role: m.position, department: m.department }),
+        caption: buildAutoImageCaption({ type: 'team', customAlt: m.imageAlt, name: m.name, role: m.position, department: m.department, caption: m.bio })
+      }))
+    },
+    {
+      url: `${siteUrl}/gallery`,
+      images: galleryItems.map(g => ({
+        url: g.imageUrl,
+        title: buildAutoImageAlt({ type: 'gallery', customAlt: g.imageAlt, title: g.title, category: g.category, caption: g.caption }),
+        caption: buildAutoImageCaption({ type: 'gallery', customAlt: g.imageAlt, title: g.title, category: g.category, caption: g.caption })
+      }))
+    },
+    {
+      url: `${siteUrl}/events`,
+      images: visibleEvents
+        .filter(e => Boolean((e.coverImage || e.image || '').trim()))
+        .map(e => ({
+          url: e.coverImage || e.image || '',
+          title: buildAutoImageAlt({ type: 'event', customAlt: e.imageAlt, title: e.title, category: e.category, location: e.location }),
+          caption: buildAutoImageCaption({ type: 'event', customAlt: e.imageAlt, title: e.title, category: e.category, location: e.location, summary: e.description })
+        }))
+    },
+    {
+      url: `${siteUrl}/programs`,
+      images: publishedPrograms
+        .filter(p => Boolean((p.coverImage || '').trim()))
+        .map(p => ({
+          url: p.coverImage,
+          title: buildAutoImageAlt({ type: 'program', customAlt: p.imageAlt, title: p.title, category: p.category }),
+          caption: buildAutoImageCaption({ type: 'program', customAlt: p.imageAlt, title: p.title, category: p.category, summary: p.shortDescription })
+        }))
+    },
+    {
+      url: `${siteUrl}/news`,
+      images: publishedNews
+        .filter(n => Boolean((n.coverImage || '').trim()))
+        .map(n => ({
+          url: n.coverImage || '',
+          title: buildAutoImageAlt({ type: 'news', customAlt: n.imageAlt, title: n.title, category: n.category }),
+          caption: buildAutoImageCaption({ type: 'news', customAlt: n.imageAlt, title: n.title, category: n.category, summary: n.summary })
+        }))
+    },
+    ...publishedNews
+      .filter(n => Boolean((n.coverImage || '').trim()))
+      .map(n => ({
+        url: `${siteUrl}/news/${n.slug}`,
+        images: [
+          {
+            url: n.coverImage || '',
+            title: buildAutoImageAlt({ type: 'news', customAlt: n.imageAlt, title: n.title, category: n.category }),
+            caption: buildAutoImageCaption({ type: 'news', customAlt: n.imageAlt, title: n.title, category: n.category, summary: n.summary })
+          }
+        ]
+      })),
+    ...visibleEvents
+      .filter(e => Boolean((e.coverImage || e.image || '').trim()))
+      .map(e => ({
+        url: `${siteUrl}/events/${e.slug || e.id}`,
+        images: [
+          {
+            url: e.coverImage || e.image || '',
+            title: buildAutoImageAlt({ type: 'event', customAlt: e.imageAlt, title: e.title, category: e.category, location: e.location }),
+            caption: buildAutoImageCaption({ type: 'event', customAlt: e.imageAlt, title: e.title, category: e.category, location: e.location, summary: e.description })
+          }
+        ]
+      })),
+    ...publishedPrograms
+      .filter(p => Boolean((p.coverImage || '').trim()))
+      .map(p => ({
+        url: `${siteUrl}/programs/${p.slug}`,
+        images: [
+          {
+            url: p.coverImage,
+            title: buildAutoImageAlt({ type: 'program', customAlt: p.imageAlt, title: p.title, category: p.category }),
+            caption: buildAutoImageCaption({ type: 'program', customAlt: p.imageAlt, title: p.title, category: p.category, summary: p.shortDescription })
+          }
+        ]
+      }))
+  ];
+
+  const xmlEntries = entries
+    .map(entry => {
+      const imgXml = makeImageNodes(entry.images);
+      if (!imgXml) return '';
+      return `  <url>\n    <loc>${escapeXml(entry.url)}</loc>${imgXml}\n  </url>`;
+    })
+    .filter(Boolean)
+    .join('\n');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.sitemaps.org/schemas/sitemap/0.9
+        http://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd
+        http://www.google.com/schemas/sitemap-image/1.1
+        http://www.google.com/schemas/sitemap-image/1.1/sitemap-image.xsd">
+${xmlEntries}
+</urlset>`;
+}
+
 export function generateRobotsTxt(siteUrl: string): string {
   return `# Robots.txt for NexGen Council Official Website
 # Optimized for Google, Google Image Search, Bing, and major search engine crawlers
@@ -1825,12 +2053,12 @@ Allow: /news
 Allow: /news/*
 Allow: /volunteer
 Allow: /gallery
+Allow: /leadership
 Allow: /team
 Allow: /contact
 Allow: /donate
 Allow: /faq
 Allow: /faqs
-Allow: /track
 Allow: /assets/
 Allow: /uploads/
 Allow: /*.jpg
@@ -1864,8 +2092,9 @@ Disallow: /meet/*
 Disallow: /api/
 Disallow: /data/
 
-# Primary XML Sitemap with Google Image Search Markup
+# Primary XML Sitemaps with Google Image Search Markup
 Sitemap: ${siteUrl}/sitemap.xml
+Sitemap: ${siteUrl}/image-sitemap.xml
 `;
 }
 
@@ -1891,33 +2120,32 @@ function escapeHtml(unsafe: string): string {
     .replace(/'/g, '&#039;');
 }
 
-function isSearchCrawlerUserAgent(userAgent?: string): boolean {
-  if (!userAgent) return false;
-  return /bot|crawl|spider|slurp|mediapartners|adsbot|bingpreview|facebookexternalhit|twitterbot|linkedinbot|whatsapp|telegrambot|applebot|duckduckbot|yandex|baidu/i.test(
-    userAgent
-  );
-}
-
 export function injectSeoIntoHtml(
   html: string,
   meta: RouteMetadata,
   siteUrl: string,
   googleVerification?: string,
   gaTrackingId?: string,
-  userAgent?: string
+  _userAgent?: string
 ): string {
   const safeTitle = escapeHtml(meta.title);
   const safeDesc = escapeHtml(meta.description);
   const safeCanonical = escapeHtml(meta.canonicalUrl);
-  const safeOgImage = escapeHtml(meta.ogImage);
-  const safeOgImageAlt = escapeHtml((meta.ogImageAlt || '').trim() || meta.title);
+  const hasOgImage = Boolean((meta.ogImage || '').trim()) && !meta.noindex;
+  const safeOgImage = hasOgImage ? escapeHtml((meta.ogImage || '').trim()) : '';
+  const safeOgImageAlt = hasOgImage ? escapeHtml((meta.ogImageAlt || '').trim() || meta.title) : '';
   const mergedKeywords = Array.from(
     new Set([...(meta.keywords || []), ...CORE_NEXGEN_KEYWORDS].map(k => k.trim()).filter(Boolean))
   );
   const safeKeywords = escapeHtml(mergedKeywords.join(', '));
+  const resolvedRobots = (meta.robotsContent || '').trim()
+    ? meta.robotsContent!.trim()
+    : meta.noindex
+      ? 'noindex, nofollow'
+      : 'index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1';
 
-  // 1. Replace Title
-  let result = html.replace(/<title>.*?<\/title>/i, `<title>${safeTitle}</title>`);
+  // 1. Replace Title (handles single or multi-line title tags)
+  let result = html.replace(/<title>[\s\S]*?<\/title>/i, `<title>${safeTitle}</title>`);
 
   // 2. Build Injected Tags
   const tags: string[] = [
@@ -1930,34 +2158,37 @@ export function injectSeoIntoHtml(
     `<link rel="alternate" hreflang="en" href="${safeCanonical}" />`,
     `<link rel="alternate" hreflang="x-default" href="${safeCanonical}" />`,
     `<link rel="manifest" href="/site.webmanifest" />`,
-    `<link rel="image_src" href="${safeOgImage}" />`,
-    `<meta name="image" content="${safeOgImage}" />`,
-    `<meta itemprop="image" content="${safeOgImage}" />`,
-    `<meta name="thumbnail" content="${safeOgImage}" />`,
-    meta.noindex
-      ? `<meta name="robots" content="noindex, nofollow" />`
-      : `<meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />`,
+    `<meta name="robots" content="${escapeHtml(resolvedRobots)}" />`,
     `<meta property="og:locale" content="en_US" />`,
     `<meta property="og:site_name" content="NexGen Council" />`,
     `<meta property="og:title" content="${safeTitle}" />`,
     `<meta property="og:description" content="${safeDesc}" />`,
     `<meta property="og:url" content="${safeCanonical}" />`,
     `<meta property="og:type" content="${meta.ogType}" />`,
-    `<meta property="og:image" content="${safeOgImage}" />`,
-    `<meta property="og:image:secure_url" content="${safeOgImage}" />`,
-    `<meta property="og:image:alt" content="${safeOgImageAlt}" />`,
-    `<meta name="twitter:card" content="summary_large_image" />`,
+    `<meta name="twitter:card" content="${hasOgImage ? 'summary_large_image' : 'summary'}" />`,
     `<meta name="twitter:title" content="${safeTitle}" />`,
-    `<meta name="twitter:description" content="${safeDesc}" />`,
-    `<meta name="twitter:image" content="${safeOgImage}" />`,
-    `<meta name="twitter:image:alt" content="${safeOgImageAlt}" />`
+    `<meta name="twitter:description" content="${safeDesc}" />`
   ];
 
+  if (hasOgImage && safeOgImage) {
+    tags.push(
+      `<link rel="image_src" href="${safeOgImage}" />`,
+      `<meta name="image" content="${safeOgImage}" />`,
+      `<meta itemprop="image" content="${safeOgImage}" />`,
+      `<meta name="thumbnail" content="${safeOgImage}" />`,
+      `<meta property="og:image" content="${safeOgImage}" />`,
+      `<meta property="og:image:secure_url" content="${safeOgImage}" />`,
+      `<meta property="og:image:alt" content="${safeOgImageAlt}" />`,
+      `<meta name="twitter:image" content="${safeOgImage}" />`,
+      `<meta name="twitter:image:alt" content="${safeOgImageAlt}" />`
+    );
+  }
+
   if (meta.publishedTime) {
-    tags.push(`<meta property="article:published_time" content="${meta.publishedTime}" />`);
+    tags.push(`<meta property="article:published_time" content="${escapeHtml(meta.publishedTime)}" />`);
   }
   if (meta.modifiedTime) {
-    tags.push(`<meta property="article:modified_time" content="${meta.modifiedTime}" />`);
+    tags.push(`<meta property="article:modified_time" content="${escapeHtml(meta.modifiedTime)}" />`);
   }
   if (meta.author) {
     tags.push(`<meta name="author" content="${escapeHtml(meta.author)}" />`);
@@ -1971,7 +2202,12 @@ export function injectSeoIntoHtml(
   // Structured Data (JSON-LD) marked with data-ssr-jsonld="true" so client hydration replaces cleanly without duplicates
   if (meta.jsonLd && meta.jsonLd.length > 0) {
     meta.jsonLd.forEach(schema => {
-      tags.push(`<script type="application/ld+json" data-ssr-jsonld="true">\n${JSON.stringify(schema, null, 2)}\n</script>`);
+      const safeJson = JSON.stringify(schema, null, 2)
+        .replace(/</g, '\\u003c')
+        .replace(/>/g, '\\u003e')
+        .replace(/\u2028/g, '\\u2028')
+        .replace(/\u2029/g, '\\u2029');
+      tags.push(`<script type="application/ld+json" data-ssr-jsonld="true">\n${safeJson}\n</script>`);
     });
   }
 
@@ -1991,13 +2227,16 @@ export function injectSeoIntoHtml(
 
   const injectedTagsString = tags.join('\n    ');
 
-  // Strip pre-existing static meta/link/json-ld tags to prevent duplicates
+  // Strip pre-existing static meta/link/json-ld tags to prevent duplicates or stale image associations
   result = result.replace(/<meta\b[^>]*name=["']?application-name["']?[^>]*>/gi, '');
   result = result.replace(/<meta\b[^>]*name=["']?apple-mobile-web-app-title["']?[^>]*>/gi, '');
   result = result.replace(/<meta\b[^>]*name=["']?theme-color["']?[^>]*>/gi, '');
   result = result.replace(/<meta\b[^>]*name=["']?description["']?[^>]*>/gi, '');
   result = result.replace(/<meta\b[^>]*name=["']?keywords["']?[^>]*>/gi, '');
   result = result.replace(/<meta\b[^>]*name=["']?robots["']?[^>]*>/gi, '');
+  result = result.replace(/<meta\b[^>]*name=["']?image["']?[^>]*>/gi, '');
+  result = result.replace(/<meta\b[^>]*name=["']?thumbnail["']?[^>]*>/gi, '');
+  result = result.replace(/<meta\b[^>]*itemprop=["']?image["']?[^>]*>/gi, '');
   result = result.replace(/<meta\b[^>]*property=["']?og:[^>]*>/gi, '');
   result = result.replace(/<meta\b[^>]*name=["']?twitter:[^>]*>/gi, '');
   result = result.replace(/<link\b[^>]*rel=["']?canonical["']?[^>]*>/gi, '');
@@ -2015,7 +2254,7 @@ export function injectSeoIntoHtml(
   // Insert before </head>
   result = result.replace('</head>', `    ${injectedTagsString}\n  </head>`);
 
-  // Embed sanitized public catalog bootstrap for instant client hydration & Googlebot WRS rendering
+  // Embed sanitized public catalog bootstrap for instant client hydration & Googlebot WRS rendering (never on noindex utility routes)
   if (!meta.noindex) {
     try {
       const rawSettings = typeof db.getSettings === 'function' ? db.getSettings() : null;
@@ -2066,7 +2305,7 @@ export function injectSeoIntoHtml(
       .join('');
 
     const noscriptSemantic = !meta.noindex
-      ? `\n    <noscript><main style="font-family:system-ui,sans-serif;max-width:960px;margin:0 auto;padding:24px;"><h1>${safeTitle}</h1><p>${safeDesc}</p><nav aria-label="NexGen Council Navigation"><a href="${cleanBase}/">Home</a> | <a href="${cleanBase}/about">About NexGen</a> | <a href="${cleanBase}/programs">Leadership Programs</a> | <a href="${cleanBase}/events">Events</a> | <a href="${cleanBase}/news">News</a> | <a href="${cleanBase}/team">Executive Leadership</a> | <a href="${cleanBase}/gallery">Gallery</a> | <a href="${cleanBase}/donate">Donate</a> | <a href="${cleanBase}/faq">FAQ</a> | <a href="${cleanBase}/volunteer">Volunteer</a> | <a href="${cleanBase}/track">Track Application</a> | <a href="${cleanBase}/contact">Contact</a></nav>${noscriptImageHtml ? `<section aria-label="Page Images">${noscriptImageHtml}</section>` : ''}</main></noscript>`
+      ? `\n    <noscript><main style="font-family:system-ui,sans-serif;max-width:960px;margin:0 auto;padding:24px;"><h1>${safeTitle}</h1><p>${safeDesc}</p><nav aria-label="NexGen Council Navigation"><a href="${cleanBase}/">Home</a> | <a href="${cleanBase}/about">About NexGen</a> | <a href="${cleanBase}/programs">Leadership Programs</a> | <a href="${cleanBase}/events">Events</a> | <a href="${cleanBase}/news">News</a> | <a href="${cleanBase}/leadership">Executive Leadership</a> | <a href="${cleanBase}/gallery">Gallery</a> | <a href="${cleanBase}/donate">Donate</a> | <a href="${cleanBase}/faq">FAQ</a> | <a href="${cleanBase}/volunteer">Volunteer</a> | <a href="${cleanBase}/contact">Contact</a></nav>${noscriptImageHtml ? `<section aria-label="Page Images">${noscriptImageHtml}</section>` : ''}</main></noscript>`
       : '';
 
     if (noscriptSemantic) {

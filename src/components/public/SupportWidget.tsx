@@ -821,7 +821,8 @@ export const SupportWidget: React.FC = () => {
                   <source srcSet="/logo.webp" type="image/webp" />
                   <img
                     src="/logo.png"
-                    alt="NexGen Council"
+                    alt="NexGen Women Empowerment & Youth Leadership Council Support Desk"
+                    title="NexGen Council Support Desk"
                     width={40}
                     height={40}
                     loading="lazy"
@@ -1646,7 +1647,8 @@ export const SupportWidget: React.FC = () => {
           <source srcSet="/NexGen-Support-2.webp" type="image/webp" />
           <img
             src="/NexGen-Support-2.png"
-            alt="Customer Support"
+            alt="NexGen Council Customer Support Desk"
+            title="NexGen Council Customer Support"
             width={144}
             height={96}
             loading="lazy"

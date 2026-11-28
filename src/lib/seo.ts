@@ -27,6 +27,7 @@ export interface SEOProps {
   ogImageAlt?: string;
   keywords?: string[];
   noindex?: boolean;
+  robotsContent?: string;
   publishedTime?: string;
   modifiedTime?: string;
   author?: string;
@@ -55,6 +56,7 @@ export function useDocumentSEO({
   ogImageAlt,
   keywords,
   noindex = false,
+  robotsContent,
   publishedTime,
   modifiedTime,
   author,
@@ -89,9 +91,12 @@ export function useDocumentSEO({
       fullCanonical = cleanPath === '/' ? `${origin}/` : `${origin}${cleanPath}`;
     }
     const defaultImage = `${origin}/banner.png`;
-    const imageToUse = ogImage
-      ? (ogImage.startsWith('http') ? ogImage : `${origin}${ogImage.startsWith('/') ? '' : '/'}${ogImage}`)
-      : defaultImage;
+    const omitImageMeta = noindex && ogImage === '';
+    const imageToUse = omitImageMeta
+      ? ''
+      : ogImage
+        ? (ogImage.startsWith('http') ? ogImage : `${origin}${ogImage.startsWith('/') ? '' : '/'}${ogImage}`)
+        : defaultImage;
 
     const mergedKeywords = Array.from(
       new Set([...(keywords || []), ...CORE_NEXGEN_KEYWORDS].map(k => k.trim()).filter(Boolean))
@@ -106,6 +111,10 @@ export function useDocumentSEO({
         document.head.appendChild(element);
       }
       element.setAttribute('content', content);
+    };
+
+    const removeMeta = (attrName: string, attrVal: string) => {
+      document.querySelectorAll(`meta[${attrName}="${attrVal}"]`).forEach(el => el.remove());
     };
 
     // Helper: update or create link tag
@@ -134,11 +143,12 @@ export function useDocumentSEO({
     setLink('alternate', fullCanonical, { hreflang: 'en' });
     setLink('alternate', fullCanonical, { hreflang: 'x-default' });
 
-    if (noindex) {
-      setMeta('name', 'robots', 'noindex, nofollow');
-    } else {
-      setMeta('name', 'robots', 'index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1');
-    }
+    const resolvedRobots = (robotsContent || '').trim()
+      ? robotsContent!.trim()
+      : noindex
+        ? 'noindex, nofollow'
+        : 'index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1';
+    setMeta('name', 'robots', resolvedRobots);
 
     // 4. Open Graph Tags
     setMeta('property', 'og:locale', 'en_US');
@@ -146,20 +156,35 @@ export function useDocumentSEO({
     setMeta('property', 'og:description', description);
     setMeta('property', 'og:url', fullCanonical);
     setMeta('property', 'og:type', ogType);
-    setMeta('property', 'og:image', imageToUse);
-    if (imageToUse.startsWith('https://')) {
-      setMeta('property', 'og:image:secure_url', imageToUse);
-    }
-    const resolvedImageAlt = (ogImageAlt || '').trim() || title;
-    setMeta('property', 'og:image:alt', resolvedImageAlt);
     setMeta('property', 'og:site_name', 'NexGen Council');
 
-    // 5. Twitter / X Cards
-    setMeta('name', 'twitter:card', 'summary_large_image');
+    if (imageToUse) {
+      setMeta('property', 'og:image', imageToUse);
+      if (imageToUse.startsWith('https://')) {
+        setMeta('property', 'og:image:secure_url', imageToUse);
+      }
+      const resolvedImageAlt = (ogImageAlt || '').trim() || title;
+      setMeta('property', 'og:image:alt', resolvedImageAlt);
+
+      // 5. Twitter / X Cards with Image
+      setMeta('name', 'twitter:card', 'summary_large_image');
+      setMeta('name', 'twitter:image', imageToUse);
+      setMeta('name', 'twitter:image:alt', resolvedImageAlt);
+    } else {
+      removeMeta('property', 'og:image');
+      removeMeta('property', 'og:image:secure_url');
+      removeMeta('property', 'og:image:alt');
+      removeMeta('name', 'twitter:image');
+      removeMeta('name', 'twitter:image:alt');
+      removeMeta('name', 'image');
+      removeMeta('name', 'thumbnail');
+      removeMeta('itemprop', 'image');
+      document.querySelectorAll('link[rel="image_src"]').forEach(el => el.remove());
+      setMeta('name', 'twitter:card', 'summary');
+    }
+
     setMeta('name', 'twitter:title', title);
     setMeta('name', 'twitter:description', description);
-    setMeta('name', 'twitter:image', imageToUse);
-    setMeta('name', 'twitter:image:alt', resolvedImageAlt);
 
     if (publishedTime) {
       setMeta('property', 'article:published_time', publishedTime);
@@ -202,6 +227,7 @@ export function useDocumentSEO({
     ogImageAlt,
     serializedKeywords,
     noindex,
+    robotsContent,
     publishedTime,
     modifiedTime,
     author,

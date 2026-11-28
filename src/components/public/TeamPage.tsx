@@ -29,30 +29,66 @@ export const TeamPage: React.FC = () => {
   const programLeads = activeMembers.filter(m => m.department !== 'Executive Board' && m.department !== 'Leadership');
 
   const teamOrgName = settings?.organizationName || 'NexGen Women Empowerment & Youth Leadership Council';
+  const currentTeamPath =
+    typeof window !== 'undefined' && window.location.pathname.replace(/\/+$/, '').toLowerCase() === '/leadership'
+      ? '/leadership'
+      : '/team';
+  const currentTeamUrl = `${window.location.origin}${currentTeamPath}`;
+  const primaryLeader = activeMembers[0];
+  const primaryLeaderImgUrl = primaryLeader
+    ? resolvePublicImageUrl(primaryLeader.image, window.location.origin, {
+        allowDataUrl: false,
+        fallbackPath: '/banner.png'
+      }) || `${window.location.origin}/banner.png`
+    : `${window.location.origin}/banner.png`;
+  const primaryLeaderAlt = primaryLeader
+    ? buildAutoImageAlt({
+        type: 'team',
+        customAlt: primaryLeader.imageAlt,
+        name: primaryLeader.name,
+        role: primaryLeader.position,
+        department: primaryLeader.department
+      })
+    : 'NexGen Council Executive Leadership & Advisory Board';
+  const primaryLeaderCaption = primaryLeader
+    ? buildAutoImageCaption({
+        type: 'team',
+        customAlt: primaryLeader.imageAlt,
+        name: primaryLeader.name,
+        role: primaryLeader.position,
+        department: primaryLeader.department,
+        caption: primaryLeader.bio
+      })
+    : primaryLeaderAlt;
+  const primaryLeaderImageObject = buildImageObjectSchema({
+    url: primaryLeaderImgUrl,
+    alt: primaryLeaderAlt,
+    name: primaryLeader ? `${primaryLeader.name} — ${primaryLeader.position}` : 'Executive Leadership & Board | NexGen Council',
+    caption: primaryLeaderCaption,
+    pageUrl: currentTeamUrl,
+    orgName: teamOrgName,
+    representativeOfPage: true
+  });
 
   useDocumentSEO({
     title: 'Executive Leadership & Board | NexGen Council',
     description:
       'Meet the founder, board of directors, council executives, and program coordinators leading NexGen Women Empowerment & Youth Leadership Council.',
-    canonicalPath: '/team',
+    canonicalPath: currentTeamPath,
     ogType: 'website',
     ogImage: activeMembers[0]?.image || '/banner.png',
-    ogImageAlt: activeMembers[0]
-      ? buildAutoImageAlt({
-          type: 'team',
-          customAlt: activeMembers[0].imageAlt,
-          name: activeMembers[0].name,
-          role: activeMembers[0].position,
-          department: activeMembers[0].department
-        })
-      : 'NexGen Council Executive Leadership & Advisory Board',
+    ogImageAlt: primaryLeaderAlt,
     keywords: ['NexGen leadership', 'NexGen executive board', 'Minahil Imran Awan'],
     jsonLd: [
       {
         '@context': 'https://schema.org',
-        '@type': 'ItemList',
-        name: 'NexGen Council Leadership & Advisory Board',
-        itemListElement: activeMembers.map((m, idx) => {
+        '@type': 'ProfilePage',
+        url: currentTeamUrl,
+        name: 'Executive Leadership & Board | NexGen Council',
+        description:
+          'Meet the founder, board of directors, council executives, and program coordinators leading NexGen Women Empowerment & Youth Leadership Council.',
+        primaryImageOfPage: primaryLeaderImageObject,
+        mainEntity: activeMembers.map(m => {
           const portraitUrl =
             resolvePublicImageUrl(m.image, window.location.origin, {
               allowDataUrl: false,
@@ -66,34 +102,35 @@ export const TeamPage: React.FC = () => {
             department: m.department
           });
           return {
-            '@type': 'ListItem',
-            position: idx + 1,
-            item: {
-              '@type': 'Person',
-              name: m.name,
-              jobTitle: m.position,
-              image: buildImageObjectSchema({
-                url: portraitUrl,
-                alt: portraitAlt,
-                name: `${m.name} — ${m.position}`,
-                caption: buildAutoImageCaption({
-                  type: 'team',
-                  customAlt: m.imageAlt,
-                  name: m.name,
-                  role: m.position,
-                  department: m.department,
-                  caption: m.bio
-                }),
-                pageUrl: `${window.location.origin}/team`,
-                orgName: teamOrgName
+            '@type': 'Person',
+            name: m.name,
+            jobTitle: m.position,
+            description: m.bio,
+            image: buildImageObjectSchema({
+              url: portraitUrl,
+              alt: portraitAlt,
+              name: `${m.name} — ${m.position}`,
+              caption: buildAutoImageCaption({
+                type: 'team',
+                customAlt: m.imageAlt,
+                name: m.name,
+                role: m.position,
+                department: m.department,
+                caption: m.bio
               }),
-              worksFor: {
-                '@type': 'NGO',
-                name: 'NexGen Council'
-              }
+              pageUrl: currentTeamUrl,
+              orgName: teamOrgName
+            }),
+            worksFor: {
+              '@type': 'NGO',
+              name: teamOrgName
             }
           };
         })
+      },
+      {
+        '@context': 'https://schema.org',
+        ...primaryLeaderImageObject
       }
     ]
   });

@@ -30,9 +30,19 @@ import {
   getSiteBaseUrl,
   getRouteMetadata,
   generateSitemapXml,
+  generateImageSitemapXml,
   generateRobotsTxt,
   injectSeoIntoHtml
 } from './server/seo.ts';
+import {
+  buildEntityImageBaseName,
+  cleanRawFilenameStem,
+  MediaEntityType,
+  resolveUniqueUploadFilename,
+  slugifyImageFilename,
+  syncAllEntityImageFilenames,
+  syncEntityImageFilename
+} from './server/mediaNaming.ts';
 
 import { meetingsRouter } from './server/meetings.ts';
 import {
@@ -2805,16 +2815,18 @@ app.post('/api/volunteers', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), (req, r
   res.status(201).json(created);
 });
 
-app.patch('/api/volunteers/:id', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), (req, res) => {
+app.patch('/api/volunteers/:id', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), async (req, res) => {
   const updated = db.updateVolunteer(req.params.id, req.body);
   if (!updated) return res.status(404).json({ error: 'Volunteer not found' });
-  res.json(updated);
+  const { record } = await syncEntityImageFilename('volunteer', updated.id);
+  res.json(record || updated);
 });
 
-app.put('/api/volunteers/:id', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), (req, res) => {
+app.put('/api/volunteers/:id', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), async (req, res) => {
   const updated = db.updateVolunteer(req.params.id, req.body);
   if (!updated) return res.status(404).json({ error: 'Volunteer not found' });
-  res.json(updated);
+  const { record } = await syncEntityImageFilename('volunteer', updated.id);
+  res.json(record || updated);
 });
 
 app.delete('/api/volunteers/:id', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER']), (req, res) => {
@@ -2848,7 +2860,7 @@ app.get('/api/programs/:id', (req, res) => {
   res.json(program);
 });
 
-app.post('/api/programs', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), (req, res) => {
+app.post('/api/programs', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), async (req, res) => {
   const body = req.body;
   if (!body.title || !body.shortDescription) {
     return res.status(400).json({ error: 'Title and short description are required.' });
@@ -2870,6 +2882,9 @@ app.post('/api/programs', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDI
     curriculumHighlights: Array.isArray(body.curriculumHighlights) ? body.curriculumHighlights : []
   });
 
+  const { record: syncedProgram } = await syncEntityImageFilename('program', program.id);
+  const finalProgram = syncedProgram || program;
+
   const user = (req as any).user;
   db.logActivity({
     userId: user.userId,
@@ -2877,18 +2892,19 @@ app.post('/api/programs', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDI
     userRole: user.role,
     action: 'PROGRAM_CREATED',
     entityType: 'Program',
-    entityId: program.id,
-    details: `Created program: "${program.title}"`,
+    entityId: finalProgram.id,
+    details: `Created program: "${finalProgram.title}"`,
     ipAddress: req.ip || 'unknown'
   });
 
-  res.status(201).json(program);
+  res.status(201).json(finalProgram);
 });
 
-app.put('/api/programs/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), (req, res) => {
+app.put('/api/programs/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), async (req, res) => {
   const updated = db.updateProgram(req.params.id, req.body);
   if (!updated) return res.status(404).json({ error: 'Program not found' });
-  res.json(updated);
+  const { record } = await syncEntityImageFilename('program', updated.id);
+  res.json(record || updated);
 });
 
 app.delete('/api/programs/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), (req, res) => {
@@ -2953,7 +2969,7 @@ app.post('/api/events/:id/rsvp', eventRsvpLimiter, (req, res) => {
   });
 });
 
-app.post('/api/events', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), (req, res) => {
+app.post('/api/events', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), async (req, res) => {
   const body = req.body || {};
   if (!body.title || !body.date) {
     return res.status(400).json({ error: 'Title and date are required.' });
@@ -2994,6 +3010,9 @@ app.post('/api/events', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINA
     waitlistEnabled: Boolean(body.waitlistEnabled)
   });
 
+  const { record: syncedEvent } = await syncEntityImageFilename('event', eventItem.id);
+  const finalEvent = syncedEvent || eventItem;
+
   const user = (req as any).user;
   db.logActivity({
     userId: user.userId,
@@ -3001,17 +3020,19 @@ app.post('/api/events', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINA
     userRole: user.role,
     action: 'EVENT_CREATED',
     entityType: 'Event',
-    entityId: eventItem.id,
-    details: `Created event: "${eventItem.title}" on ${eventItem.date} (Capacity: ${eventItem.capacity || 'Unlimited'})`,
+    entityId: finalEvent.id,
+    details: `Created event: "${finalEvent.title}" on ${finalEvent.date} (Capacity: ${finalEvent.capacity || 'Unlimited'})`,
     ipAddress: getClientIp(req)
   });
 
-  res.status(201).json(eventItem);
+  res.status(201).json(finalEvent);
 });
 
-app.put('/api/events/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), (req, res) => {
+app.put('/api/events/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), async (req, res) => {
   const updated = db.updateEvent(req.params.id, req.body || {});
   if (!updated) return res.status(404).json({ error: 'Event not found' });
+  const { record: syncedEvent } = await syncEntityImageFilename('event', updated.id);
+  const finalEvent = syncedEvent || updated;
   const user = (req as any).user;
   db.logActivity({
     userId: user.userId,
@@ -3019,11 +3040,11 @@ app.put('/api/events/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORD
     userRole: user.role,
     action: 'EVENT_UPDATED',
     entityType: 'Event',
-    entityId: updated.id,
-    details: `Updated event "${updated.title}" (Registered: ${updated.registeredCount || 0}/${updated.capacity || 'Unlimited'})`,
+    entityId: finalEvent.id,
+    details: `Updated event "${finalEvent.title}" (Registered: ${finalEvent.registeredCount || 0}/${finalEvent.capacity || 'Unlimited'})`,
     ipAddress: getClientIp(req)
   });
-  res.json(updated);
+  res.json(finalEvent);
 });
 
 app.delete('/api/events/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'EVENT_COORDINATOR']), (req, res) => {
@@ -3039,7 +3060,7 @@ app.get('/api/news', (req, res) => {
   res.json(news);
 });
 
-app.post('/api/news', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
+app.post('/api/news', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER']), async (req, res) => {
   const body = req.body || {};
   if (!body.title || (!body.content && !body.summary)) {
     return res.status(400).json({ error: 'Title and article content or summary are required.' });
@@ -3074,27 +3095,32 @@ app.post('/api/news', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_O
     canonicalUrl: body.canonicalUrl
   });
 
+  const { record: syncedNews } = await syncEntityImageFilename('news', newsItem.id);
+  const finalNews = syncedNews || newsItem;
+
   db.logActivity({
     userId: user.userId,
     userName: user.name,
     userRole: user.role,
     action: 'NEWS_POSTED',
     entityType: 'News',
-    entityId: newsItem.id,
-    details: `Published news article: "${newsItem.title}"`,
+    entityId: finalNews.id,
+    details: `Published news article: "${finalNews.title}"`,
     ipAddress: getClientIp(req)
   });
 
-  res.status(201).json(newsItem);
+  res.status(201).json(finalNews);
 });
 
-app.put('/api/news/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
+app.put('/api/news/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER']), async (req, res) => {
   const body = { ...(req.body || {}) };
   if (body.coverImage === undefined && typeof body.image === 'string') {
     body.coverImage = body.image;
   }
   const updated = db.updateNews(req.params.id, body);
   if (!updated) return res.status(404).json({ error: 'Article not found' });
+  const { record: syncedNews } = await syncEntityImageFilename('news', updated.id);
+  const finalNews = syncedNews || updated;
   const user = (req as any).user;
   db.logActivity({
     userId: user.userId,
@@ -3102,11 +3128,11 @@ app.put('/api/news/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATION
     userRole: user.role,
     action: 'NEWS_UPDATED',
     entityType: 'News',
-    entityId: updated.id,
-    details: `Updated news article & SEO metadata: "${updated.title}"`,
+    entityId: finalNews.id,
+    details: `Updated news article & SEO metadata: "${finalNews.title}"`,
     ipAddress: getClientIp(req)
   });
-  res.json(updated);
+  res.json(finalNews);
 });
 
 app.delete('/api/news/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER']), (req, res) => {
@@ -3122,9 +3148,10 @@ app.get('/api/team', (req, res) => {
   res.json(team);
 });
 
-app.post('/api/team', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
+app.post('/api/team', requireAuth(['ADMIN', 'CONTENT_MANAGER']), async (req, res) => {
   const member = db.createTeamMember(req.body);
-  res.status(201).json(member);
+  const { record } = await syncEntityImageFilename('team', member.id);
+  res.status(201).json(record || member);
 });
 
 app.put('/api/team/reorder', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
@@ -3146,10 +3173,11 @@ app.put('/api/team/reorder', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, re
   res.json(updatedTeam);
 });
 
-app.put('/api/team/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
+app.put('/api/team/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER']), async (req, res) => {
   const updated = db.updateTeamMember(req.params.id, req.body);
   if (!updated) return res.status(404).json({ error: 'Team member not found' });
-  res.json(updated);
+  const { record } = await syncEntityImageFilename('team', updated.id);
+  res.json(record || updated);
 });
 
 app.delete('/api/team/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER']), (req, res) => {
@@ -3162,16 +3190,19 @@ app.get('/api/gallery', (req, res) => {
   res.json(db.getGallery());
 });
 
-app.post('/api/gallery', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR']), (req, res) => {
+app.post('/api/gallery', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR']), async (req, res) => {
   const item = db.createGalleryItem(req.body);
-  res.status(201).json(item);
+  const { record } = await syncEntityImageFilename('gallery', item.id);
+  res.status(201).json(record || item);
 });
 
-app.put('/api/gallery/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR']), (req, res) => {
+app.put('/api/gallery/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR']), async (req, res) => {
   const updated = db.updateGalleryItem(req.params.id, req.body || {});
   if (!updated) {
     return res.status(404).json({ error: 'Gallery item not found' });
   }
+  const { record: syncedGallery } = await syncEntityImageFilename('gallery', updated.id);
+  const finalGallery = syncedGallery || updated;
   const currentUser = (req as any).user;
   db.logActivity({
     userId: currentUser.userId,
@@ -3180,10 +3211,10 @@ app.put('/api/gallery/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICAT
     action: 'GALLERY_UPDATED',
     entityType: 'Gallery',
     entityId: req.params.id,
-    details: `Updated gallery item "${updated.title}" (${updated.category}).`,
+    details: `Updated gallery item "${finalGallery.title}" (${finalGallery.category}).`,
     ipAddress: getClientIp(req)
   });
-  res.json(updated);
+  res.json(finalGallery);
 });
 
 app.delete('/api/gallery/:id', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR']), (req, res) => {
@@ -4207,7 +4238,7 @@ app.post('/api/users', requireAuth(['SUPER_ADMIN']), (req, res) => {
   }
 });
 
-app.put('/api/users/:id', requireAuth(['SUPER_ADMIN']), (req, res) => {
+app.put('/api/users/:id', requireAuth(['SUPER_ADMIN']), async (req, res) => {
   const { id } = req.params;
   const { username, name, email, role, password, avatar } = req.body || {};
   if (role && !ALLOWED_ROLES.includes(String(role))) {
@@ -4229,6 +4260,8 @@ app.put('/api/users/:id', requireAuth(['SUPER_ADMIN']), (req, res) => {
     if (!updated) {
       return res.status(404).json({ error: 'Staff account not found' });
     }
+    const { record: syncedUser } = await syncEntityImageFilename('user', updated.id);
+    const finalUser = syncedUser || updated;
 
     const currentUser = (req as any).user;
     db.logActivity({
@@ -4238,11 +4271,11 @@ app.put('/api/users/:id', requireAuth(['SUPER_ADMIN']), (req, res) => {
       action: 'STAFF_ROLE_ASSIGNED',
       entityType: 'User',
       entityId: id,
-      details: `Updated staff permissions and access for ${updated.name} (@${updated.username}) with assigned role: "${updated.role}".`,
+      details: `Updated staff permissions and access for ${finalUser.name} (@${finalUser.username}) with assigned role: "${finalUser.role}".`,
       ipAddress: getClientIp(req)
     });
 
-    res.json(updated);
+    res.json(finalUser);
   } catch (err: any) {
     res.status(400).json({ error: err.message || 'Failed to update staff account.' });
   }
@@ -4284,9 +4317,17 @@ app.get('/api/activity-logs', requireAuth(['ADMIN', 'VOLUNTEER_MANAGER', 'CONTEN
   res.json(db.getActivityLogs(limit));
 });
 
-// 14. Real-time Image & Visual Asset Uploader (Hardened against SVG XSS & oversized payloads)
+// 14. Real-time Image & Visual Asset Uploader (Hardened against SVG XSS & oversized payloads + Auto SEO Naming)
 app.post('/api/upload', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANAGER', 'COMMUNICATIONS_OFFICER', 'EVENT_COORDINATOR']), async (req, res) => {
-  const { dataUrl, filename, image } = req.body || {};
+  const {
+    dataUrl,
+    filename,
+    image,
+    suggestedName,
+    entityType,
+    entityTitle,
+    entitySubtitle
+  } = req.body || {};
   const payload = dataUrl || image;
   if (!payload || typeof payload !== 'string') {
     return res.status(400).json({ error: 'No image data provided.' });
@@ -4318,8 +4359,35 @@ app.post('/api/upload', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANA
         return res.status(413).json({ error: 'Image size exceeds 5MB maximum limit.' });
       }
 
-      const rawName = String(filename || 'upload').replace(/[^a-zA-Z0-9_-]/g, '_');
-      const finalName = `${Date.now()}_${rawName.slice(0, 30)}.${ext}`;
+      const rawSuggested = typeof suggestedName === 'string' ? suggestedName.trim() : '';
+      const rawEntityTitle = typeof entityTitle === 'string' ? entityTitle.trim() : '';
+      const rawEntitySub = typeof entitySubtitle === 'string' ? entitySubtitle.trim() : '';
+      const validTypes = new Set<MediaEntityType>([
+        'news', 'team', 'program', 'event', 'gallery', 'volunteer', 'user', 'email'
+      ]);
+
+      let baseSlug: string;
+      if (rawSuggested || rawEntityTitle) {
+        if (typeof entityType === 'string' && validTypes.has(entityType as MediaEntityType) && rawEntityTitle) {
+          baseSlug = buildEntityImageBaseName(entityType as MediaEntityType, {
+            title: rawEntityTitle,
+            name: rawEntityTitle,
+            position: rawEntitySub,
+            category: rawEntitySub,
+            fullName: rawEntityTitle,
+            subject: rawEntityTitle
+          });
+        } else {
+          baseSlug = slugifyImageFilename(
+            rawSuggested || [rawEntityTitle, rawEntitySub].filter(Boolean).join(' '),
+            'nexgen-image'
+          );
+        }
+      } else {
+        baseSlug = cleanRawFilenameStem(String(filename || 'nexgen-upload'), 'nexgen-upload');
+      }
+
+      const finalName = await resolveUniqueUploadFilename(baseSlug, ext);
       const publicFilePath = path.join(publicUploadsDir, finalName);
       const persistentFilePath = path.join(persistentUploadsDir, finalName);
 
@@ -4355,6 +4423,26 @@ app.post('/api/upload', requireAuth(['ADMIN', 'CONTENT_MANAGER', 'VOLUNTEER_MANA
   } catch (err: any) {
     console.error('Error saving uploaded image:', err);
     res.status(500).json({ error: 'Failed to process uploaded image.' });
+  }
+});
+
+// Auto-rename / synchronize all existing uploaded entity image filenames to SEO-friendly entity names
+app.post('/api/media/sync-names', requireAuth(['ADMIN', 'CONTENT_MANAGER']), async (req, res) => {
+  try {
+    const result = await syncAllEntityImageFilenames();
+    const currentUser = (req as any).user;
+    db.logActivity({
+      userId: currentUser.userId,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      action: 'MEDIA_FILENAMES_SYNCED',
+      entityType: 'Media',
+      details: `Synchronized SEO image filenames across ${result.scanned} records (${result.renamedCount} renamed).`,
+      ipAddress: getClientIp(req)
+    });
+    res.json({ ok: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to sync image filenames.' });
   }
 });
 
@@ -4541,6 +4629,11 @@ app.post('/api/system/database-connect', requireAuth(['SUPER_ADMIN']), async (re
     const result = await reconnectMongo(uri.trim());
     if (result.success) {
       await db.initFromMongo();
+      await mongoRestoreAllMediaToDisk(
+        [path.join(process.cwd(), 'public', 'uploads'), path.join(process.cwd(), 'data', 'uploads')],
+        [path.join(process.cwd(), 'data', 'protected_assets')]
+      );
+      await syncAllEntityImageFilenames();
     }
     res.json(result);
   } catch (err: any) {
@@ -4793,7 +4886,6 @@ async function startServer() {
       '/about-us': '/about',
       '/upcoming-events': '/events',
       '/news-and-updates': '/news',
-      '/leadership': '/team',
       '/volunteer-with-us': '/volunteer',
       '/volunteer-apply': '/volunteer',
       '/track-application': '/track',
@@ -4815,12 +4907,19 @@ async function startServer() {
     res.send(generateRobotsTxt(siteUrl));
   });
 
-  // 2. Sitemap.xml Route
+  // 2. Sitemap.xml & Image-Sitemap.xml Routes
   app.get('/sitemap.xml', (req, res) => {
     const siteUrl = getSiteBaseUrl(req);
     res.setHeader('Content-Type', 'application/xml; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.send(generateSitemapXml(siteUrl));
+  });
+
+  app.get('/image-sitemap.xml', (req, res) => {
+    const siteUrl = getSiteBaseUrl(req);
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(generateImageSitemapXml(siteUrl));
   });
 
   // 3. Favicon & Apple Touch Icon fallback (prevents crawler 404s on standard icon probes)
@@ -4956,6 +5055,13 @@ async function startServer() {
     }
   } catch (mErr: any) {
     console.warn('[MongoDB] Init warning:', mErr?.message || mErr);
+  }
+
+  // Automatically normalize any legacy timestamped/raw /uploads/ filenames to match their entity titles/names
+  try {
+    await syncAllEntityImageFilenames();
+  } catch (mediaSyncErr: any) {
+    console.warn('[MediaNaming] Startup auto-sync notice:', mediaSyncErr?.message || mediaSyncErr);
   }
 
   // Purge any AI support conversations (7 days) and meeting captures (3 days) and schedule hourly cleanup
