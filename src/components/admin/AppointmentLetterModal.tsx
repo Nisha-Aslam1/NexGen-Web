@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   X,
   FileCheck2,
@@ -60,6 +60,10 @@ const MEMBERSHIP_TIERS = [
   'Executive Member'
 ];
 
+// A4 at 96dpi
+const A4_W = 794;
+const A4_H = 1123;
+
 export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
   open,
   onClose,
@@ -97,6 +101,25 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
   const [saving, setSaving] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [sendingEmail, setSendingEmail] = useState(false);
+  const [printing, setPrinting] = useState(false);
+
+  // --- Fit the A4 page into the available pane (always one whole page visible) ---
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    if (!open) return;
+    const el = paneRef.current;
+    if (!el) return;
+    const update = () => {
+      const w = el.clientWidth - 32;
+      setScale(Math.max(0.3, Math.min(1, w / A4_W)));
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [open, previewMode]);
 
   useEffect(() => {
     if (!open) return;
@@ -128,10 +151,10 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
   useEffect(() => {
     if (!open) return;
     setPreviewMode('html');
-    if (pdfBlobUrl) {
-      URL.revokeObjectURL(pdfBlobUrl);
-      setPdfBlobUrl(null);
-    }
+    setPdfBlobUrl(prev => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
 
     if (existingLetter) {
       setSavedLetter(existingLetter);
@@ -171,19 +194,25 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
       setReportingAuthority('Director of Operations & Council Secretariat');
       setCustomNotes('');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, existingLetter, applicantSeed]);
 
+  // Revoke the blob URL only when the modal unmounts
+  const pdfUrlRef = useRef<string | null>(null);
+  useEffect(() => {
+    pdfUrlRef.current = pdfBlobUrl;
+  }, [pdfBlobUrl]);
   useEffect(() => {
     return () => {
-      if (pdfBlobUrl) {
+      if (pdfUrlRef.current) {
         try {
-          URL.revokeObjectURL(pdfBlobUrl);
-        } catch {}
+          URL.revokeObjectURL(pdfUrlRef.current);
+        } catch {
+          /* ignore */
+        }
       }
     };
-  }, [pdfBlobUrl]);
-
-  if (!open) return null;
+  }, []);
 
   const activeSignatory =
     signatories.find(s => s.id === signatoryId) ||
@@ -193,35 +222,14 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
 
   const currentLetter = savedLetter || existingLetter || null;
 
-  const previewData: AppointmentPreviewData = {
-    id: currentLetter?.id,
-    letterNumber: currentLetter?.letterNumber,
-    referenceCode: referenceCode || currentLetter?.referenceCode || '',
-    verificationToken: currentLetter?.verificationToken,
-    appointeeName: appointeeName || applicantSeed?.fullName || '',
-    appointeeEmail: currentLetter?.appointeeEmail || applicantSeed?.email,
-    appointeePhone: currentLetter?.appointeePhone || applicantSeed?.phone,
-    appointeePhotoUrl: currentLetter?.appointeePhotoUrl || applicantSeed?.photoUrl,
-    country,
-    designation,
-    department,
-    chapter,
-    appointmentType,
-    membershipTier,
-    effectiveDate,
-    expiryDate: expiryDate || undefined,
-    tenure,
-    renewalEligibility,
-    reportingAuthority,
-    customNotes,
-    signatoryId: activeSignatory?.id || currentLetter?.signatoryId,
-    signatoryName: activeSignatory?.name || currentLetter?.signatoryName || 'Executive Director',
-    signatoryTitle:
-      activeSignatory?.title || currentLetter?.signatoryTitle || 'Executive Director — Council Secretariat',
-    issuedByName: currentLetter?.issuedByName || currentUser?.name || 'Authorized Administrator',
-    issuedAt: currentLetter?.issuedAt,
-    effectiveStatus: currentLetter?.effectiveStatus || 'ACTIVE'
-  };
+  const fetchPdfBlob = useCallback(async (letterId: string): Promise<Blob> => {
+    const res = await authFetch(`/api/appointment-letters/${encodeURIComponent(letterId)}/pdf?disposition=inline&t=${Date.now()}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to generate A4 PDF');
+    }
+    return res.blob();
+  }, []);
 
   const handleSaveOrIssue = async (): Promise<AppointmentLetter | null> => {
     if (!designation.trim() || !department.trim()) {
@@ -273,6 +281,19 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
         'success'
       );
       if (onSaved) onSaved(data);
+
+      // keep an open PDF view in sync with the saved data
+      if (previewMode === 'pdf') {
+        try {
+          const blob = await fetchPdfBlob(data.id);
+          setPdfBlobUrl(prev => {
+            if (prev) URL.revokeObjectURL(prev);
+            return URL.createObjectURL(blob);
+          });
+        } catch {
+          /* preview refresh is best-effort */
+        }
+      }
       return data;
     } catch (err: any) {
       addToast(err.message || 'Failed to save appointment letter', 'error');
@@ -291,15 +312,11 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
 
     setDownloadingPdf(true);
     try {
-      const res = await authFetch(`/api/appointment-letters/${encodeURIComponent(target.id)}/pdf?disposition=inline`);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || 'Failed to generate A4 PDF');
-      }
-      const blob = await res.blob();
-      if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl);
-      const nextUrl = URL.createObjectURL(blob);
-      setPdfBlobUrl(nextUrl);
+      const blob = await fetchPdfBlob(target.id);
+      setPdfBlobUrl(prev => {
+        if (prev) URL.revokeObjectURL(prev);
+        return URL.createObjectURL(blob);
+      });
       setPreviewMode('pdf');
     } catch (err: any) {
       addToast(err.message || 'Failed to render PDF preview', 'error');
@@ -339,8 +356,46 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
     }
   };
 
-  const handlePrintA4 = () => {
-    window.print();
+  /**
+   * Prints the REAL generated PDF (exactly what will be downloaded / emailed),
+   * through a hidden iframe, so nothing else on the admin page gets printed.
+   */
+  const handlePrintA4 = async () => {
+    let target = currentLetter;
+    if (!target) {
+      target = await handleSaveOrIssue();
+      if (!target) return;
+    }
+    setPrinting(true);
+    try {
+      const blob = await fetchPdfBlob(target.id);
+      const url = URL.createObjectURL(blob);
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      iframe.src = url;
+      iframe.onload = () => {
+        try {
+          iframe.contentWindow?.focus();
+          iframe.contentWindow?.print();
+        } catch {
+          window.open(url, '_blank');
+        }
+        setTimeout(() => {
+          iframe.remove();
+          URL.revokeObjectURL(url);
+        }, 60000);
+      };
+      document.body.appendChild(iframe);
+    } catch (err: any) {
+      addToast(err.message || 'Could not prepare the A4 print', 'error');
+    } finally {
+      setPrinting(false);
+    }
   };
 
   const handleSendNotificationEmail = async () => {
@@ -379,11 +434,47 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
     }
   };
 
+  if (!open) return null;
+
+  const previewData: AppointmentPreviewData = {
+    id: currentLetter?.id,
+    letterNumber: currentLetter?.letterNumber,
+    referenceCode: referenceCode || currentLetter?.referenceCode || '',
+    verificationToken: currentLetter?.verificationToken,
+    appointeeName: appointeeName || applicantSeed?.fullName || '',
+    appointeeEmail: currentLetter?.appointeeEmail || applicantSeed?.email,
+    appointeePhone: currentLetter?.appointeePhone || applicantSeed?.phone,
+    appointeePhotoUrl: currentLetter?.appointeePhotoUrl || applicantSeed?.photoUrl,
+    country,
+    designation,
+    department,
+    chapter,
+    appointmentType,
+    membershipTier,
+    effectiveDate,
+    expiryDate: expiryDate || undefined,
+    tenure,
+    renewalEligibility,
+    reportingAuthority,
+    customNotes,
+    signatoryId: activeSignatory?.id || currentLetter?.signatoryId,
+    signatoryName: activeSignatory?.name || currentLetter?.signatoryName || 'Executive Director',
+    signatoryTitle:
+      activeSignatory?.title || currentLetter?.signatoryTitle || 'Executive Director — Council Secretariat',
+    issuedByName: currentLetter?.issuedByName || currentUser?.name || 'Authorized Administrator',
+    issuedAt: currentLetter?.issuedAt,
+    effectiveStatus: currentLetter?.effectiveStatus || 'ACTIVE'
+  };
+
+  const missingAssets: string[] = [];
+  if (activeSignatory && !activeSignatory.hasSignatureImage) missingAssets.push('signature');
+  if (activeSignatory && !activeSignatory.hasStampImage) missingAssets.push('official stamp');
+
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto print:bg-white print:p-0 print:static print:overflow-visible">
-      <div className="bg-white rounded-3xl w-full max-w-7xl max-h-[94vh] flex flex-col shadow-2xl overflow-hidden print:max-h-none print:shadow-none print:rounded-none">
-        {/* Modal Top Toolbar (Hidden on Print) */}
-        <div className="px-5 py-3.5 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-3 shrink-0 print:hidden">
+    <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+      <div className="bg-white rounded-3xl w-full max-w-7xl h-[94vh] flex flex-col shadow-2xl overflow-hidden">
+        {/* Modal Top Toolbar */}
+        <div className="px-5 py-3.5 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center shrink-0">
               <FileCheck2 className="w-5 h-5" />
@@ -428,10 +519,11 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
             <button
               type="button"
               onClick={handlePrintA4}
-              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+              disabled={printing}
+              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Print A4</span>
+              <span className="hidden sm:inline">{printing ? 'Preparing...' : 'Print A4'}</span>
             </button>
 
             <button
@@ -465,10 +557,10 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
           </div>
         </div>
 
-        {/* Two-Pane Studio: Form Controls Left + Live A4 Document Right */}
-        <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-12 print:block print:overflow-visible">
-          {/* Left Configuration Form (Hidden on Print) */}
-          <div className="lg:col-span-4 border-r border-slate-200 bg-slate-50 p-5 overflow-y-auto space-y-4 text-xs print:hidden">
+        {/* Two-Pane Studio */}
+        <div className="flex-1 min-h-0 overflow-hidden grid grid-cols-1 lg:grid-cols-12">
+          {/* Left Configuration Form */}
+          <div className="lg:col-span-4 border-r border-slate-200 bg-slate-50 p-5 overflow-y-auto space-y-4 text-xs">
             {currentLetter && (
               <div
                 className={`p-3 rounded-2xl border flex items-start gap-2.5 ${
@@ -649,11 +741,20 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
                 ) : (
                   signatories.map(s => (
                     <option key={s.id} value={s.id}>
-                      {s.name} — {s.title} {s.hasSignatureImage ? '✓ PNG' : '(No PNG)'}
+                      {s.name} — {s.title} {s.hasSignatureImage ? '✓ Sign' : '(No sign)'} {s.hasStampImage ? '✓ Seal' : '(No seal)'}
                     </option>
                   ))
                 )}
               </select>
+              {missingAssets.length > 0 && (
+                <p className="mt-1.5 flex items-start gap-1.5 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px" />
+                  <span>
+                    {activeSignatory?.name} has no {missingAssets.join(' & ')} uploaded. The letter will be issued without it.
+                    Upload it in Signatories &amp; Official Seals.
+                  </span>
+                </p>
+              )}
             </div>
 
             <div>
@@ -692,21 +793,39 @@ export const AppointmentLetterModal: React.FC<AppointmentLetterModalProps> = ({
             </div>
           </div>
 
-          {/* Right Live A4 Preview / PDF Viewer Pane */}
-          <div className="lg:col-span-8 bg-slate-200/80 p-4 sm:p-6 overflow-y-auto print:p-0 print:bg-white print:overflow-visible">
+          {/* Right: ONE full A4 page, scaled to fit the pane */}
+          <div
+            ref={paneRef}
+            className="lg:col-span-8 bg-slate-200/80 p-4 overflow-auto min-h-0"
+          >
             {previewMode === 'pdf' && pdfBlobUrl ? (
               <iframe
-                src={pdfBlobUrl}
+                key={pdfBlobUrl}
+                src={`${pdfBlobUrl}#toolbar=0&navpanes=0&scrollbar=0&view=Fit`}
                 title="Official Appointment Letter PDF Preview"
-                className="w-full h-[82vh] rounded-xl border border-slate-300 bg-white shadow-lg"
+                className="w-full h-full min-h-[70vh] rounded-xl border border-slate-300 bg-white shadow-lg"
               />
             ) : (
-              <AppointmentLetterPreview
-                data={previewData}
-                signatory={activeSignatory}
-                siteUrl={settings.siteUrl}
-                isAdminPreview={true}
-              />
+              <div
+                className="mx-auto"
+                style={{ width: A4_W * scale, height: A4_H * scale }}
+              >
+                <div
+                  className="bg-white shadow-lg overflow-hidden origin-top-left"
+                  style={{
+                    width: A4_W,
+                    height: A4_H,
+                    transform: `scale(${scale})`
+                  }}
+                >
+                  <AppointmentLetterPreview
+                    data={previewData}
+                    signatory={activeSignatory}
+                    siteUrl={settings.siteUrl}
+                    isAdminPreview={true}
+                  />
+                </div>
+              </div>
             )}
           </div>
         </div>
