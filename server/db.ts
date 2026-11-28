@@ -2498,7 +2498,7 @@ class Database {
         targetVol?.avatar ||
         targetApp?.avatar,
       country: (params.country || 'Pakistan').trim(),
-      designation: params.designation.trim(),
+      designation: params.designation.trim().slice(0, 100),
       department: params.department.trim(),
       chapter: (params.chapter || targetVol?.city || targetApp?.city || 'Sialkot').trim(),
       appointmentType: params.appointmentType || 'Volunteer',
@@ -2671,6 +2671,19 @@ class Database {
     this.save();
     mongoUpsert('appointmentLetters', current.id, current).catch(() => {});
     return this.hydrateAppointmentLetter(current);
+  }
+    deleteAppointmentLetter(id: string): boolean {
+    this.ensureMeetingArrays();
+    const list = this.data.appointmentLetters || [];
+    const target = list.find(
+      l => l.id === id || l.letterNumber.toUpperCase() === id.trim().toUpperCase()
+    );
+    if (!target) return false;
+
+    this.data.appointmentLetters = list.filter(l => l.id !== target.id);
+    this.save();
+    mongoDelete('appointmentLetters', target.id).catch(() => {});
+    return true;
   }
 
   // --- Programs ---
