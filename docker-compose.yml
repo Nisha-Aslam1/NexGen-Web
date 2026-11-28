@@ -31,8 +31,8 @@ services:
     image: mongo:7.0
     container_name: nexgen_mongodb
     restart: always
-    ports:
-      - "27017:27017"
+    expose:
+      - "27017"
     environment:
       - MONGO_INITDB_DATABASE=nexgen_council
     volumes:

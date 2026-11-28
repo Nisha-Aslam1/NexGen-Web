@@ -1,0 +1,600 @@
+import fs from 'fs';
+import path from 'path';
+import { jsPDF } from 'jspdf';
+import QRCode from 'qrcode';
+import { AppointmentLetter, SignatoryProfile } from '../src/types.ts';
+import { buildAppointmentLetterContent } from '../src/lib/appointmentContent.ts';
+import { mongoGetMedia } from './mongo.ts';
+
+const PAGE_W = 210;
+const PAGE_H = 297;
+const MARGIN = 15;
+const CONTENT_W = PAGE_W - MARGIN * 2;
+const FOOTER_Y = PAGE_H - 18;
+
+const NAVY: [number, number, number] = [15, 35, 70];
+const ROYAL: [number, number, number] = [30, 58, 138];
+const GOLD: [number, number, number] = [196, 148, 45];
+const SLATE_DARK: [number, number, number] = [30, 41, 59];
+const SLATE_MUTED: [number, number, number] = [100, 116, 139];
+const LIGHT_BG: [number, number, number] = [248, 250, 252];
+const BORDER_SOFT: [number, number, number] = [203, 213, 225];
+
+function sanitizePdfText(raw?: string): string {
+  if (!raw) return '';
+  return String(raw)
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2013\u2014]/g, '-')
+    .replace(/\u2022/g, '*')
+    .replace(/[^\x20-\x7E\n]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function formatDateReadable(raw?: string): string {
+  if (!raw || !raw.trim()) return 'Open-Ended / Until Revoked';
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return sanitizePdfText(raw);
+  return d.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+}
+
+function detectImageFormat(buffer: Buffer): 'PNG' | 'JPEG' | null {
+  if (buffer.length < 8) return null;
+  if (
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  ) {
+    return 'PNG';
+  }
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'JPEG';
+  }
+  return null;
+}
+
+function loadLogoDataUrl(): string | null {
+  const candidates = [
+    path.join(process.cwd(), 'public', 'logo.png'),
+    path.join(process.cwd(), 'dist', 'logo.png')
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        const buf = fs.readFileSync(p);
+        return `data:image/png;base64,${buf.toString('base64')}`;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+async function loadProtectedAssetDataUrl(filename?: string): Promise<string | null> {
+  if (!filename || !filename.trim()) return null;
+  const safeName = path.basename(filename.trim());
+  const protectedPath = path.join(process.cwd(), 'data', 'protected_assets', safeName);
+  try {
+    if (fs.existsSync(protectedPath)) {
+      const buf = fs.readFileSync(protectedPath);
+      const fmt = detectImageFormat(buf);
+      if (fmt === 'PNG') {
+        return `data:image/png;base64,${buf.toString('base64')}`;
+      }
+    }
+  } catch {}
+
+  try {
+    const media = await mongoGetMedia(safeName);
+    if (media && media.dataUrl && media.dataUrl.startsWith('data:image/png')) {
+      return media.dataUrl;
+    }
+  } catch {}
+
+  return null;
+}
+
+async function loadOptionalAppointeePhotoDataUrl(photoUrl?: string): Promise<{ dataUrl: string; format: 'PNG' | 'JPEG' } | null> {
+  if (!photoUrl || !photoUrl.trim()) return null;
+  const trimmed = photoUrl.trim();
+  if (trimmed.startsWith('/uploads/')) {
+    const safeName = path.basename(trimmed);
+    const candidates = [
+      path.join(process.cwd(), 'public', 'uploads', safeName),
+      path.join(process.cwd(), 'data', 'uploads', safeName)
+    ];
+    for (const p of candidates) {
+      try {
+        if (fs.existsSync(p)) {
+          const buf = fs.readFileSync(p);
+          const fmt = detectImageFormat(buf);
+          if (fmt) {
+            const mime = fmt === 'PNG' ? 'image/png' : 'image/jpeg';
+            return { dataUrl: `data:${mime};base64,${buf.toString('base64')}`, format: fmt };
+          }
+        }
+      } catch {}
+    }
+  }
+  return null;
+}
+
+function drawPageChrome(
+  doc: jsPDF,
+  logoDataUrl: string | null,
+  letterNumber: string,
+  pageNumber: number
+) {
+  // Clean white page background
+  doc.setFillColor(255, 255, 255);
+  doc.rect(0, 0, PAGE_W, PAGE_H, 'F');
+
+  // Subtle watermark with official logo in center
+  if (logoDataUrl) {
+    try {
+      doc.saveGraphicsState();
+      const GState = (doc as any).GState;
+      if (GState) {
+        doc.setGState(new GState({ opacity: 0.055 }));
+      }
+      doc.addImage(logoDataUrl, 'PNG', 55, 98, 100, 100, undefined, 'FAST');
+      doc.restoreGraphicsState();
+    } catch {}
+  }
+
+  // Thin double-line institutional border
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.75);
+  doc.rect(8, 8, PAGE_W - 16, PAGE_H - 16);
+
+  doc.setDrawColor(...GOLD);
+  doc.setLineWidth(0.35);
+  doc.rect(10.2, 10.2, PAGE_W - 20.4, PAGE_H - 20.4);
+
+  // Corner gold accents
+  doc.setFillColor(...NAVY);
+  doc.rect(8, 8, 5, 1.4, 'F');
+  doc.rect(8, 8, 1.4, 5, 'F');
+  doc.rect(PAGE_W - 13, 8, 5, 1.4, 'F');
+  doc.rect(PAGE_W - 9.4, 8, 1.4, 5, 'F');
+
+  // Bottom institutional footer bar
+  doc.setDrawColor(...BORDER_SOFT);
+  doc.setLineWidth(0.25);
+  doc.line(MARGIN, FOOTER_Y - 2, PAGE_W - MARGIN, FOOTER_Y - 2);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.2);
+  doc.setTextColor(...NAVY);
+  doc.text('NEXGEN COUNCIL SECRETARIAT — SIALKOT, PAKISTAN', MARGIN, FOOTER_Y + 2.2);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.8);
+  doc.setTextColor(...SLATE_MUTED);
+  doc.text(
+    `Official Appointment Instrument  |  Ref: ${sanitizePdfText(letterNumber)}  |  https://nexgencouncil.bond/track`,
+    MARGIN,
+    FOOTER_Y + 5.6
+  );
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.2);
+  doc.setTextColor(...GOLD);
+  doc.text(`PAGE ${pageNumber}`, PAGE_W - MARGIN, FOOTER_Y + 3.5, { align: 'right' });
+}
+
+export async function generateAppointmentLetterPdfBuffer(params: {
+  letter: AppointmentLetter;
+  signatory: SignatoryProfile | null;
+  siteUrl?: string;
+}): Promise<Buffer> {
+  const { letter, signatory } = params;
+  const rawBase = (params.siteUrl || 'https://nexgencouncil.bond').trim().replace(/\/+$/, '');
+  const verificationBaseUrl = /localhost|127\.0\.0\.1/i.test(rawBase)
+    ? 'https://nexgencouncil.bond'
+    : rawBase;
+
+  const verifyUrl = `${verificationBaseUrl}/track?code=${encodeURIComponent(
+    letter.referenceCode
+  )}&token=${encodeURIComponent(letter.verificationToken)}`;
+
+  const qrDataUrl = await QRCode.toDataURL(verifyUrl, {
+    width: 240,
+    margin: 1,
+    color: { dark: '#0F2346', light: '#FFFFFF' },
+    errorCorrectionLevel: 'M'
+  });
+
+  const logoDataUrl = loadLogoDataUrl();
+  const signaturePngDataUrl = await loadProtectedAssetDataUrl(signatory?.signatureAssetFilename);
+  const stampPngDataUrl = await loadProtectedAssetDataUrl(signatory?.stampAssetFilename);
+  const appointeePhoto = await loadOptionalAppointeePhotoDataUrl(letter.appointeePhotoUrl);
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+    compress: true
+  });
+
+  let pageNumber = 1;
+  drawPageChrome(doc, logoDataUrl, letter.letterNumber, pageNumber);
+
+  // Page 1 Official Letterhead
+  let y = 16;
+  if (logoDataUrl) {
+    doc.addImage(logoDataUrl, 'PNG', MARGIN, y, 21, 21, undefined, 'FAST');
+  }
+
+  const textStartX = logoDataUrl ? MARGIN + 25 : MARGIN;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.8);
+  doc.setTextColor(...NAVY);
+  doc.text('NEXGEN WOMEN EMPOWERMENT &', textStartX, y + 5.2);
+  doc.text('YOUTH LEADERSHIP COUNCIL', textStartX, y + 10.2);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.6);
+  doc.setTextColor(...ROYAL);
+  doc.text('COUNCIL SECRETARIAT — SIALKOT, PAKISTAN', textStartX, y + 15.2);
+
+  doc.setFont('helvetica', 'bolditalic');
+  doc.setFontSize(7.3);
+  doc.setTextColor(...GOLD);
+  doc.text('SHAPING TODAY, LEADING TOMORROW', textStartX, y + 19.6);
+
+  // Top-right classification & reference card
+  doc.setFillColor(...NAVY);
+  doc.roundedRect(PAGE_W - MARGIN - 54, y + 0.5, 54, 6.2, 1.2, 1.2, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.8);
+  doc.setTextColor(255, 255, 255);
+  doc.text('OFFICIAL APPOINTMENT RECORD', PAGE_W - MARGIN - 27, y + 4.7, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(...SLATE_MUTED);
+  doc.text('LETTER NO.', PAGE_W - MARGIN - 54, y + 11.2);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.2);
+  doc.setTextColor(...NAVY);
+  doc.text(sanitizePdfText(letter.letterNumber), PAGE_W - MARGIN, y + 11.2, { align: 'right' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(...SLATE_MUTED);
+  doc.text('APP REF CODE', PAGE_W - MARGIN - 54, y + 16);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.8);
+  doc.setTextColor(...SLATE_DARK);
+  doc.text(sanitizePdfText(letter.referenceCode), PAGE_W - MARGIN, y + 16, { align: 'right' });
+
+  const effectiveStatus = letter.effectiveStatus || (letter.status === 'Revoked' ? 'REVOKED' : 'ACTIVE');
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(...SLATE_MUTED);
+  doc.text('STATUS', PAGE_W - MARGIN - 54, y + 20.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.8);
+  if (effectiveStatus === 'REVOKED') {
+    doc.setTextColor(185, 28, 28);
+  } else if (effectiveStatus === 'EXPIRED') {
+    doc.setTextColor(180, 83, 9);
+  } else {
+    doc.setTextColor(5, 122, 85);
+  }
+  doc.text(effectiveStatus, PAGE_W - MARGIN, y + 20.5, { align: 'right' });
+
+  y += 25;
+
+  // Gold & Navy header divider
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.7);
+  doc.line(MARGIN, y, PAGE_W - MARGIN, y);
+  doc.setDrawColor(...GOLD);
+  doc.setLineWidth(0.45);
+  doc.line(MARGIN, y + 1.2, PAGE_W - MARGIN, y + 1.2);
+
+  y += 7;
+
+  // Main Document Title Banner
+  doc.setFont('times', 'bold');
+  doc.setFontSize(17.5);
+  doc.setTextColor(...NAVY);
+  doc.text('LETTER OF APPOINTMENT', PAGE_W / 2, y, { align: 'center' });
+
+  y += 3.5;
+  doc.setDrawColor(...GOLD);
+  doc.setLineWidth(0.6);
+  doc.line(PAGE_W / 2 - 32, y, PAGE_W / 2 + 32, y);
+
+  y += 5;
+
+  // Structured Identification & Appointee Panel
+  const boxTopY = y;
+  const photoReserveW = appointeePhoto ? 24 : 0;
+  const leftColW = (CONTENT_W - photoReserveW) / 2;
+
+  doc.setFillColor(...LIGHT_BG);
+  doc.setDrawColor(...BORDER_SOFT);
+  doc.setLineWidth(0.3);
+  doc.roundedRect(MARGIN, boxTopY, CONTENT_W, 38.5, 1.5, 1.5, 'FD');
+
+  // Vertical divider inside box
+  doc.line(MARGIN + leftColW, boxTopY + 3, MARGIN + leftColW, boxTopY + 35.5);
+
+  const drawKvRow = (label: string, value: string, x: number, rowY: number, maxValW: number) => {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.6);
+    doc.setTextColor(...SLATE_MUTED);
+    doc.text(label, x, rowY);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.6);
+    doc.setTextColor(...SLATE_DARK);
+    const lines = doc.splitTextToSize(sanitizePdfText(value) || 'N/A', maxValW);
+    doc.text(lines[0], x + 28, rowY);
+  };
+
+  let rowLeftY = boxTopY + 6.2;
+  drawKvRow('FULL LEGAL NAME:', letter.appointeeName, MARGIN + 3.5, rowLeftY, leftColW - 32);
+  rowLeftY += 5.4;
+  drawKvRow('DESIGNATION:', letter.designation, MARGIN + 3.5, rowLeftY, leftColW - 32);
+  rowLeftY += 5.4;
+  drawKvRow('DEPARTMENT:', letter.department, MARGIN + 3.5, rowLeftY, leftColW - 32);
+  rowLeftY += 5.4;
+  drawKvRow('CHAPTER / CITY:', `${letter.chapter}, ${letter.country || 'Pakistan'}`, MARGIN + 3.5, rowLeftY, leftColW - 32);
+  rowLeftY += 5.4;
+  drawKvRow('EMAIL ADDRESS:', letter.appointeeEmail || 'On File', MARGIN + 3.5, rowLeftY, leftColW - 32);
+  rowLeftY += 5.4;
+  drawKvRow('CONTACT NO.:', letter.appointeePhone || 'On File', MARGIN + 3.5, rowLeftY, leftColW - 32);
+
+  let rowRightY = boxTopY + 6.2;
+  const rightX = MARGIN + leftColW + 3.5;
+  drawKvRow('ISSUE DATE:', formatDateReadable(letter.issuedAt), rightX, rowRightY, leftColW - 32);
+  rowRightY += 5.4;
+  drawKvRow('EFFECTIVE DATE:', formatDateReadable(letter.effectiveDate), rightX, rowRightY, leftColW - 32);
+  rowRightY += 5.4;
+  drawKvRow('VALIDITY / EXPIRY:', letter.expiryDate ? formatDateReadable(letter.expiryDate) : 'Renewable Standing', rightX, rowRightY, leftColW - 32);
+  rowRightY += 5.4;
+  drawKvRow('APPOINTMENT TYPE:', letter.appointmentType, rightX, rowRightY, leftColW - 32);
+  rowRightY += 5.4;
+  drawKvRow('MEMBERSHIP TIER:', letter.membershipTier, rightX, rowRightY, leftColW - 32);
+  rowRightY += 5.4;
+  drawKvRow('REPORTING TO:', letter.reportingAuthority, rightX, rowRightY, leftColW - 32);
+
+  if (appointeePhoto) {
+    try {
+      const px = PAGE_W - MARGIN - 22.5;
+      const py = boxTopY + 4;
+      doc.setFillColor(255, 255, 255);
+      doc.setDrawColor(...GOLD);
+      doc.setLineWidth(0.4);
+      doc.rect(px - 0.6, py - 0.6, 20.2, 24.2, 'FD');
+      doc.addImage(appointeePhoto.dataUrl, appointeePhoto.format, px, py, 19, 23, undefined, 'FAST');
+    } catch {}
+  }
+
+  y = boxTopY + 44;
+
+  // Helper to check vertical space and add continuation page seamlessly
+  const ensureSpace = (neededMm: number) => {
+    if (y + neededMm > FOOTER_Y - 5) {
+      doc.addPage();
+      pageNumber += 1;
+      drawPageChrome(doc, logoDataUrl, letter.letterNumber, pageNumber);
+      y = 20;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.2);
+      doc.setTextColor(...NAVY);
+      doc.text(
+        `LETTER OF APPOINTMENT — ${sanitizePdfText(letter.appointeeName).toUpperCase()} (${sanitizePdfText(letter.letterNumber)})`,
+        MARGIN,
+        y
+      );
+      doc.setDrawColor(...GOLD);
+      doc.setLineWidth(0.35);
+      doc.line(MARGIN, y + 2, PAGE_W - MARGIN, y + 2);
+      y += 8;
+    }
+  };
+
+  // Salutation
+  doc.setFont('times', 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(...NAVY);
+  doc.text(`Dear ${sanitizePdfText(letter.appointeeName)},`, MARGIN, y);
+  y += 5.2;
+
+  const content = buildAppointmentLetterContent(letter);
+
+  const renderSection = (title: string, paragraph: string) => {
+    doc.setFont('times', 'normal');
+    doc.setFontSize(9.6);
+    const wrapped = doc.splitTextToSize(sanitizePdfText(paragraph), CONTENT_W);
+    const blockHeight = 5.2 + wrapped.length * 4.3 + 3.5;
+    ensureSpace(blockHeight);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.4);
+    doc.setTextColor(...ROYAL);
+    doc.text(title.toUpperCase(), MARGIN, y);
+    y += 1.4;
+    doc.setDrawColor(...GOLD);
+    doc.setLineWidth(0.35);
+    doc.line(MARGIN, y, MARGIN + 26, y);
+    y += 4;
+
+    doc.setFont('times', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(...SLATE_DARK);
+    doc.text(wrapped, MARGIN, y, { lineHeightFactor: 1.32 });
+    y += wrapped.length * 4.25 + 3.2;
+  };
+
+  renderSection('1. Official Appointment Declaration', content.declaration);
+
+  // 2. Responsibilities & Duties with bullet points
+  const introLines = doc.splitTextToSize(sanitizePdfText(content.responsibilitiesIntro), CONTENT_W);
+  const bulletLineGroups = content.responsibilitiesList.map(item =>
+    doc.splitTextToSize(sanitizePdfText(item), CONTENT_W - 6)
+  );
+  const respHeight =
+    6 +
+    introLines.length * 4.25 +
+    bulletLineGroups.reduce((acc, g) => acc + g.length * 4.1 + 1.2, 0) +
+    3;
+  ensureSpace(respHeight);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.4);
+  doc.setTextColor(...ROYAL);
+  doc.text('2. RESPONSIBILITIES & DUTIES', MARGIN, y);
+  y += 1.4;
+  doc.setDrawColor(...GOLD);
+  doc.setLineWidth(0.35);
+  doc.line(MARGIN, y, MARGIN + 26, y);
+  y += 4;
+
+  doc.setFont('times', 'normal');
+  doc.setFontSize(9.5);
+  doc.setTextColor(...SLATE_DARK);
+  doc.text(introLines, MARGIN, y, { lineHeightFactor: 1.3 });
+  y += introLines.length * 4.2 + 1.5;
+
+  for (const lines of bulletLineGroups) {
+    ensureSpace(lines.length * 4.2 + 2);
+    doc.setFillColor(...GOLD);
+    doc.circle(MARGIN + 2, y - 1, 0.85, 'F');
+    doc.setFont('times', 'normal');
+    doc.setFontSize(9.3);
+    doc.setTextColor(...SLATE_DARK);
+    doc.text(lines, MARGIN + 5.5, y, { lineHeightFactor: 1.28 });
+    y += lines.length * 4.1 + 1.2;
+  }
+  y += 2;
+
+  renderSection('3. Code of Conduct', content.codeOfConduct);
+  renderSection('4. Confidentiality & Organizational Policies', content.confidentiality);
+  renderSection('5. Appointment Terms & Tenure', content.terms);
+  renderSection('6. Organizational Recognition', content.recognition);
+
+  // Atomic Executive Signatory + Official Stamp + QR Authentication Block (never split across pages)
+  ensureSpace(54);
+  y += 2;
+
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.45);
+  doc.line(MARGIN, y, PAGE_W - MARGIN, y);
+  y += 4.5;
+
+  const sigBlockTopY = y;
+
+  // LEFT COLUMN: Authorized Digital Signature (only if uploaded by Admin — never fabricated)
+  const leftSigX = MARGIN;
+  if (signaturePngDataUrl) {
+    try {
+      doc.addImage(signaturePngDataUrl, 'PNG', leftSigX + 2, sigBlockTopY, 44, 17, undefined, 'FAST');
+    } catch (error) {
+      console.error('[AppointmentPDF] Signature image rendering failed:', error);
+    }
+  } else {
+    doc.setDrawColor(...BORDER_SOFT);
+    doc.setLineWidth(0.25);
+    doc.roundedRect(leftSigX, sigBlockTopY + 1, 48, 14, 1, 1);
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(6.6);
+    doc.setTextColor(...SLATE_MUTED);
+    doc.text('Authorized Digital Signatory', leftSigX + 24, sigBlockTopY + 7.2, { align: 'center' });
+    doc.text('(No Signature PNG Uploaded)', leftSigX + 24, sigBlockTopY + 11.2, { align: 'center' });
+  }
+
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.4);
+  doc.line(leftSigX, sigBlockTopY + 19, leftSigX + 56, sigBlockTopY + 19);
+
+  doc.setFont('times', 'bold');
+  doc.setFontSize(9.6);
+  doc.setTextColor(...NAVY);
+  doc.text(sanitizePdfText(letter.signatoryName), leftSigX, sigBlockTopY + 23.5);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.4);
+  doc.setTextColor(...ROYAL);
+  doc.text(sanitizePdfText(letter.signatoryTitle), leftSigX, sigBlockTopY + 27.3);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.1);
+  doc.setTextColor(...SLATE_MUTED);
+  doc.text('NexGen Council — Authorized Signatory', leftSigX, sigBlockTopY + 31);
+  doc.text(`Recorded by: ${sanitizePdfText(letter.issuedByName)}`, leftSigX, sigBlockTopY + 34.6);
+
+  // CENTER COLUMN: Official Circular Organizational Stamp
+  const stampCenterX = PAGE_W / 2 - 2;
+  const stampCenterY = sigBlockTopY + 17;
+  if (stampPngDataUrl) {
+    try {
+      doc.addImage(stampPngDataUrl, 'PNG', stampCenterX - 16, sigBlockTopY + 1, 32, 32, undefined, 'FAST');
+    } catch (error) {
+      console.error('[AppointmentPDF] Stamp image rendering failed:', error);
+    }
+  } else {
+    // Clean geometric institutional seal frame when no custom stamp PNG uploaded
+    doc.setDrawColor(...NAVY);
+    doc.setLineWidth(0.55);
+    doc.circle(stampCenterX, stampCenterY, 14.5);
+    doc.setDrawColor(...GOLD);
+    doc.setLineWidth(0.3);
+    doc.circle(stampCenterX, stampCenterY, 12.2);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(5.5);
+    doc.setTextColor(...NAVY);
+    doc.text('NEXGEN COUNCIL', stampCenterX, stampCenterY - 4.2, { align: 'center' });
+    doc.setFontSize(5);
+    doc.setTextColor(...ROYAL);
+    doc.text('COUNCIL SECRETARIAT', stampCenterX, stampCenterY + 0.5, { align: 'center' });
+    doc.setTextColor(...GOLD);
+    doc.text('SIALKOT, PAKISTAN', stampCenterX, stampCenterY + 5, { align: 'center' });
+  }
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.6);
+  doc.setTextColor(...SLATE_MUTED);
+  doc.text('OFFICIAL DOCUMENT SEAL', stampCenterX, sigBlockTopY + 36.2, { align: 'center' });
+
+  // RIGHT COLUMN: QR Verification Block
+  const qrBoxX = PAGE_W - MARGIN - 54;
+  doc.setFillColor(...LIGHT_BG);
+  doc.setDrawColor(...BORDER_SOFT);
+  doc.setLineWidth(0.3);
+  doc.roundedRect(qrBoxX, sigBlockTopY, 54, 37.5, 1.5, 1.5, 'FD');
+
+  doc.addImage(qrDataUrl, 'PNG', qrBoxX + 3, sigBlockTopY + 3, 24, 24, undefined, 'FAST');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.5);
+  doc.setTextColor(...NAVY);
+  doc.text('SCAN TO VERIFY', qrBoxX + 29, sigBlockTopY + 7.2);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(5.8);
+  doc.setTextColor(...SLATE_MUTED);
+  const qrNote = doc.splitTextToSize('Online Secretariat verification record at nexgencouncil.bond/track', 22.5);
+  doc.text(qrNote, qrBoxX + 29, sigBlockTopY + 11.2, { lineHeightFactor: 1.25 });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6);
+  doc.setTextColor(...ROYAL);
+  doc.text(sanitizePdfText(letter.letterNumber), qrBoxX + 3, sigBlockTopY + 31.8);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(5.5);
+  doc.setTextColor(...SLATE_MUTED);
+  doc.text(`Issued: ${formatDateReadable(letter.issuedAt)}`, qrBoxX + 3, sigBlockTopY + 35.2);
+
+  const arrayBuffer = doc.output('arraybuffer');
+  return Buffer.from(arrayBuffer);
+}
