@@ -1878,6 +1878,13 @@ app.delete(
       return res.status(400).json({ error: 'Cannot delete the last remaining signatory profile.' });
     }
 
+    for (const assetName of [target.signatureAssetFilename, target.stampAssetFilename]) {
+      if (!assetName) continue;
+      try {
+        fs.unlinkSync(path.join(process.cwd(), 'data', 'protected_assets', path.basename(assetName)));
+      } catch {}
+    }
+
     db.logActivity({
       userId: user.userId,
       userName: user.name,
@@ -1935,6 +1942,9 @@ app.post(
 
     let updatedSignatory = null;
     if (signatoryId && typeof signatoryId === 'string') {
+      const prev = db.getSignatoryById(signatoryId);
+      const oldName = kind === 'signature' ? prev?.signatureAssetFilename : prev?.stampAssetFilename;
+
       updatedSignatory = db.updateSignatory(
         signatoryId,
         kind === 'signature'
@@ -1942,6 +1952,13 @@ app.post(
           : { stampAssetFilename: filename },
         user.name
       );
+
+      // Only delete the previous file after the new one is saved successfully
+      if (updatedSignatory && oldName && oldName !== filename) {
+        try {
+          fs.unlinkSync(path.join(protectedDir, path.basename(oldName)));
+        } catch {}
+      }
     }
 
     db.logActivity({
@@ -2296,6 +2313,42 @@ app.patch(
     });
 
     res.json(updated);
+  }
+);
+
+app.delete(
+  '/api/admin/appointment-letters/:id',
+  requireAuth(['ADMIN']),
+  (req, res) => {
+    const user = (req as any).user as AuthSession;
+    const letter = db.getAppointmentLetterById(req.params.id);
+    if (!letter) {
+      return res.status(404).json({ error: 'Appointment letter not found.' });
+    }
+
+    if (typeof (db as any).deleteAppointmentLetter !== 'function') {
+      return res.status(501).json({
+        error: 'db.deleteAppointmentLetter(id) is not implemented yet in server/db.ts.'
+      });
+    }
+
+    const ok = (db as any).deleteAppointmentLetter(req.params.id);
+    if (!ok) {
+      return res.status(500).json({ error: 'Could not delete appointment letter.' });
+    }
+
+    db.logActivity({
+      userId: user.userId,
+      userName: user.name,
+      userRole: user.role,
+      action: 'APPOINTMENT_LETTER_DELETED',
+      entityType: 'AppointmentLetter',
+      entityId: req.params.id,
+      details: `Permanently deleted appointment letter ${letter.letterNumber} (${letter.appointeeName}, ${letter.referenceCode}).`,
+      ipAddress: getClientIp(req)
+    });
+
+    res.json({ ok: true });
   }
 );
 
